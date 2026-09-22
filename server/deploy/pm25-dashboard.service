@@ -1,0 +1,15 @@
+# /etc/systemd/system/pm25-dashboard.service
+# Ative com: sudo systemctl daemon-reload && sudo systemctl enable --now pm25-dashboard
+[Unit]
+Description=PM2.5 - dashboard (Streamlit)
+After=pm25-api.service
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/pm25-iot/server
+ExecStart=/home/pi/pm25-iot/server/.venv/bin/streamlit run dashboard/app.py --server.headless true --server.port 8501
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

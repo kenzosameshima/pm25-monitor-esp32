@@ -1,0 +1,4 @@
+# Bibliotecas do projeto no Wokwi (aba Library Manager ou arquivo libraries.txt)
+Adafruit BME280 Library
+Adafruit Unified Sensor
+Adafruit BusIO

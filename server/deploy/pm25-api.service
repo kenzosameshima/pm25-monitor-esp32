@@ -1,0 +1,17 @@
+# /etc/systemd/system/pm25-api.service
+# Ajuste User e os caminhos. Ative com:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now pm25-api
+[Unit]
+Description=PM2.5 - API de ingestao
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/pm25-iot/server
+ExecStart=/home/pi/pm25-iot/server/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

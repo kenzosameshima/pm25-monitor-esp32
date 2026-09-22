@@ -1,0 +1,4 @@
+-r requirements.txt
+streamlit>=1.50
+pandas>=2.2
+altair>=5

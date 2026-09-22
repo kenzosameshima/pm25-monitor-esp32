@@ -1,0 +1,16 @@
+# segredos
+firmware/src/config.h
+server/.env
+# dados e backups
+server/data/
+server/backups/
+*.db
+*.db-wal
+*.db-shm
+# ambientes e builds
+server/.venv/
+__pycache__/
+.pytest_cache/
+firmware/.pio/
+firmware/host_tests/test_core
+firmware/host_tests/payload_exemplo.json
