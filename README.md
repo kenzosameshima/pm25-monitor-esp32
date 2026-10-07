@@ -142,6 +142,8 @@ Dá para exercitar no simulador os cenários que importam no campo. Suba a umida
 
 ## Implantação no servidor sempre ligado
 
+Em um servidor Windows (notebook ou PC dedicado), use os scripts de `server/deploy/windows/` (veja o `README.md` dessa pasta), que fazem o papel dos serviços `systemd` e do crontab descritos abaixo.
+
 O servidor precisa ficar ligado durante toda a coleta, com IP fixo na rede: reserve o IP do Raspberry Pi (ou PC) no roteador e use esse endereço em `API_URL`. Instale o projeto em `/home/pi/pm25-iot`, crie o ambiente virtual e o `.env` como no início rápido (com `requirements-dashboard.txt`; no Raspberry Pi, use o sistema de 64 bits) e ative os serviços e as tarefas agendadas:
 
 ```bash
