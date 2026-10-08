@@ -162,6 +162,18 @@ Antes de instalar cada nó, meça o RSSI no ponto exato de instalação (o log m
 
 Leituras anteriores à primeira sincronização NTP após um boot são descartadas, porque não teriam horário confiável; um módulo de relógio DS3231 resolveria isso, se as redes bloquearem NTP. Na rede local a comunicação é HTTP sem criptografia, protegida apenas pelo token; para expor a API na internet, use HTTPS e defina `API_ROOT_CA` no firmware. O alerta roda no próprio servidor, então não avisa se o servidor inteiro cair; um serviço externo de monitoramento de disponibilidade cobriria esse caso. O banco pressupõe um único processo escritor (a API), coerente com a decisão de usar SQLite; o alerta e o backup só leem.
 
+## Avaliação de modelos de previsão
+
+`server/scripts/train_forecast.py` compara, offline, a persistência, uma regressão Ridge e uma rede neural MLP em Keras na previsão da média horária de PM2,5 da hora seguinte, com validação progressiva (walk-forward) e teste final nos últimos dias. Lê o banco em modo somente leitura e não grava em `forecasts`.
+
+```
+pip install -r server/requirements-ml.txt
+cd server
+python -m scripts.train_forecast --out relatorio.json       # --no-mlp avalia só persistência e Ridge
+```
+
+Os hiperparâmetros (`--hidden`, `--lr`, `--epochs`, `--seed` etc.) vão para o relatório em JSON.
+
 ## Próximos passos
 
 O pipeline de modelagem começa com os dados públicos da CETESB (QUALAR) e do INMET ou Open-Meteo, com baseline de persistência e validação walk-forward, e depois roda sobre este banco. O job horário grava previsões na tabela `forecasts` para a validação prospectiva. Com a coleta contínua em andamento, também fica possível simular ciclos de leitura do PMS5003 a partir dos dados de um minuto, para o estudo de consumo de energia.
