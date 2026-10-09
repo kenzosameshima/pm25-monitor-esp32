@@ -13,7 +13,7 @@ nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──
 ```
 firmware/     código do ESP32 (PlatformIO); host_tests/ testa a parte sem hardware no computador
 server/app/   API (main.py), contrato de dados (models.py), acesso ao banco (db.py), esquema (schema.sql)
-server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py, check_https.py, train_forecast.py
+server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py, check_https.py, train_forecast.py, period_metrics.py
 server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
@@ -30,7 +30,7 @@ python -m venv .venv
 source .venv/bin/activate            # no Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
 cp .env.example .env                 # troque os tokens (ver comentário no arquivo)
-pytest                               # 18 testes (API e dashboard)
+pytest                               # testes da API, do dashboard e dos scripts
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
