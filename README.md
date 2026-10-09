@@ -172,6 +172,19 @@ cd server
 python -m scripts.train_forecast --out relatorio.json       # --no-mlp avalia só persistência e Ridge
 ```
 
+Para a avaliação final, três opções registram o que é preciso para reproduzir e para o gráfico de previsto × observado:
+
+```
+python -m scripts.train_forecast --db ../resultados/pm25-congelado-<início>_<fim>.db \
+    --out ../resultados/previsao.json --predictions-csv ../resultados/previsao_teste.csv --seeds 5
+```
+
+- **Reprodutibilidade:** o relatório traz `environment` (versões de Python, numpy, pandas, scikit-learn e TensorFlow, esta última `null` se não estiver instalada) e `database` (nome, tamanho e SHA-256 do arquivo lido). Use o banco congelado por `scripts.period_metrics --freeze`: no banco em uso, parte dos dados pode estar no arquivo `-wal` e o hash não identificaria o conjunto.
+- **`--predictions-csv`:** grava as previsões do teste final, uma linha por hora e nó, com `hora` (hora-alvo prevista, em UTC), `no`, `observado`, `persistencia`, `ridge` e `mlp` (sem `mlp` com `--no-mlp`). As colunas reproduzem as métricas do relatório.
+- **`--seeds N`** (padrão 1): repete o treino da MLP com as sementes `--seed`, `--seed + 1`, ... A semente de referência (42) continua sendo a do resultado principal e a do CSV. Com `N > 1`, a MLP ganha em `results` o bloco `seeds`, com os resultados de cada semente e a média e o desvio-padrão amostral do RMSE e do índice de habilidade, na validação e no teste.
+
+A execução com dados reais só faz sentido com pelo menos cerca de 5 semanas de coleta, deixando os 7 últimos dias para o teste final. Os hiperparâmetros foram fixados antes de ver os dados e não devem ser alterados depois de olhar o teste final: MLP com 32 e 16 unidades, Adam com taxa 0,001, lote 32, até 200 épocas e paciência 15; Ridge com alpha 10; semente 42.
+
 Os hiperparâmetros (`--hidden`, `--lr`, `--epochs`, `--seed` etc.) vão para o relatório em JSON.
 
 ## Próximos passos
