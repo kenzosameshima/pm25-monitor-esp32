@@ -12,10 +12,14 @@ URL = "/v1/measurements"
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def client(request, tmp_path, monkeypatch):
+    """Cliente da API. Variáveis de ambiente extras via parametrização indireta:
+    @pytest.mark.parametrize("client", [{"PM25_AUTH_MAX_FAILS": "3"}], indirect=True)"""
     db_path = tmp_path / "pm25.db"
     monkeypatch.setenv("PM25_DB_PATH", str(db_path))
     monkeypatch.setenv("PM25_DEVICE_TOKENS", f"no-01:{TOKEN_1},no-02:{TOKEN_2}")
+    for name, value in getattr(request, "param", {}).items():
+        monkeypatch.setenv(name, value)
     get_settings.cache_clear()
     from app.main import app
 
@@ -153,3 +157,117 @@ def test_contrato_payload_gerado_pelo_firmware_e_aceito(client):
     with sqlite3.connect(client.db_path) as conn:
         row = conn.execute("SELECT temperature, rssi, quality FROM measurements WHERE seq = 1").fetchone()
     assert row == (None, None, "ok")
+
+
+# ---------------- API exposta na internet: corpo, autenticação uniforme e bloqueio por IP ----------------
+
+LIMITE_PEQUENO = {"PM25_MAX_BODY_BYTES": "2000"}
+TRES_FALHAS = {"PM25_AUTH_MAX_FAILS": "3", "PM25_AUTH_BLOCK_MIN": "5"}
+
+
+def auth_header(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.parametrize("client", [LIMITE_PEQUENO], indirect=True)
+def test_corpo_acima_do_limite_retorna_413_sem_gravar(client):
+    r = post(client, [reading(i, minutes_ago=100 - i) for i in range(30)])  # ~7 KB > 2000 bytes
+    assert r.status_code == 413
+    assert count(client, "SELECT COUNT(*) FROM measurements") == 0
+    assert count(client, "SELECT COUNT(*) FROM ingest_batches") == 0
+    # abaixo do limite continua aceito
+    assert post(client, [reading(0)]).status_code == 201
+
+
+@pytest.mark.parametrize("client", [LIMITE_PEQUENO], indirect=True)
+def test_corpo_em_partes_acima_do_limite_retorna_413(client):
+    """Sem Content-Length (envio em partes) o limite também vale, contando os bytes recebidos."""
+    def partes():
+        for _ in range(10):
+            yield b" " * 500
+
+    r = client.post(URL, content=partes(), headers=auth_header(TOKEN_1))
+    assert r.status_code == 413
+    assert count(client, "SELECT COUNT(*) FROM measurements") == 0
+
+
+def test_token_ausente_e_invalido_recebem_a_mesma_resposta(client):
+    body = {"schema_version": "1", "device_id": "no-01", "readings": [reading(0)]}
+    ausente = client.post(URL, json=body)
+    invalido = post(client, [reading(0)], token="token-inexistente-000000")
+    outro_esquema = client.post(URL, json=body, headers={"Authorization": f"Basic {TOKEN_1}"})
+    assert ausente.status_code == invalido.status_code == outro_esquema.status_code == 401
+    assert ausente.json() == invalido.json() == outro_esquema.json()
+    assert ausente.headers["www-authenticate"] == "Bearer"
+
+
+def test_tentativa_invalida_fica_auditada_sem_gravar_o_token(client):
+    token_errado = "token-inexistente-000000"
+    post(client, [reading(0)], token=token_errado)
+    client.post(URL, json={"schema_version": "1", "device_id": "no-01", "readings": [reading(0)]})
+    assert count(client, "SELECT COUNT(*) FROM invalid_messages") == 2
+    with sqlite3.connect(client.db_path) as conn:
+        linhas = conn.execute("SELECT remote_addr, reason, raw_payload FROM invalid_messages").fetchall()
+    assert all(addr == "testclient" for addr, _, _ in linhas)
+    assert not any(token_errado in str(campo) for linha in linhas for campo in linha)
+    assert not any(TOKEN_1 in str(campo) for linha in linhas for campo in linha)
+
+
+def test_device_id_incompativel_com_o_token_nao_grava_o_token(client):
+    r = post(client, [reading(0)], token=TOKEN_1, device="no-02")
+    assert r.status_code == 403
+    with sqlite3.connect(client.db_path) as conn:
+        (reason, raw), = conn.execute("SELECT reason, raw_payload FROM invalid_messages").fetchall()
+    assert "no-02" in reason and "no-01" in reason
+    assert TOKEN_1 not in raw
+
+
+@pytest.mark.parametrize("client", [TRES_FALHAS], indirect=True)
+def test_bloqueio_por_ip_apos_n_falhas_nao_afeta_outro_ip(client):
+    for _ in range(3):
+        assert post(client, [reading(0)], token="token-inexistente-000000").status_code == 401
+    bloqueado = post(client, [reading(0)])  # até o token correto é recusado durante o bloqueio
+    assert bloqueado.status_code == 429
+    assert 0 < int(bloqueado.headers["retry-after"]) <= 300
+    assert count(client, "SELECT COUNT(*) FROM measurements") == 0
+    assert count(client, "SELECT COUNT(*) FROM invalid_messages") == 3  # o 429 não escreve no banco
+
+    outro_ip = TestClient(client.app, client=("203.0.113.9", 40000))
+    r = outro_ip.post(URL, json={"schema_version": "1", "device_id": "no-01", "readings": [reading(0)]},
+                      headers=auth_header(TOKEN_1))
+    assert r.status_code == 201
+
+
+@pytest.mark.parametrize("client", [TRES_FALHAS], indirect=True)
+def test_autenticacao_valida_zera_a_contagem_de_falhas(client):
+    for _ in range(2):
+        post(client, [reading(0)], token="token-inexistente-000000")
+    assert post(client, [reading(0)]).status_code == 201          # zera
+    for _ in range(2):
+        assert post(client, [reading(1)], token="token-inexistente-000000").status_code == 401
+    assert post(client, [reading(1)]).status_code == 201          # ainda não passou de 3 seguidas
+
+
+@pytest.mark.parametrize("client", [TRES_FALHAS], indirect=True)
+def test_device_id_incompativel_nao_conta_como_falha_de_autenticacao(client):
+    for _ in range(5):
+        assert post(client, [reading(0)], token=TOKEN_1, device="no-02").status_code == 403
+    assert post(client, [reading(0)]).status_code == 201
+
+
+def test_bloqueio_expira_e_o_contador_recomeca():
+    from app.guard import AuthThrottle
+
+    agora = [1000.0]
+    t = AuthThrottle(max_fails=2, block_s=300, clock=lambda: agora[0])
+    t.register_failure("1.1.1.1")
+    assert t.retry_after("1.1.1.1") == 0
+    t.register_failure("1.1.1.1")
+    assert t.retry_after("1.1.1.1") == 300
+    assert t.retry_after("2.2.2.2") == 0
+    agora[0] += 299
+    assert t.retry_after("1.1.1.1") > 0
+    agora[0] += 2
+    assert t.retry_after("1.1.1.1") == 0
+    t.register_failure("1.1.1.1")                 # contagem recomeçou: uma falha não bloqueia
+    assert t.retry_after("1.1.1.1") == 0

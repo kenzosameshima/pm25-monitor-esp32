@@ -6,7 +6,9 @@ Equivale aos arquivos .service e ao crontab da pasta deploy, mas para Windows.
 O que faz:
   - confere o ambiente virtual e o .env (e valida os tokens);
   - desativa suspensao, hibernacao e a acao de fechar a tampa (use -SkipPower para pular);
-  - libera a porta 8000 no firewall para redes Privada e Dominio (a 8501, so com -OpenDashboardPort);
+  - remove a regra de firewall da porta 8000: a API escuta so em 127.0.0.1 e quem a publica e o tunel
+    HTTPS (-OpenApiPort libera TCP 8000 nas redes Privada e Dominio, para a alternativa HTTP na rede
+    local, junto com PM25_API_HOST=0.0.0.0; a 8501 so abre com -OpenDashboardPort);
   - registra tarefas agendadas que rodam como SYSTEM, sem precisar de login:
       pm25-api        na inicializacao, reinicia se cair
       pm25-dashboard  na inicializacao, reinicia se cair (pule com -NoDashboard)
@@ -19,7 +21,8 @@ Uso (PowerShell como administrador, dentro de server\deploy\windows):
 param(
     [switch]$SkipPower,
     [switch]$NoDashboard,
-    [switch]$OpenDashboardPort
+    [switch]$OpenDashboardPort,
+    [switch]$OpenApiPort
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,13 +79,19 @@ function Set-FirewallRule($name, $port) {
         -Action Allow -Profile Private, Domain | Out-Null
     Write-Host "regra '$name' (TCP $port, redes Privada e Dominio)"
 }
-Set-FirewallRule 'pm25-api' 8000
+if ($OpenApiPort) {
+    Warn 'a porta 8000 fica aberta na rede local em HTTP, sem criptografia. Defina tambem PM25_API_HOST=0.0.0.0.'
+    Set-FirewallRule 'pm25-api' 8000
+} else {
+    Get-NetFirewallRule -DisplayName 'pm25-api' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    Write-Host "porta 8000 sem regra de entrada (a API escuta so em 127.0.0.1; o acesso externo e pelo tunel HTTPS)"
+}
 if ($OpenDashboardPort) {
     Warn 'o dashboard nao tem login: qualquer dispositivo da rede com acesso ve os dados.'
     Set-FirewallRule 'pm25-dashboard' 8501
 }
 $public = Get-NetConnectionProfile | Where-Object { $_.NetworkCategory -eq 'Public' }
-if ($public) {
+if ($public -and ($OpenApiPort -or $OpenDashboardPort)) {
     Warn ("a rede '{0}' esta como Publica; a regra nao vale nela e o ESP32 nao vai conectar. Mude para Privada em Configuracoes > Rede." -f ($public.Name -join ', '))
 }
 
@@ -139,6 +148,10 @@ Step 'Pronto'
 $ips = Get-NetIPAddress -AddressFamily IPv4 |
     Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
     Select-Object -ExpandProperty IPAddress
-Write-Host ("IPs desta maquina: {0}" -f ($ips -join ', '))
-Write-Host 'No firmware, use API_URL "http://<um desses IPs>:8000/v1/measurements" e reserve o IP no roteador.'
+if ($OpenApiPort) {
+    Write-Host ("IPs desta maquina: {0}" -f ($ips -join ', '))
+    Write-Host 'Alternativa HTTP local: API_URL "http://<um desses IPs>:8000/v1/measurements" e reserve o IP no roteador.'
+} else {
+    Write-Host 'API em http://127.0.0.1:8000, so nesta maquina. Publique-a pelo tunel HTTPS (secao "Transporte HTTPS entre redes" do README).'
+}
 Write-Host "Logs em $server\data (api.log, dashboard.log, alert.log, backup.log)."

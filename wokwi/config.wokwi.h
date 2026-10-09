@@ -8,8 +8,10 @@
 
 // Com o gateway privado (Wokwi Club no navegador, ou Wokwi for VS Code), host.wokwi.internal
 // aponta para o computador que roda a API. Sem ele, só a internet é alcançável: exponha a API
-// local por um túnel (ngrok, cloudflared) e use a URL https gerada.
+// local por um túnel (ngrok, cloudflared) e use a URL https gerada, junto com a linha
+// "#define API_TLS_INSECURE_TEST" abaixo (o simulador não tem como validar o certificado; só para o Wokwi).
 #define API_URL "http://host.wokwi.internal:8000/v1/measurements"
+// #define API_TLS_INSECURE_TEST
 #define DEVICE_ID "no-01"
 #define DEVICE_TOKEN "TROQUE-este-token-do-no-01"
 

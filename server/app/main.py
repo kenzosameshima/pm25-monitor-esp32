@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from . import db
 from .config import get_settings
+from .guard import AuthThrottle, BodySizeLimit
 from .models import Batch, IngestResult, quality_flags
 
 
@@ -24,10 +25,12 @@ async def lifespan(app: FastAPI):
         db.init_db(conn)
     finally:
         conn.close()
+    app.state.throttle = AuthThrottle(settings.auth_max_fails, settings.auth_block_s)
     yield
 
 
 app = FastAPI(title="PM2,5 — API de ingestão", version="1.0.0", lifespan=lifespan)
+app.add_middleware(BodySizeLimit, limit=lambda: get_settings().max_body_bytes)
 
 
 def get_conn() -> Iterator:
@@ -38,18 +41,42 @@ def get_conn() -> Iterator:
         conn.close()
 
 
-def authenticate(authorization: str | None = Header(default=None)) -> str:
-    """Identifica o dispositivo pelo token enviado em 'Authorization: Bearer <token>'."""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token ausente")
-    device = get_settings().device_for_token(authorization.removeprefix("Bearer ").strip())
-    if device is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token inválido")
-    return device
-
-
 def _client(request: Request) -> str | None:
     return request.client.host if request.client else None
+
+
+def authenticate(request: Request, authorization: str | None = Header(default=None)) -> str:
+    """Identifica o dispositivo pelo token enviado em 'Authorization: Bearer <token>'.
+
+    Token ausente e token inválido recebem a mesma resposta 401, para não ensinar nada a quem
+    tenta adivinhar. A tentativa fica em invalid_messages (sem o token) e conta para o bloqueio
+    do IP; uma autenticação válida zera a contagem.
+    """
+    throttle: AuthThrottle = request.app.state.throttle
+    ip = _client(request)
+    wait = throttle.retry_after(ip)
+    if wait:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Muitas tentativas inválidas",
+                            headers={"Retry-After": str(wait)})
+
+    scheme, _, token = (authorization or "").partition(" ")
+    device = get_settings().device_for_token(token.strip()) if scheme == "Bearer" and token.strip() else None
+    if device is None:
+        throttle.register_failure(ip)
+        conn = db.connect(get_settings().db_path)
+        try:
+            db.record_invalid(
+                conn,
+                reason="Falha de autenticação: token " + ("ausente" if not authorization else "inválido"),
+                raw_payload="",
+                received_at=datetime.now(timezone.utc),
+                remote_addr=ip,
+            )
+        finally:
+            conn.close()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Não autorizado", headers={"WWW-Authenticate": "Bearer"})
+    throttle.register_success(ip)
+    return device
 
 
 @app.exception_handler(RequestValidationError)

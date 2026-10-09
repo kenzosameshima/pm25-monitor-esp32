@@ -21,6 +21,9 @@ class Settings:
     telegram_chat_id: str
     alert_silence_min: int
     alert_state_path: str
+    max_body_bytes: int
+    auth_max_fails: int
+    auth_block_s: int
 
     @property
     def device_ids(self) -> list[str]:
@@ -60,4 +63,8 @@ def get_settings() -> Settings:
         telegram_chat_id=env("PM25_TELEGRAM_CHAT_ID", ""),
         alert_silence_min=int(env("PM25_ALERT_SILENCE_MIN", "15")),
         alert_state_path=env("PM25_ALERT_STATE", "data/alert_state.json"),
+        # 256 KiB: um lote de 500 leituras (o máximo do contrato) ocupa cerca de 125 KiB.
+        max_body_bytes=int(env("PM25_MAX_BODY_BYTES", str(256 * 1024))),
+        auth_max_fails=int(env("PM25_AUTH_MAX_FAILS", "10")),
+        auth_block_s=int(env("PM25_AUTH_BLOCK_MIN", "5")) * 60,
     )
