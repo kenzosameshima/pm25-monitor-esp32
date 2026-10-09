@@ -3,7 +3,7 @@
 Este repositório reúne a cadeia de coleta e o painel do projeto: o firmware dos nós sensores (ESP32 + PMS5003 + BME280 ou DHT22), a API de ingestão, o banco SQLite, o backup diário, o alerta no Telegram, o dashboard em Streamlit, um simulador de sensor e os chips simulados do Wokwi, para testar tudo sem hardware. O pipeline de modelagem e o job horário de previsão são as próximas etapas e vão ler e gravar no mesmo banco.
 
 ```
-nó ESP32 ──HTTP POST (JSON) via Wi-Fi──▶ API FastAPI ──▶ SQLite (WAL) ──▶ backup diário
+nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──▶ SQLite (WAL) ──▶ backup diário
    │ buffer em flash se a rede cair                           ├──▶ alerta Telegram (sensor mudo 15 min)
                                                               └──▶ dashboard Streamlit (somente leitura)
 ```
@@ -13,7 +13,7 @@ nó ESP32 ──HTTP POST (JSON) via Wi-Fi──▶ API FastAPI ──▶ SQLite
 ```
 firmware/     código do ESP32 (PlatformIO); host_tests/ testa a parte sem hardware no computador
 server/app/   API (main.py), contrato de dados (models.py), acesso ao banco (db.py), esquema (schema.sql)
-server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py
+server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py, check_https.py, train_forecast.py
 server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
@@ -67,7 +67,9 @@ O campo `ts` marca o início da janela de um minuto, sempre em UTC. `pm25` é o 
 | Resposta | Significado | O que o nó faz |
 |---|---|---|
 | 201 `{"inserted": n, "duplicates": m}` | Gravado no disco | Apaga o lote do buffer |
-| 401 ou 403 | Token ausente, inválido ou de outro nó | Mantém o lote e tenta de novo (erro de configuração) |
+| 401 ou 403 | Token ausente ou inválido (401, mesma mensagem nos dois casos) ou de outro nó (403) | Mantém o lote e tenta de novo (erro de configuração) |
+| 413 | Corpo acima do limite em bytes | Descarta o lote (um lote de 60 leituras fica muito abaixo do limite) |
+| 429 | IP bloqueado por falhas de autenticação seguidas | Mantém o lote e tenta de novo com espera crescente |
 | 422 | Fora do contrato; cópia guardada em `invalid_messages` | Descarta o lote, para não reenviar o mesmo erro para sempre |
 | Falha de rede ou 5xx | Nada foi gravado | Mantém o lote e tenta de novo com espera crescente |
 
@@ -121,9 +123,18 @@ pio device monitor
 
 Na Arduino IDE, crie uma pasta `pm25_node` com um arquivo `pm25_node.ino` vazio, copie para ela `main.cpp`, `pms5003.h`, `reading.h` e o seu `config.h`, instale as bibliotecas "Adafruit BME280 Library" e "DHT sensor library" e compile para a placa "ESP32 Dev Module".
 
-Depois de ligado, o nó descarta os primeiros 30 segundos do PMS5003 (tempo de estabilização da ventoinha), espera o relógio sincronizar por NTP e passa a fechar uma leitura a cada minuto de relógio. O monitor serial mostra uma linha por minuto, por exemplo `[leitura] seq=41 pm2.5=13.2 quadros=58 T=23.9 UR=62.4 rssi=-64 pendentes=0`. O que a API não confirmar vai para um buffer em LittleFS com capacidade para cinco dias, que sobrevive a reinícios e quedas de energia. Se o Wi-Fi ficar 15 minutos fora, o ESP32 reinicia sozinho, e um watchdog de 90 segundos cobre travamentos.
+Depois de ligado, o nó descarta os primeiros 30 segundos do PMS5003 (tempo de estabilização da ventoinha), espera o relógio sincronizar por NTP e passa a fechar uma leitura a cada minuto de relógio. Com HTTPS o envio só começa depois do NTP (sem hora válida o certificado não é aceito), e uma falha de conexão ou de handshake TLS vale como falha de rede: o lote continua no buffer e é reenviado com espera crescente. Cada tentativa HTTPS espera no máximo 15 s pela conexão, 20 s pelo handshake e 8 s pela resposta, abaixo do watchdog de 90 s. O monitor serial mostra uma linha por minuto, por exemplo `[leitura] seq=41 pm2.5=13.2 quadros=58 T=23.9 UR=62.4 rssi=-64 pendentes=0`. O que a API não confirmar vai para um buffer em LittleFS com capacidade para cinco dias, que sobrevive a reinícios e quedas de energia. Se o Wi-Fi ficar 15 minutos fora, o ESP32 reinicia sozinho, e um watchdog de 90 segundos cobre travamentos.
 
-O firmware foi compilado sem avisos (`--warnings all`) com os cores Arduino do ESP32 2.0.17 e 3.3.12, nas variantes BME280 e DHT22. A leitura dos quadros do sensor, a média do minuto e a montagem do JSON têm testes que rodam no computador:
+O firmware foi compilado sem avisos (`-Wall`) nas quatro combinações dos cores Arduino do ESP32 2.0.17 e 3.3.12 com BME280 e DHT22 (inclusive com HTTPS e a CA raiz embutida). Para o core 3.x no PlatformIO, a plataforma testada foi `https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312-1/platform-espressif32.zip`; no Windows, rode o `pio` do PowerShell, não do Git Bash (o instalador do core 3.x recusa o MSYS). Uso de memória, em bytes (RAM estática / flash), antes e depois do HTTPS:
+
+| Combinação | Antes | Depois |
+|---|---|---|
+| Core 2.0.17, BME280 | 50 808 / 1 005 265 | 50 808 / 1 005 573 |
+| Core 2.0.17, DHT22 | 50 312 / 979 241 | 50 312 / 979 521 |
+| Core 3.3.12, BME280 | 54 120 / 1 144 780 | 54 120 / 1 145 032 |
+| Core 3.3.12, DHT22 | 54 056 / 1 139 320 | 54 056 / 1 139 564 |
+
+A RAM estática não muda, e a flash cresce menos de 310 bytes; o buffer de cinco dias fica em LittleFS e o lote de 60 leituras segue sendo um vetor estático, então ambos continuam cabendo. As duas medidas "antes" usam o mesmo `config.h` da "depois", com a CA embutida. O que não foi medido, por falta de hardware, é o pico de memória dinâmica durante o handshake TLS (da ordem de dezenas de KiB de heap, liberados ao fim de cada envio): ao testar o nó, confira a linha `[tls] ... heap livre` do monitor serial. Com `https://` na `API_URL` e sem `API_ROOT_CA`, o firmware não compila, a menos que se defina `API_TLS_INSECURE_TEST` (só para bancada). A leitura dos quadros do sensor, a média do minuto e a montagem do JSON têm testes que rodam no computador:
 
 ```bash
 cd firmware/host_tests
@@ -136,7 +147,7 @@ O teste gera `payload_exemplo.json`, e o teste da API `test_contrato_payload_ger
 
 Os chips simulados em `wokwi/` substituem os `.chip.c` do projeto no Wokwi e mantêm os mesmos controles (pm1, pm25 e pm10; temp, press e hum). As versões anteriores tinham dois problemas. O chip do PMS5003 só preenchia os campos CF=1 do quadro e deixava zerados os campos "atmospheric environment", que o firmware usa como PM2,5; com ele, o firmware novo leria sempre zero. O chip do BME280 convertia para os registradores com aproximações lineares: a temperatura saía certa, mas a pressão errava dezenas de hPa e a umidade só batia perto de 50% (20% virava 0% e 80% virava 100%), justamente a faixa que importa para a análise de umidade alta. O chip novo aplica as fórmulas de compensação da biblioteca Adafruit e procura o valor de registrador que reproduz cada controle. Testado fora do Wokwi, com um stub da API, o erro ficou abaixo de 0,01 °C, 0,01 hPa e 0,01% de umidade entre −10 e 45 °C, 900 e 1050 hPa e 0 e 100%, e os quadros do PMS5003 simulado passam no parser do firmware sem erro de checksum.
 
-Para rodar o firmware no Wokwi, coloque no projeto `main.cpp`, `pms5003.h`, `reading.h`, um `sketch.ino` vazio e `wokwi/config.wokwi.h` renomeado para `config.h`, e use as bibliotecas de `wokwi/libraries.txt`. A ligação é a mesma do esboço anterior: PMS5003 na UART2 (GPIO16 e 17) e BME280 em 0x76 (GPIO21 e 22). A rede simulada é sempre `Wokwi-GUEST`, sem senha, no canal 6. Para o ESP32 simulado alcançar a API no seu computador é preciso o gateway privado do Wokwi (incluído no Wokwi for VS Code; no navegador, exige a assinatura Wokwi Club), e a URL passa a ser `http://host.wokwi.internal:8000/v1/measurements`. Sem o gateway, o simulador só alcança a internet: exponha a API local por um túnel (ngrok ou cloudflared) e use a URL `https` gerada.
+Para rodar o firmware no Wokwi, coloque no projeto `main.cpp`, `pms5003.h`, `reading.h`, um `sketch.ino` vazio e `wokwi/config.wokwi.h` renomeado para `config.h`, e use as bibliotecas de `wokwi/libraries.txt`. A ligação é a mesma do esboço anterior: PMS5003 na UART2 (GPIO16 e 17) e BME280 em 0x76 (GPIO21 e 22). A rede simulada é sempre `Wokwi-GUEST`, sem senha, no canal 6. Para o ESP32 simulado alcançar a API no seu computador é preciso o gateway privado do Wokwi (incluído no Wokwi for VS Code; no navegador, exige a assinatura Wokwi Club), e a URL passa a ser `http://host.wokwi.internal:8000/v1/measurements`. Sem o gateway, o simulador só alcança a internet: exponha a API local por um túnel (ngrok ou cloudflared), use a URL `https` gerada e ative `API_TLS_INSECURE_TEST` no `config.h` (o simulador não valida o certificado; esse modo é só para testes).
 
 Dá para exercitar no simulador os cenários que importam no campo. Suba a umidade acima de 75% e veja a marcação no dashboard. Pare a API por alguns minutos e religue: o nó guarda as leituras em flash e as reenvia num lote, e a tabela de saúde não deve registrar perdas. Reinicie o ESP32 simulado: o `boot_id` muda e as leituras seguem sem colisão.
 
@@ -144,23 +155,100 @@ Dá para exercitar no simulador os cenários que importam no campo. Suba a umida
 
 Em um servidor Windows (notebook ou PC dedicado), use os scripts de `server/deploy/windows/` (veja o `README.md` dessa pasta), que fazem o papel dos serviços `systemd` e do crontab descritos abaixo.
 
-O servidor precisa ficar ligado durante toda a coleta, com IP fixo na rede: reserve o IP do Raspberry Pi (ou PC) no roteador e use esse endereço em `API_URL`. Instale o projeto em `/home/pi/pm25-iot`, crie o ambiente virtual e o `.env` como no início rápido (com `requirements-dashboard.txt`; no Raspberry Pi, use o sistema de 64 bits) e ative os serviços e as tarefas agendadas:
+O servidor precisa ficar ligado durante toda a coleta. A API escuta só em `127.0.0.1` (o acesso dos nós é pelo túnel HTTPS, descrito na seção "Transporte HTTPS entre redes"); só para a alternativa HTTP na rede local é preciso IP fixo e `--host 0.0.0.0`. Instale o projeto em `/home/pi/pm25-iot`, crie o ambiente virtual e o `.env` como no início rápido (com `requirements-dashboard.txt`; no Raspberry Pi, use o sistema de 64 bits) e ative os serviços e as tarefas agendadas:
 
 ```bash
 sudo cp server/deploy/pm25-api.service /etc/systemd/system/
 sudo cp server/deploy/pm25-dashboard.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now pm25-api pm25-dashboard
 crontab -e     # cole o conteúdo de server/deploy/crontab.example
-curl http://<ip-do-servidor>:8000/health   # de outro computador da rede
+curl http://127.0.0.1:8000/health   # no próprio servidor; de fora, pelo túnel
 ```
 
 Aponte `PM25_BACKUP_DIR` para um pendrive ou uma pasta sincronizada com a nuvem: um backup no mesmo cartão SD não protege contra falha do cartão, o risco mais comum em Raspberry Pi ligado por meses. Para o alerta, crie um bot com o @BotFather no Telegram, mande uma mensagem a ele e descubra o `chat_id` em `https://api.telegram.org/bot<token>/getUpdates`. Sem essas variáveis, `alert_telegram.py` só imprime as mensagens, o que serve para testar.
 
 Antes de instalar cada nó, meça o RSSI no ponto exato de instalação (o log mostra o valor a cada minuto), confirme que a rede permite NTP (porta UDP 123) e deixe os dois sensores lado a lado nos primeiros 3 a 7 dias, para medir a concordância entre eles.
 
+## Transporte HTTPS entre redes
+
+Os nós ficam em redes diferentes da do servidor, então a leitura viaja pela internet. A solução adotada é um **túnel gerenciado com certificado público válido**: o Tailscale Funnel. Não há porta aberta no roteador, nem IP fixo, nem domínio próprio, nem CA própria (que esbarraria em CGNAT, IP dinâmico e renovação). O cliente do Tailscale no Windows do servidor recebe as conexões HTTPS, termina o TLS ali mesmo e repassa a requisição para a API em `127.0.0.1`.
+
+```
+                       internet                                    computador do servidor (Windows)
+nó ESP32 ──HTTPS──▶ Funnel (retransmissão da Tailscale) ──TCP cifrado──▶ tailscaled ──HTTP──▶ API (127.0.0.1:8000) ──▶ SQLite
+ valida o certificado    https://MAQUINA.TAILNET.ts.net                  termina o TLS            uvicorn --proxy-headers
+ (ISRG Root X1)          só /v1/measurements e /health                   coloca X-Forwarded-For   (o dashboard, :8501, não é publicado)
+```
+
+O túnel publica só dois caminhos, `/v1/measurements` (ingestão) e `/health`. A documentação e o painel interativo da API (`/docs`, `/openapi.json`) não passam, e o dashboard Streamlit não é exposto. A API continua escutando apenas em `127.0.0.1`, e o `--proxy-headers` do uvicorn (aceito só de `127.0.0.1`) faz o IP gravado em `ingest_batches` e `invalid_messages` ser o do nó, não o do túnel.
+
+### Passos do usuário
+
+Nada disto foi executado na implementação: dependem da sua conta e do computador do servidor.
+
+1. Crie a conta em [tailscale.com](https://tailscale.com) e instale o cliente no Windows do servidor. Entre com a mesma conta.
+2. No painel de administração, em DNS, ative o **MagicDNS** e o **HTTPS Certificates** (a Tailscale emite o certificado pela Let's Encrypt).
+3. Ative a exposição pública (o atributo `funnel`). Ao rodar o primeiro `tailscale funnel`, o cliente abre uma página para aprovar. Também dá para editar a política da conta (Access controls) e acrescentar `"nodeAttrs": [{"target": ["autogroup:member"], "attr": ["funnel"]}]`; restrinja `target` ao seu usuário ou à máquina do servidor se a conta tiver outros membros.
+4. Atualize o servidor: reinstale as tarefas com `server\deploy\windows\install.ps1` (a API passa a escutar só em `127.0.0.1` e a regra de firewall da porta 8000 é removida), e reinicie a API.
+5. Cadastre um token para o dispositivo de teste e um para cada nó em `server\.env`, por exemplo `PM25_DEVICE_TOKENS=no-01:<token>,no-02:<token>,teste-https:<token>`. Gere cada token com `python -c "import secrets; print(secrets.token_urlsafe(24))"`.
+6. Publique só os dois caminhos, apontando para a API local (PowerShell, no servidor):
+
+   ```powershell
+   tailscale funnel --bg --set-path=/v1/measurements http://127.0.0.1:8000/v1/measurements
+   tailscale funnel --bg --set-path=/health http://127.0.0.1:8000/health
+   tailscale funnel status
+   ```
+
+   O Funnel só aceita as portas 443, 8443 e 10000 (a padrão é a 443, sem porta na URL). O `--bg` mantém a publicação depois de reinicializações. O prefixo do caminho é removido antes de a requisição chegar à API, por isso o destino repete o caminho. A URL pública é `https://<máquina>.<tailnet>.ts.net`, exibida pelo `status`. Para desfazer: repita o comando com `off` no fim.
+7. Confira o isolamento, de qualquer rede: `curl -i https://<URL pública>/health` deve responder 200, e `/docs` e `/` devem responder 404.
+8. Teste o caminho completo, **de outra rede** (por exemplo, o celular como roteador ou outro computador), com o `check_https.py`:
+
+   ```bash
+   cd server
+   python -m scripts.check_https --url https://<URL pública>/v1/measurements --token <token do teste-https>
+   ```
+
+   Saída esperada: `OK: HTTP 201 ...`. Em caso de falha o script sai com código diferente de zero e diz o motivo (2 certificado, 3 token recusado, 4 device_id incompatível, 5 IP bloqueado, 6 tempo esgotado, 8 sem conexão). A leitura sintética fica gravada com o `device_id` `teste-https`, pois `measurements` é imutável: exclua esse identificador das análises. O erro de certificado exige TLS real e não tem teste automático; para vê-lo, aponte o script a um servidor HTTPS com certificado autoassinado.
+9. Em cada nó, copie `firmware/src/config.example.h` para `config.h` e preencha `WIFI_SSID`, `WIFI_PASS`, `API_URL` (a URL pública terminando em `/v1/measurements`), `DEVICE_ID` e `DEVICE_TOKEN` (o token daquele nó). Mantenha `API_ROOT_CA` como está no exemplo e grave o firmware. No monitor serial, a primeira leitura enviada aparece como `[leitura] ... pendentes=0`; um `[tls] erro` indica falha no certificado ou na rede.
+
+### Proteções da API
+
+| Situação | Resposta | Registro |
+|---|---|---|
+| Corpo acima de `PM25_MAX_BODY_BYTES` (padrão 256 KiB; um lote de 500 leituras ocupa ~125 KiB) | 413 | nenhum |
+| Token ausente ou inválido | 401 com a mesma mensagem nos dois casos | `invalid_messages`, sem o token |
+| Token válido para outro `device_id` | 403 | `invalid_messages` |
+| `PM25_AUTH_MAX_FAILS` (10) falhas de autenticação seguidas do mesmo IP | 429 com `Retry-After`, por `PM25_AUTH_BLOCK_MIN` (5) minutos, mesmo com token correto | nenhum |
+
+O contador fica só na memória, por IP, e zera com uma autenticação válida (um 403 conta como autenticação válida). Reiniciar a API libera todos os IPs. O firmware trata 401, 403 e 429 como erro a corrigir ou a esperar: o lote continua no buffer e é reenviado com espera crescente.
+
+### Certificado raiz embutido
+
+O nó confere o servidor contra a **ISRG Root X1**, embutida em `API_ROOT_CA` (impressão digital SHA-256 `96:BC:EC:06:26:49:76:F3:74:60:77:9A:CF:28:C5:A7:CF:E8:A3:C0:AA:E1:1A:8F:FC:EE:05:C0:BD:DF:08:C6`, conferida contra o PEM de `letsencrypt.org/certs/isrgrootx1.pem`). O certificado vale até **2035-06-04**; a página da Let's Encrypt (consultada em 2026-10-08) a lista como confiável até cerca de 2030-06-04, por política dos programas de raízes. Como o relógio do ESP32 só é válido depois do NTP, o nó não tenta enviar por HTTPS antes disso.
+
+Plano de rotação:
+
+- Em **2030-01**, reveja a página de certificados da Let's Encrypt. Se a X1 deixar de ser a raiz das cadeias, troque o PEM em `config.h` e regrave os nós.
+- A Let's Encrypt já emite pela nova hierarquia (intermediárias YE/YR, cadeias que ainda terminam na X1 por certificação cruzada). Se a Tailscale passar a servir uma cadeia que não termina na X1, o handshake falha com `certificate verify failed` no log `[tls]`. Os nós continuam guardando as leituras (cinco dias de buffer): troque `API_ROOT_CA` pela nova raiz e regrave dentro desse prazo. O upload normal do PlatformIO não apaga a partição do LittleFS, onde fica o buffer.
+- Para aceitar mais de uma raiz durante a transição, concatene os PEMs em `API_ROOT_CA`.
+
+### Diferenças em relação ao planejado
+
+Conferidas na documentação e no código-fonte do Tailscale e na página da Let's Encrypt, em 2026-10-08:
+
+- O Funnel exige Tailscale 1.38.3 ou mais recente, MagicDNS, HTTPS habilitado e o atributo `funnel`; as portas permitidas são só 443, 8443 e 10000; há limite de banda, não configurável nem numerado na documentação.
+- A página do Funnel não afirma suporte ao Windows, nem fala de restrição por caminho. A restrição aqui se apoia em `--set-path` e no código-fonte do cliente (`ipn/ipnlocal/serve.go`): caminhos sem publicação respondem 404, e o prefixo do caminho é removido antes do repasse. **Valide com o passo 7.**
+- A documentação não menciona `X-Forwarded-For`; o código-fonte o grava (`Set`, não acrescenta) com o IP de origem nas requisições do Funnel. Se não chegasse, todas as requisições pareceriam vir de `127.0.0.1` e dez tentativas inválidas bloqueariam todos os nós por cinco minutos (eles guardariam as leituras e reenviariam). Confira com `SELECT remote_addr, COUNT(*) FROM ingest_batches GROUP BY remote_addr;` depois do primeiro envio: o endereço deve ser público, não `127.0.0.1`.
+- A Let's Encrypt lista a X1 como confiável até 2030-06-04, enquanto o certificado vale até 2035-06-04.
+- **O túnel não foi testado com um ESP32 nesta implementação** (sem conta Tailscale nem hardware). Se, ao seguir os passos, o handshake não completar, a alternativa é HTTP na rede local, descrita abaixo.
+
+### Alternativa: HTTP na rede local
+
+Quando nó e servidor estão na mesma rede, dá para dispensar o túnel. Defina a variável de sistema `PM25_API_HOST=0.0.0.0`, rode `install.ps1 -OpenApiPort` (libera a TCP 8000 nas redes Privada e Domínio), reserve o IP do servidor no roteador e use `API_URL "http://<IP>:8000/v1/measurements"` no `config.h`. Não há criptografia: só o token protege.
+
 ## Limitações conhecidas
 
-Leituras anteriores à primeira sincronização NTP após um boot são descartadas, porque não teriam horário confiável; um módulo de relógio DS3231 resolveria isso, se as redes bloquearem NTP. Na rede local a comunicação é HTTP sem criptografia, protegida apenas pelo token; para expor a API na internet, use HTTPS e defina `API_ROOT_CA` no firmware. O alerta roda no próprio servidor, então não avisa se o servidor inteiro cair; um serviço externo de monitoramento de disponibilidade cobriria esse caso. O banco pressupõe um único processo escritor (a API), coerente com a decisão de usar SQLite; o alerta e o backup só leem.
+Leituras anteriores à primeira sincronização NTP após um boot são descartadas, porque não teriam horário confiável; um módulo de relógio DS3231 resolveria isso, se as redes bloquearem NTP. Entre redes, a comunicação depende do serviço de túnel (conta Tailscale, retransmissão e limite de banda da Tailscale, nome público atrelado à conta): se o serviço cair, os nós guardam até cinco dias de leituras em flash e reenviam depois. Na alternativa HTTP da rede local não há criptografia, só o token. O alerta roda no próprio servidor, então não avisa se o servidor inteiro cair; um serviço externo de monitoramento de disponibilidade cobriria esse caso. O banco pressupõe um único processo escritor (a API), coerente com a decisão de usar SQLite; o alerta e o backup só leem.
 
 ## Avaliação de modelos de previsão
 

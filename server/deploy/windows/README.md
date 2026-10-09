@@ -1,6 +1,6 @@
 # Servidor em Windows
 
-Equivalente Windows dos serviços `systemd` e do `crontab` desta pasta `deploy`. Pensado para um notebook ou PC dedicado, ligado o tempo todo, na mesma rede dos nós ESP32.
+Equivalente Windows dos serviços `systemd` e do `crontab` desta pasta `deploy`. Pensado para um notebook ou PC dedicado, ligado o tempo todo. A API escuta só em `127.0.0.1`; os nós ESP32, em qualquer rede, chegam a ela por um túnel HTTPS (seção "Transporte HTTPS entre redes" do README principal).
 
 ## Instalação
 
@@ -21,26 +21,27 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 Se um `uvicorn` estiver aberto à mão na porta 8000, feche-o antes (Ctrl+C). O script avisa e não inicia as tarefas se a porta estiver ocupada.
 
+A instalação pode ser repetida depois de atualizar o projeto: ela recria as tarefas e remove a regra de firewall da porta 8000 de uma instalação anterior.
+
 ## O que o `install.ps1` faz
 
 | Item | Efeito |
 |---|---|
 | Validação | Confere o `.venv`, o `.env` (tokens válidos) e as dependências do dashboard |
 | Energia | Desativa suspensão e hibernação (bateria e tomada) e a ação de fechar a tampa. Pule com `-SkipPower` |
-| Firewall | Libera TCP 8000 nas redes Privada e Domínio. A porta 8501 (dashboard) só abre com `-OpenDashboardPort` |
-| `pm25-api` | Tarefa na inicialização, como SYSTEM, sem precisar de login; reinicia a API se ela cair |
+| Firewall | Nenhuma porta de entrada é aberta: a API (`127.0.0.1:8000`) é publicada pelo túnel. `-OpenApiPort` libera a TCP 8000 nas redes Privada e Domínio (alternativa HTTP na rede local) e `-OpenDashboardPort` a 8501 (dashboard) |
+| `pm25-api` | Tarefa na inicialização, como SYSTEM, sem precisar de login; reinicia a API se ela cair. Executa o uvicorn com `--host 127.0.0.1 --proxy-headers` (o host muda com a variável de sistema `PM25_API_HOST`) |
 | `pm25-dashboard` | Igual, para o Streamlit (pule com `-NoDashboard`) |
 | `pm25-alert` | A cada 5 minutos: alerta do Telegram |
 | `pm25-backup` | Todo dia às 03:15: backup do banco |
 
-Ao final ele imprime os IPs da máquina e testa `http://127.0.0.1:8000/health`.
+Ao final ele testa `http://127.0.0.1:8000/health`.
 
 ## Depois de instalar
 
-1. Reserve o IP da máquina no roteador e use-o em `API_URL` no `config.h` do firmware.
-2. Deixe a rede do Windows como **Privada** (Configurações > Rede). Em rede Pública a regra do firewall não vale e o ESP32 não conecta.
-3. De outro dispositivo da rede, abra `http://<ip>:8000/health`. Se responder, o ESP32 também alcança.
-4. Defina `PM25_BACKUP_DIR` no `.env` como uma pasta fora do disco do servidor (pendrive ou pasta sincronizada com a nuvem).
+1. Siga a seção "Transporte HTTPS entre redes" do README principal: instalar o Tailscale, publicar os caminhos `/v1/measurements` e `/health` com `tailscale funnel` e testar com `scripts/check_https.py`. Use a URL pública em `API_URL` no `config.h` de cada nó.
+2. Defina `PM25_BACKUP_DIR` no `.env` como uma pasta fora do disco do servidor (pendrive ou pasta sincronizada com a nuvem).
+3. Alternativa HTTP na rede local, sem túnel: defina a variável de sistema `PM25_API_HOST=0.0.0.0`, reinstale com `-OpenApiPort`, reserve o IP da máquina no roteador, deixe a rede do Windows como **Privada** (em rede Pública a regra do firewall não vale) e use `http://<ip>:8000/v1/measurements` em `API_URL`.
 
 ## Operação
 
