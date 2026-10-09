@@ -262,6 +262,31 @@ python -m scripts.train_forecast --out relatorio.json       # --no-mlp avalia s�
 
 Os hiperparâmetros (`--hidden`, `--lr`, `--epochs`, `--seed` etc.) vão para o relatório em JSON.
 
+## Métricas do período
+
+`server/scripts/period_metrics.py` consolida a coleta para a QP1 (completude, lacunas, reinícios) e para as estatísticas de PM2,5. Lê o banco em modo somente leitura e, com `--freeze`, congela o conjunto de dados usado.
+
+```
+cd server
+python -m scripts.period_metrics --start 2026-10-01 --end 2026-11-15 --out-dir ../resultados --freeze
+```
+
+Precisa de `pandas` (já instalado com o dashboard). Por padrão analisa todos os nós, exceto os de teste (identificadores que começam com `teste`); `--devices no-01,no-02` escolhe os nós e `--db` aponta outro banco. Saídas em `--out-dir`:
+
+| Arquivo | Conteúdo | Uso |
+|---|---|---|
+| `periodo.json` | Por nó: métricas operacionais, lacunas por origem, estatísticas de PM2,5 e excedências | Tabelas 21 e 22 |
+| `completude_diaria.csv` | Leituras e completude por nó e por dia | Gráfico 1 |
+| `perfil_hora.csv`, `perfil_dia_semana.csv` | Média de PM2,5 por hora do dia e por dia da semana (Brasília) | Gráfico 2 |
+
+Definições. O período vai de `--start` 00:00 até o fim de `--end`, em horário de Brasília (UTC-3), e espera uma leitura por minuto. Completude é a fração dos minutos esperados com ao menos uma leitura recebida. A classificação das lacunas usa as definições do contrato de dados: entre duas leituras consecutivas, mudança de `boot_id` é **reinício**, salto de `seq` na mesma inicialização é **comunicação** (limitada aos minutos que faltam) e o restante é **aquisição**; o início e o fim do período sem leitura entram na completude e na maior lacuna como `bordas`, e `comunicacao + aquisicao + reinicio + bordas` soma os minutos faltantes. Mensagens perdidas são os saltos de `seq` na mesma inicialização; reinícios, as trocas de `boot_id`; duplicatas, a soma de `n_duplicates` dos lotes recebidos no período; RSSI, a média das leituras.
+
+As estatísticas de PM2,5 usam médias horárias válidas, isto é, horas com pelo menos 45 leituras de qualidade `ok`: a regra e a função vêm de `train_forecast.py` (`MIN_SAMPLES` e `hourly_series`), então a análise descritiva e a avaliação dos modelos usam as mesmas horas. O desvio-padrão é o amostral e os percentis usam interpolação linear. Uma média de 24 h (dia de calendário de Brasília) só conta com pelo menos 18 horas válidas, o mesmo 75% da hora.
+
+Limiares de média de 24 h (µg/m³), conferidos nos textos oficiais: OMS 2021 (Tabela 0.1 das diretrizes globais), nível-guia 15 e metas intermediárias 25, 37,5, 50 e 75; Resolução CONAMA nº 506/2024 (Anexo I), PI-1 60, PI-2 50, PI-3 37, PI-4 25 e PF 15. Para dados de 2026 o padrão nacional em vigor é o PI-2 (desde 2025-01-01). Cada limiar tem nome e comentário com a fonte em `period_metrics.py`. Nem a OMS nem o CONAMA definem limite horário de PM2,5: a contagem de horas acima de cada valor é só uma referência, e a comparação normativa é a das médias de 24 h.
+
+Com `--freeze`, o banco é copiado para `--out-dir` pela API de backup do SQLite (cópia íntegra mesmo com a API gravando), convertido para arquivo único e verificado com `integrity_check`. O `periodo.json` registra o intervalo, a data da extração (UTC), o número de medições e o SHA-256 da cópia, e as métricas são calculadas sobre a cópia, de modo que o hash identifica exatamente os dados analisados. Os dispositivos de teste (por exemplo `teste-https`) ficam gravados no banco e são excluídos das métricas por padrão.
+
 ## Próximos passos
 
 O pipeline de modelagem começa com os dados públicos da CETESB (QUALAR) e do INMET ou Open-Meteo, com baseline de persistência e validação walk-forward, e depois roda sobre este banco. O job horário grava previsões na tabela `forecasts` para a validação prospectiva. Com a coleta contínua em andamento, também fica possível simular ciclos de leitura do PMS5003 a partir dos dados de um minuto, para o estudo de consumo de energia.
