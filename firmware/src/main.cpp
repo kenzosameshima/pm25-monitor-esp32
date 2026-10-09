@@ -1,8 +1,9 @@
 // Firmware do nó sensor de PM2,5: ESP32 + PMS5003 + BME280 ou DHT22.
 //
 // A cada minuto de relógio (UTC), fecha a média dos quadros do PMS5003, lê temperatura e umidade
-// e envia a leitura à API por HTTP POST. O que não for confirmado (HTTP 201) vai para um buffer
-// em LittleFS, que sobrevive a reinícios, e é reenviado em lotes quando a rede volta.
+// e envia a leitura à API por HTTP POST (HTTPS, com validação do certificado, quando a API_URL
+// começa com https://). O que não for confirmado (HTTP 201) vai para um buffer em LittleFS, que
+// sobrevive a reinícios, e é reenviado em lotes quando a rede volta.
 //
 // Identificação de cada leitura: (DEVICE_ID, boot_id, seq). O boot_id é um contador gravado na
 // NVS e incrementado a cada inicialização; o seq recomeça do zero a cada boot. Assim, reenvios
@@ -48,6 +49,11 @@ static const size_t BATCH_SIZE = 60;                // leituras por requisição
 static const int MAX_BATCHES_PER_LOOP = 3;
 static const uint32_t MAX_PENDING_RECORDS = 5UL * 24 * 60;  // 5 dias de leituras em buffer (~317 KB)
 static const uint32_t HTTP_TIMEOUT_MS = 8000;
+// HTTPS: a conexão TCP e o handshake TLS levam bem mais que um POST simples. No pior caso uma tentativa
+// gasta 15 s (conexão) + 20 s (handshake) + 8 s (envio e resposta) = 43 s, abaixo do watchdog de 90 s.
+// O padrão da biblioteca para o handshake é 120 s, o que estouraria o watchdog.
+static const uint32_t HTTPS_CONNECT_TIMEOUT_MS = 15000;
+static const unsigned long HTTPS_HANDSHAKE_TIMEOUT_S = 20;
 static const uint32_t FIRST_BACKOFF_MS = 5000;
 static const uint32_t MAX_BACKOFF_MS = 5UL * 60 * 1000;
 static const uint32_t WIFI_RETRY_MS = 30000;
@@ -58,6 +64,19 @@ static const uint32_t WDT_TIMEOUT_S = 90;
 static const char* PENDING_FILE = "/pending_v1.bin";
 static const char* OFFSET_FILE = "/pending_v1.off";
 static const char* TMP_FILE = "/pending_v1.tmp";
+
+// A API_URL https:// exige a CA raiz (API_ROOT_CA) ou, só em bancada, API_TLS_INSECURE_TEST.
+constexpr bool urlIsHttps(const char* url) {
+  return url[0] == 'h' && url[1] == 't' && url[2] == 't' && url[3] == 'p' && url[4] == 's' && url[5] == ':';
+}
+constexpr bool API_IS_HTTPS = urlIsHttps(API_URL);
+#if defined(API_ROOT_CA) || defined(API_TLS_INSECURE_TEST)
+constexpr bool API_TLS_CONFIGURED = true;
+#else
+constexpr bool API_TLS_CONFIGURED = false;
+#endif
+static_assert(!API_IS_HTTPS || API_TLS_CONFIGURED,
+              "API_URL com https:// precisa de API_ROOT_CA em config.h (ver config.example.h)");
 
 // ---------------- Estado ----------------
 HardwareSerial& pmsSerial = Serial2;
@@ -81,8 +100,14 @@ static uint32_t uptimeSeconds() { return (uint32_t)(esp_timer_get_time() / 10000
 static uint32_t pendingRecords() { return (pendingSize - pendingOffset) / sizeof(Reading); }
 static bool isSuccess(int code) { return code == 200 || code == 201; }
 
+// Sem hora válida o handshake falha (o certificado ainda "não começou" para o relógio do ESP32).
+// Em vez de acumular falhas e aumentar a espera, o envio só começa depois do NTP.
+static bool clockReadyForSend() { return !API_IS_HTTPS || timeValid(); }
+
 // 4xx que não se resolvem reenviando: o lote é descartado (a API guarda uma cópia para auditoria).
 // 401/403 indicam token ou DEVICE_ID errado: os dados ficam no buffer até a configuração ser corrigida.
+// 429: a API bloqueou o IP por tentativas inválidas. Falha de conexão ou de handshake TLS (código
+// negativo) também não é rejeição: o lote continua no buffer e é reenviado com espera crescente.
 static bool isRejected(int code) {
   return code >= 400 && code < 500 && code != 401 && code != 403 && code != 408 && code != 429;
 }
@@ -237,24 +262,25 @@ static void confirmPending(size_t n) {
 
 // ---------------- Envio ----------------
 static int postReadings(const Reading* rs, size_t n) {
-  if (WiFi.status() != WL_CONNECTED) return -1;
+  if (WiFi.status() != WL_CONNECTED || !clockReadyForSend()) return -1;
   std::string body = buildPayload(DEVICE_ID, rs, n);
   static WiFiClient plainClient;
   static WiFiClientSecure secureClient;
   HTTPClient http;
   bool began;
-  if (strncmp(API_URL, "https://", 8) == 0) {
-#ifdef API_ROOT_CA
+  if (API_IS_HTTPS) {
+#if defined(API_ROOT_CA)
     secureClient.setCACert(API_ROOT_CA);
 #else
-    secureClient.setInsecure();  // cifra, mas não autentica o servidor: defina API_ROOT_CA fora da rede local
+    secureClient.setInsecure();  // API_TLS_INSECURE_TEST: cifra, mas não autentica o servidor
 #endif
+    secureClient.setHandshakeTimeout(HTTPS_HANDSHAKE_TIMEOUT_S);
     began = http.begin(secureClient, API_URL);
   } else {
     began = http.begin(plainClient, API_URL);
   }
   if (!began) return -1;
-  http.setConnectTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(API_IS_HTTPS ? HTTPS_CONNECT_TIMEOUT_MS : HTTP_TIMEOUT_MS);
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", "Bearer " DEVICE_TOKEN);
@@ -262,6 +288,12 @@ static int postReadings(const Reading* rs, size_t n) {
   if (!isSuccess(code)) {
     String detail = code > 0 ? http.getString() : HTTPClient::errorToString(code);
     Serial.printf("[http] %d %s\n", code, detail.c_str());
+    if (API_IS_HTTPS && code < 0) {  // falha de conexão ou de handshake: trata como falha de rede
+      char tlsError[100] = "";
+      int tlsCode = secureClient.lastError(tlsError, sizeof tlsError);
+      Serial.printf("[tls] erro %d: %s (heap livre %lu)\n", tlsCode, tlsError,
+                    (unsigned long)ESP.getFreeHeap());
+    }
   }
   http.end();
   return code;
@@ -286,7 +318,7 @@ static void enqueue(const Reading& r) {
 
 static void flushPending() {
   if (pendingRecords() == 0 || WiFi.status() != WL_CONNECTED) return;
-  if ((int32_t)(millis() - nextFlushAt) < 0) return;
+  if ((int32_t)(millis() - nextFlushAt) < 0 || !clockReadyForSend()) return;
   static Reading batch[BATCH_SIZE];
   for (int i = 0; i < MAX_BATCHES_PER_LOOP && pendingRecords() > 0; ++i) {
     esp_task_wdt_reset();
