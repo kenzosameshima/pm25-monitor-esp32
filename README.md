@@ -300,6 +300,19 @@ Limiares de média de 24 h (µg/m³), conferidos nos textos oficiais: OMS 2021 (
 
 Com `--freeze`, o banco é copiado para `--out-dir` pela API de backup do SQLite (cópia íntegra mesmo com a API gravando), convertido para arquivo único e verificado com `integrity_check`. O `periodo.json` registra o intervalo, a data da extração (UTC), o número de medições e o SHA-256 da cópia, e as métricas são calculadas sobre a cópia, de modo que o hash identifica exatamente os dados analisados. Os dispositivos de teste (por exemplo `teste-https`) ficam gravados no banco e são excluídos das métricas por padrão.
 
+## Comparação com a CETESB
+
+`server/scripts/compare_cetesb.py` compara as médias horárias de PM2,5 de cada nó com as de uma estação da CETESB, usada como referência regulatória. Lê o banco em modo somente leitura e o CSV de MP2,5 (média horária) exportado do QUALAR; não grava no banco.
+
+```
+cd server
+python -m scripts.compare_cetesb --cetesb ../resultados/cetesb_osasco.csv --db ../resultados/pm25-congelado-<início>_<fim>.db
+```
+
+Gera `comparacao_cetesb.json` (por nó: horas pareadas, viés, MAE, RMSE, correlação de Pearson e reta de regressão, no total e separando as horas com umidade acima e abaixo de 75%) e `comparacao_cetesb_pares.csv` (uma linha por hora pareada, base do gráfico de dispersão). Só entram horas válidas nos dois lados: a hora do nó segue a mesma regra de 45 leituras da avaliação dos modelos, e os valores vazios da CETESB ficam de fora.
+
+O rótulo `HH:00` da CETESB é tratado como o fim da hora (`01:00` cobre 00:00 a 01:00, e `24:00` fecha o dia), no horário de Brasília. Se o manual da rede indicar outra convenção, use `--hour-label start`; um rótulo errado desloca todo o pareamento em uma hora e piora as métricas. Os valores da CETESB são inteiros, e a distância entre o nó e a estação não é corrigida: a comparação mede a concordância entre os dois pontos, não o erro absoluto do sensor. Com menos de 24 horas pareadas, a correlação e a regressão não são calculadas.
+
 ## Próximos passos
 
 O pipeline de modelagem começa com os dados públicos da CETESB (QUALAR) e do INMET ou Open-Meteo, com baseline de persistência e validação walk-forward, e depois roda sobre este banco. O job horário grava previsões na tabela `forecasts` para a validação prospectiva. Com a coleta contínua em andamento, também fica possível simular ciclos de leitura do PMS5003 a partir dos dados de um minuto, para o estudo de consumo de energia.
