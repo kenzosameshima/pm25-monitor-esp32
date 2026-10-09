@@ -31,7 +31,7 @@ from app.config import get_settings
 
 LAGS = (1, 2, 3, 6, 12, 24)
 FEATURES = ["pm25", *[f"lag_{k}" for k in LAGS], "humidity", "temperature", "hour_sin", "hour_cos"]
-MIN_SAMPLES = 30        # minutos válidos para uma hora entrar na série
+MIN_SAMPLES = 45        # minutos com leitura para uma hora entrar na série (75% de cobertura)
 MIN_TRAIN_ROWS = 100    # abaixo disso o treino não é confiável
 EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 PERSISTENCE = "Persistência"

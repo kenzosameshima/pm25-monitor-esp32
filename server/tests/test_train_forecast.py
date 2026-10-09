@@ -49,12 +49,12 @@ def conn(tmp_path):
 
 
 def test_hora_com_poucas_leituras_vira_lacuna(conn):
-    insert_hours(conn, "no-01", [10.0, 20.0], per_hour=40)           # hora 0 e 1 completas
-    insert_hours(conn, "no-01", [30.0], per_hour=5)                  # mesma hora 0, mesmas chaves: ignorado
-    hourly = tf.hourly_series(conn, "no-01", min_samples=30)
-    assert list(hourly["pm25"]) == [10.0, 20.0]
-    sparse = tf.hourly_series(conn, "no-01", min_samples=41)
-    assert sparse["pm25"].isna().all()
+    assert tf.MIN_SAMPLES == 45
+    insert_hours(conn, "no-01", [10.0, 20.0], per_hour=50)
+    insert_hours(conn, "no-02", [10.0, 20.0], per_hour=44)
+    assert list(tf.hourly_series(conn, "no-01")["pm25"]) == [10.0, 20.0]
+    assert tf.hourly_series(conn, "no-02")["pm25"].isna().all()           # 44 < 45 leituras: hora ausente
+    assert tf.hourly_series(conn, "no-01", min_samples=51)["pm25"].isna().all()
 
 
 def test_leituras_com_qualidade_ruim_sao_ignoradas(conn):
