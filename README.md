@@ -18,6 +18,7 @@ server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
 wokwi/        chips simulados do PMS5003 e do BME280, config.h e bibliotecas para rodar o firmware no Wokwi
+.githooks/    hook commit-msg e a checagem de commits usada também no CI (ver "Padrão de commits")
 ```
 
 ## Início rápido, sem hardware
@@ -299,6 +300,16 @@ As estatísticas de PM2,5 usam médias horárias válidas, isto é, horas com pe
 Limiares de média de 24 h (µg/m³), conferidos nos textos oficiais: OMS 2021 (Tabela 0.1 das diretrizes globais), nível-guia 15 e metas intermediárias 25, 37,5, 50 e 75; Resolução CONAMA nº 506/2024 (Anexo I), PI-1 60, PI-2 50, PI-3 37, PI-4 25 e PF 15. Para dados de 2026 o padrão nacional em vigor é o PI-2 (desde 2025-01-01). Cada limiar tem nome e comentário com a fonte em `period_metrics.py`. Nem a OMS nem o CONAMA definem limite horário de PM2,5: a contagem de horas acima de cada valor é só uma referência, e a comparação normativa é a das médias de 24 h.
 
 Com `--freeze`, o banco é copiado para `--out-dir` pela API de backup do SQLite (cópia íntegra mesmo com a API gravando), convertido para arquivo único e verificado com `integrity_check`. O `periodo.json` registra o intervalo, a data da extração (UTC), o número de medições e o SHA-256 da cópia, e as métricas são calculadas sobre a cópia, de modo que o hash identifica exatamente os dados analisados. Os dispositivos de teste (por exemplo `teste-https`) ficam gravados no banco e são excluídos das métricas por padrão.
+
+## Padrão de commits
+
+As mensagens seguem Conventional Commits (`tipo(escopo): descrição`, no imperativo, até 72 caracteres no cabeçalho). O hook `commit-msg` em `.githooks/` recusa mensagens fora do formato e as que têm termos proibidos, como rodapés de coautoria; a lista está em `.githooks/check-commit.sh`. Ative uma vez em cada clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+O hook pode ser pulado localmente, então o workflow `commit-standards` repete a checagem em cada PR e em cada envio para a `main`, conferindo também o autor e o committer de cada commit e o título do PR, que vira a mensagem num squash merge.
 
 ## Próximos passos
 
