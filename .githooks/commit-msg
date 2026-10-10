@@ -1,0 +1,3 @@
+#!/bin/sh
+# Recusa o commit se a mensagem não seguir o padrão do repositório (ver check-commit.sh).
+exec sh "$(dirname "$0")/check-commit.sh" msg "$1"
