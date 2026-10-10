@@ -2,8 +2,8 @@
 // PMS5003 custom chip for Wokwi
 // UART PM sensor simulator
 //
-// Versão corrigida: o quadro agora preenche também os campos "atmospheric environment"
-// (bytes 10 a 15), que o firmware usa como PM2,5 principal. Antes eles iam zerados.
+// O quadro preenche também os campos "atmospheric environment" (bytes 10 a 15), que o firmware usa
+// como PM2,5 principal.
 // No sensor real, os dois conjuntos coincidem em concentrações baixas e se afastam acima de
 // ~30 µg/m³; aqui os dois recebem o valor do controle, o que basta para testar a cadeia.
 

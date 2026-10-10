@@ -50,6 +50,7 @@ MIN_SAMPLES = 45        # minutos com leitura para uma hora entrar na série (75
 MIN_TRAIN_ROWS = 100    # abaixo disso o treino não é confiável
 EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 PERSISTENCE = "Persistência"
+MLP = "MLP (Keras)"
 
 
 def hourly_series(conn, device_id: str, min_samples: int = MIN_SAMPLES) -> pd.DataFrame:
@@ -219,13 +220,13 @@ def aggregate_seeds(per_seed: list[dict]) -> dict:
             out[stage] = None
             continue
         entry = {}
-        for key, label in (("rmse", "rmse"), ("skill", "skill")):
+        for key in ("rmse", "skill"):
             values = [m[key] for m in stage_metrics]
             if any(v is None for v in values):
-                entry[f"{label}_mean"] = entry[f"{label}_std"] = None
+                entry[f"{key}_mean"] = entry[f"{key}_std"] = None
                 continue
-            entry[f"{label}_mean"] = float(np.mean(values))
-            entry[f"{label}_std"] = float(np.std(values, ddof=1)) if len(values) > 1 else None
+            entry[f"{key}_mean"] = float(np.mean(values))
+            entry[f"{key}_std"] = float(np.std(values, ddof=1)) if len(values) > 1 else None
         out[stage] = entry
     return out
 
@@ -264,7 +265,7 @@ def database_info(path: str) -> dict:
     return {"file": os.path.basename(path), "sha256": digest.hexdigest(), "size_bytes": os.path.getsize(path)}
 
 
-COLUMN_NAMES = {PERSISTENCE: "persistencia", "Ridge": "ridge", "MLP (Keras)": "mlp"}
+COLUMN_NAMES = {PERSISTENCE: "persistencia", "Ridge": "ridge", MLP: "mlp"}
 
 
 def write_predictions_csv(path: str, predictions: dict) -> int:
@@ -367,7 +368,7 @@ def main(argv=None) -> int:
         except ImportError:
             print("TensorFlow não instalado: use `pip install -r requirements-ml.txt` ou --no-mlp.", file=sys.stderr)
             return 1
-        models["MLP (Keras)"] = predict_mlp
+        models[MLP] = predict_mlp
         hyper.update(hidden=args.hidden, lr=args.lr, epochs=args.epochs, batch_size=args.batch_size,
                      patience=args.patience, optimizer="Adam", early_stopping=True, seeds=args.seeds)
     kw = dict(alpha=args.ridge_alpha, seed=args.seed, hidden=tuple(args.hidden), lr=args.lr, epochs=args.epochs,
@@ -375,9 +376,7 @@ def main(argv=None) -> int:
     predictions: dict = {}
     results = evaluate(frame, models, folds, final, predictions=predictions, **kw)
     if args.seeds > 1:
-        mlp = "MLP (Keras)"
-        results[mlp]["seeds"] = run_seeds(frame, folds, final, predict_mlp, args.seed, args.seeds,
-                                          {"validation": results[mlp]["validation"], "test": results[mlp]["test"]}, **kw)
+        results[MLP]["seeds"] = run_seeds(frame, folds, final, predict_mlp, args.seed, args.seeds, results[MLP], **kw)
 
     print(f"Horas completas: {len(frame)} ({', '.join(devices)}); dobras de validação: {len(folds)}; "
           f"teste final: {final[0]:%Y-%m-%d} a {final[1]:%Y-%m-%d}\n")

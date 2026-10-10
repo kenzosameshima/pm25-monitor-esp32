@@ -10,7 +10,7 @@
 // Tailscale Funnel; passo a passo na seção "Transporte HTTPS entre redes" do README). Use o endereço
 // público do túnel, sem porta, e o caminho /v1/measurements.
 // Na rede local, sem túnel, dá para usar "http://IP-reservado-do-servidor:8000/v1/measurements".
-#define API_URL "https://MAQUINA.SEU-TAILNET.ts.net/v1/measurements"
+#define API_URL "https://desktop-0adusq5.tail7d201d.ts.net/v1/measurements"
 #define DEVICE_ID "no-01"                      // letras, números, '-' e '_'
 #define DEVICE_TOKEN "TROQUE-este-token-do-no-01"  // o mesmo cadastrado em PM25_DEVICE_TOKENS no servidor
 
@@ -20,7 +20,6 @@
 // PEM oficial: https://letsencrypt.org/certs/isrgrootx1.pem
 // SHA-256: 96:BC:EC:06:26:49:76:F3:74:60:77:9A:CF:28:C5:A7:CF:E8:A3:C0:AA:E1:1A:8F:FC:EE:05:C0:BD:DF:08:C6
 // Se o emissor mudar, troque o PEM aqui e regrave os nós (plano de rotação no README).
-// A validação só funciona depois da sincronização NTP; até lá o nó não tenta enviar por HTTPS.
 #define API_ROOT_CA \
   "-----BEGIN CERTIFICATE-----\n" \
   "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n" \

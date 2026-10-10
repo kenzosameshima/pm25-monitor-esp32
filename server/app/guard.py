@@ -13,11 +13,7 @@ MAX_TRACKED_IPS = 10_000
 
 
 class BodySizeLimit:
-    """Recusa com 413 corpos acima de `limit()` bytes, antes de qualquer leitura pelo FastAPI.
-
-    Confere o Content-Length e também conta os bytes recebidos, para cobrir envio em partes
-    (chunked) ou um Content-Length que minta.
-    """
+    """Recusa com 413 corpos acima de `limit()` bytes, pelo Content-Length ou contando o que chega (envio em partes)."""
 
     def __init__(self, app: ASGIApp, limit: Callable[[], int]) -> None:
         self.app = app
@@ -73,11 +69,7 @@ class _Entry:
 
 
 class AuthThrottle:
-    """Bloqueia um IP por `block_s` segundos depois de `max_fails` falhas de autenticação seguidas.
-
-    O estado fica só na memória: reiniciar a API libera todos os IPs, o que é aceitável porque o
-    objetivo é conter ruído e tentativa de adivinhar token, não guardar histórico.
-    """
+    """Bloqueia o IP por `block_s` segundos após `max_fails` falhas de autenticação seguidas. Estado só em memória."""
 
     def __init__(self, max_fails: int, block_s: float, clock: Callable[[], float] = time.monotonic) -> None:
         self.max_fails = max_fails

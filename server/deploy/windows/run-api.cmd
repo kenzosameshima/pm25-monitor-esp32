@@ -1,9 +1,7 @@
 @echo off
 rem Executa a API de ingestao e a reinicia se ela cair. Chamado pela tarefa agendada "pm25-api".
-rem A API escuta so em 127.0.0.1: o tunel (tailscale funnel) termina o TLS e encaminha para ela.
-rem --proxy-headers faz o IP registrado ser o do cliente real (X-Forwarded-For enviado pelo tunel,
-rem aceito apenas de 127.0.0.1). Para a alternativa HTTP na rede local, defina a variavel de sistema
-rem PM25_API_HOST=0.0.0.0 e rode install.ps1 com -OpenApiPort.
+rem Escuta so em 127.0.0.1: o tunel termina o TLS e encaminha. --proxy-headers registra o IP real do cliente
+rem (X-Forwarded-For, aceito so de 127.0.0.1). Para HTTP na rede local: PM25_API_HOST=0.0.0.0 e install.ps1 -OpenApiPort.
 if not defined PM25_API_HOST set PM25_API_HOST=127.0.0.1
 cd /d "%~dp0..\.."
 if not exist data mkdir data

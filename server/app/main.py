@@ -46,11 +46,9 @@ def _client(request: Request) -> str | None:
 
 
 def authenticate(request: Request, authorization: str | None = Header(default=None)) -> str:
-    """Identifica o dispositivo pelo token enviado em 'Authorization: Bearer <token>'.
+    """Identifica o dispositivo pelo 'Authorization: Bearer <token>'.
 
-    Token ausente e token inválido recebem a mesma resposta 401, para não ensinar nada a quem
-    tenta adivinhar. A tentativa fica em invalid_messages (sem o token) e conta para o bloqueio
-    do IP; uma autenticação válida zera a contagem.
+    Token ausente ou inválido recebe o mesmo 401, é registrado sem o token e conta para o bloqueio do IP.
     """
     throttle: AuthThrottle = request.app.state.throttle
     ip = _client(request)
