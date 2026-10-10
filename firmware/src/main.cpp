@@ -49,9 +49,8 @@ static const size_t BATCH_SIZE = 60;                // leituras por requisição
 static const int MAX_BATCHES_PER_LOOP = 3;
 static const uint32_t MAX_PENDING_RECORDS = 5UL * 24 * 60;  // 5 dias de leituras em buffer (~317 KB)
 static const uint32_t HTTP_TIMEOUT_MS = 8000;
-// HTTPS: a conexão TCP e o handshake TLS levam bem mais que um POST simples. No pior caso uma tentativa
-// gasta 15 s (conexão) + 20 s (handshake) + 8 s (envio e resposta) = 43 s, abaixo do watchdog de 90 s.
-// O padrão da biblioteca para o handshake é 120 s, o que estouraria o watchdog.
+// HTTPS: pior caso de uma tentativa = 15 s (conexão) + 20 s (handshake) + 8 s (resposta) = 43 s, abaixo do
+// watchdog de 90 s. O handshake padrão da biblioteca é 120 s e o estouraria.
 static const uint32_t HTTPS_CONNECT_TIMEOUT_MS = 15000;
 static const unsigned long HTTPS_HANDSHAKE_TIMEOUT_S = 20;
 static const uint32_t FIRST_BACKOFF_MS = 5000;
@@ -100,14 +99,12 @@ static uint32_t uptimeSeconds() { return (uint32_t)(esp_timer_get_time() / 10000
 static uint32_t pendingRecords() { return (pendingSize - pendingOffset) / sizeof(Reading); }
 static bool isSuccess(int code) { return code == 200 || code == 201; }
 
-// Sem hora válida o handshake falha (o certificado ainda "não começou" para o relógio do ESP32).
-// Em vez de acumular falhas e aumentar a espera, o envio só começa depois do NTP.
+// Sem hora válida o handshake falha: o envio por HTTPS só começa depois do NTP.
 static bool clockReadyForSend() { return !API_IS_HTTPS || timeValid(); }
 
 // 4xx que não se resolvem reenviando: o lote é descartado (a API guarda uma cópia para auditoria).
 // 401/403 indicam token ou DEVICE_ID errado: os dados ficam no buffer até a configuração ser corrigida.
-// 429: a API bloqueou o IP por tentativas inválidas. Falha de conexão ou de handshake TLS (código
-// negativo) também não é rejeição: o lote continua no buffer e é reenviado com espera crescente.
+// 429 (IP bloqueado) e falhas de conexão ou de handshake TLS (código negativo) também mantêm o lote no buffer.
 static bool isRejected(int code) {
   return code >= 400 && code < 500 && code != 401 && code != 403 && code != 408 && code != 429;
 }

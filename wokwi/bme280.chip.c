@@ -1,13 +1,9 @@
 // BME280 custom chip for Wokwi
 // Adafruit BME280 library compatible
 //
-// Versão corrigida. Mudanças em relação à anterior:
-// - As conversões para ADC deixaram de ser aproximações lineares. O chip agora aplica as mesmas
-//   fórmulas de compensação da biblioteca Adafruit (Bosch, aritmética inteira) e faz uma busca
-//   binária pelo valor de ADC que reproduz o valor do controle. Antes, a umidade só saía certa
-//   perto de 50% (20% virava 0% e 80% virava 100%) e a pressão errava dezenas de hPa.
-// - O coeficiente H1 foi para o registrador certo (0xA1); estava em 0xA0.
-// - A leitura "pulada" (0x8000 / 0x80000), que a biblioteca interpreta como NAN, nunca é gerada.
+// As conversões aplicam as mesmas fórmulas de compensação da biblioteca Adafruit (Bosch, aritmética
+// inteira) e fazem uma busca binária pelo valor de ADC que reproduz o valor do controle. A leitura
+// "pulada" (0x8000 / 0x80000), que a biblioteca interpreta como NAN, nunca é gerada.
 
 #include "wokwi-api.h"
 
