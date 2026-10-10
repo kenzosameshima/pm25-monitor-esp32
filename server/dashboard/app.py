@@ -280,7 +280,7 @@ def series_tab(devices_all: list[str]) -> None:
         st.caption(f"Registros com umidade acima de {HIGH_HUMIDITY:.0f}% ({parts}) podem ter PM2,5 "
                    "superestimado pela absorção de água nas partículas.")
 
-    export = data.drop(columns=["hora_local"]).copy()
+    export = data.drop(columns=["hora_local"])
     st.download_button("Baixar dados (CSV)", export.to_csv(index=False).encode("utf-8"),
                        file_name=f"pm25_{period[0]}_{period[1]}.csv", mime="text/csv")
 

@@ -50,7 +50,7 @@ def enviar(url: str, token: str, device: str, timeout: float) -> tuple[int, str]
         status, texto = e.code, e.read().decode(errors="replace")
     except urllib.error.URLError as e:
         return _falha_de_conexao(e.reason, timeout)
-    except (socket.timeout, TimeoutError):
+    except TimeoutError:
         return TEMPO_ESGOTADO, _msg_tempo(timeout)
     except ssl.SSLError as e:
         return _falha_de_conexao(e, timeout)
@@ -81,7 +81,7 @@ def _falha_de_conexao(motivo: object, timeout: float) -> tuple[int, str]:
                              "Confira o endereço (deve ser o nome público do túnel) e o relógio deste computador.")
     if isinstance(motivo, ssl.SSLError):
         return CONEXAO, f"FALHA: erro TLS ({motivo}). O endereço pode não estar com HTTPS ativo."
-    if isinstance(motivo, (socket.timeout, TimeoutError)):
+    if isinstance(motivo, TimeoutError):
         return TEMPO_ESGOTADO, _msg_tempo(timeout)
     if isinstance(motivo, socket.gaierror):
         return CONEXAO, f"FALHA: nome não encontrado ({motivo}). Confira o endereço e a conexão deste computador."

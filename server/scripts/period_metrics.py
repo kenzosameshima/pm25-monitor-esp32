@@ -1,29 +1,8 @@
-"""Métricas consolidadas do período de coleta: base da Tabela 21 e do Gráfico 1 (QP1, desempenho
-operacional) e da Tabela 22 e do Gráfico 2 (estatísticas descritivas de PM2,5).
+"""Métricas consolidadas do período de coleta (Tabelas 21 e 22 e Gráficos 1 e 2 do TCC).
 
-Lê o banco em modo somente leitura. Gera, por nó, em --out-dir:
-
-- periodo.json: métricas operacionais, classificação das lacunas, estatísticas de PM2,5 e
-  frequência de excedência de diretrizes e padrões;
-- completude_diaria.csv (Gráfico 1), perfil_hora.csv e perfil_dia_semana.csv (Gráfico 2).
-
-Definições (todas conferíveis a mão a partir do banco):
-
-- Período: dias de calendário do horário de Brasília (UTC-3, sem horário de verão desde 2019), de
-  --start 00:00 até o fim de --end. Esperado: 1 440 leituras por dia, uma por minuto.
-- Completude: minutos do período com pelo menos uma leitura recebida ÷ minutos esperados.
-- Lacuna: sequência de minutos sem leitura. As bordas (do início do período até a primeira leitura
-  e da última leitura até o fim) entram na completude e na maior lacuna, mas ficam fora da
-  classificação por origem, que só vale entre duas leituras consecutivas.
-- Origem da lacuna entre duas leituras consecutivas: reinício (o boot_id mudou); comunicação (mesmo
-  boot_id e salto de seq: as mensagens perdidas, limitadas aos minutos que faltam); aquisição (os
-  minutos que sobram, ou seja, intervalo sem leituras e sem salto de seq: o sensor não entregou
-  dados válidos). Minutos faltantes = comunicação + aquisição + reinício + bordas.
-- Mensagens perdidas: soma dos saltos de seq entre leituras consecutivas do mesmo boot_id.
-- Reinícios: trocas de boot_id entre leituras consecutivas.
-- Duplicatas descartadas: soma de n_duplicates dos lotes de ingest_batches recebidos no período.
-- PM2,5: médias horárias válidas (hora com pelo menos MIN_SAMPLES leituras com quality "ok"), pela
-  mesma função e constante usadas na avaliação dos modelos de previsão.
+Lê o banco em modo somente leitura e grava em --out-dir: periodo.json (por nó: métricas operacionais,
+lacunas por origem, estatísticas de PM2,5 e excedências), completude_diaria.csv, perfil_hora.csv e
+perfil_dia_semana.csv. As definições estão no README, na seção "Métricas do período".
 
 Uso: python -m scripts.period_metrics --start 2026-10-01 --end 2026-11-15 [--out-dir resultados] [--freeze]
 """
@@ -116,7 +95,6 @@ def operational_metrics(conn, device: str, start: datetime, end: datetime, days:
 
     gaps = {"comunicacao": 0, "aquisicao": 0, "reinicio": 0}
     lost = restarts = 0
-    largest = 0
     if readings:
         lead = readings[0][0] - start_min
         trail = end_min - readings[-1][0] - 1
