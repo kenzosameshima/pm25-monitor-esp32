@@ -6,9 +6,9 @@ Equivale aos arquivos .service e ao crontab da pasta deploy, mas para Windows.
 O que faz:
   - confere o ambiente virtual e o .env (e valida os tokens);
   - desativa suspensao, hibernacao e a acao de fechar a tampa (use -SkipPower para pular);
-  - remove a regra de firewall da porta 8000: a API escuta so em 127.0.0.1 e quem a publica e o tunel
-    HTTPS (-OpenApiPort libera TCP 8000 nas redes Privada e Dominio, para a alternativa HTTP na rede
-    local, junto com PM25_API_HOST=0.0.0.0; a 8501 so abre com -OpenDashboardPort);
+  - remove a regra de firewall da porta 8000, pois a API escuta so em 127.0.0.1 atras do tunel HTTPS
+    (-OpenApiPort a libera nas redes Privada e Dominio para HTTP local, junto com PM25_API_HOST=0.0.0.0);
+    a 8501 so abre com -OpenDashboardPort;
   - registra tarefas agendadas que rodam como SYSTEM, sem precisar de login:
       pm25-api        na inicializacao, reinicia se cair
       pm25-dashboard  na inicializacao, reinicia se cair (pule com -NoDashboard)
