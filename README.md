@@ -13,7 +13,7 @@ nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──
 ```
 firmware/     código do ESP32 (PlatformIO); host_tests/ testa a parte sem hardware no computador
 server/app/   API (main.py), contrato de dados (models.py), acesso ao banco (db.py), esquema (schema.sql)
-server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py, check_https.py, train_forecast.py, period_metrics.py
+server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py, check_https.py, train_forecast.py, period_metrics.py, compare_cetesb.py
 server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
@@ -299,6 +299,23 @@ As estatísticas de PM2,5 usam médias horárias válidas, isto é, horas com pe
 Limiares de média de 24 h (µg/m³), conferidos nos textos oficiais: OMS 2021 (Tabela 0.1 das diretrizes globais), nível-guia 15 e metas intermediárias 25, 37,5, 50 e 75; Resolução CONAMA nº 506/2024 (Anexo I), PI-1 60, PI-2 50, PI-3 37, PI-4 25 e PF 15. Para dados de 2026 o padrão nacional em vigor é o PI-2 (desde 2025-01-01). Cada limiar tem nome e comentário com a fonte em `period_metrics.py`. Nem a OMS nem o CONAMA definem limite horário de PM2,5: a contagem de horas acima de cada valor é só uma referência, e a comparação normativa é a das médias de 24 h.
 
 Com `--freeze`, o banco é copiado para `--out-dir` pela API de backup do SQLite (cópia íntegra mesmo com a API gravando), convertido para arquivo único e verificado com `integrity_check`. O `periodo.json` registra o intervalo, a data da extração (UTC), o número de medições e o SHA-256 da cópia, e as métricas são calculadas sobre a cópia, de modo que o hash identifica exatamente os dados analisados. Os dispositivos de teste (por exemplo `teste-https`) ficam gravados no banco e são excluídos das métricas por padrão.
+
+## Comparação com a CETESB
+
+`server/scripts/compare_cetesb.py` compara as médias horárias de PM2,5 de cada nó com as de uma estação da CETESB, usada como referência regulatória. Lê o banco em modo somente leitura e o CSV de MP2,5 (média horária) exportado do QUALAR; não grava no banco.
+
+```
+cd server
+python -m scripts.compare_cetesb --cetesb ../resultados/cetesb_osasco.csv --db ../resultados/pm25-congelado-<início>_<fim>.db
+```
+
+Gera `comparacao_cetesb.json` (por nó: horas pareadas, viés, MAE, RMSE, correlação de Pearson e reta de regressão, no total e separando as horas com umidade acima de 75% e até 75%) e `comparacao_cetesb_pares.csv` (colunas `hora_utc`, `device_id`, `pm25_no`, `pm25_cetesb` e `umidade`; uma linha por hora pareada, base do gráfico de dispersão). Só entram horas válidas nos dois lados: a hora do nó segue a mesma regra de 45 leituras da avaliação dos modelos, e os valores vazios da CETESB ficam de fora. O viés é a média de nó menos CETESB, e a regressão é a do nó em função da CETESB. Horas pareadas sem umidade no nó entram no total e são contadas em `sem_umidade`, fora das duas faixas, de modo que alta + baixa + sem umidade = total. Com `--start` e `--end` (dias de Brasília) o período fica restrito; sem eles, vale o período do arquivo.
+
+O CSV pode estar em Latin-1 (como sai do QUALAR) ou UTF-8, com `;` como separador e vírgula decimal. A estação e o código vêm do cabeçalho (`Nome da estação`, `Código da estação`). Uma linha de dados com valor não numérico, hora fora de `HH:00`, data inválida, hora repetida ou mais de uma coluna de valores interrompe o script com a linha do problema e código de saída 2 (arquivo ou banco ausente: código 1).
+
+O rótulo `HH:00` da CETESB é tratado como o fim da hora (`01:00` cobre 00:00 a 01:00, e `24:00` fecha o dia), no horário de Brasília. Isso é uma suposição, ainda não confirmada na documentação oficial: os arquivos LEIA-ME do QUALAR estavam inacessíveis na consulta. A favor dela há a documentação do pacote [qualR](https://docs.ropensci.org/qualR/) (rOpenSci), que descreve a média horária do QUALAR como a média até a hora do rótulo e a meia-noite como `24:00`, e o próprio arquivo exportado, que vai de `01:00` a `24:00` sem `00:00`. Se a CETESB indicar outra convenção, use `--hour-label start`; um rótulo errado desloca todo o pareamento em uma hora e piora as métricas, então rodar as duas opções e comparar `r` e RMSE também ajuda a conferir. Os valores da CETESB são inteiros, e a distância entre o nó e a estação não é corrigida: a comparação mede a concordância entre os dois pontos, não o erro absoluto do sensor. Com menos de 24 horas pareadas, ou com uma das séries constante, a correlação e a regressão não são calculadas e o JSON traz um `aviso`.
+
+O arquivo da CETESB precisa cobrir as mesmas datas da coleta do nó: horas fora da interseção simplesmente não pareiam.
 
 ## Próximos passos
 
