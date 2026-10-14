@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "author": "Kenzo Sameshima (@kenzosameshima)",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": -10, "left": -35, "attrs": {} },
+    { "type": "chip-bme280", "id": "bme", "top": 30, "left": 140, "attrs": {} },
+    { "type": "chip-pms5003", "id": "pms", "top": 150, "left": 140, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "bme:SCL", "esp:22", "blue", [] ],
+    [ "bme:SDA", "esp:21", "limegreen", [] ],
+    [ "bme:GND", "esp:GND.2", "black", [] ],
+    [ "bme:VCC", "esp:3V3", "red", [] ],
+    [ "pms:TX", "esp:16", "green", [] ],
+    [ "pms:RX", "esp:17", "green", [] ],
+    [ "pms:VCC", "esp:5V", "red", [] ],
+    [ "pms:GND", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}

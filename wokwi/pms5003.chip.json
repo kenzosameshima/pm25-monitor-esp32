@@ -1,0 +1,34 @@
+{
+  "name": "PMS5003",
+  "author": "Kenzo Sameshima (@kenzosameshima)",
+  "pins": ["VCC", "GND", "TX", "RX", "", "", "", ""],
+  "controls": [
+    {
+      "id": "pm1",
+      "label": "PM1.0 (µg/m³)",
+      "type": "range",
+      "min": 0,
+      "max": 500,
+      "step": 1,
+      "default": 12
+    },
+    {
+      "id": "pm25",
+      "label": "PM2.5 (µg/m³)",
+      "type": "range",
+      "min": 0,
+      "max": 500,
+      "step": 1,
+      "default": 25
+    },
+    {
+      "id": "pm10",
+      "label": "PM10 (µg/m³)",
+      "type": "range",
+      "min": 0,
+      "max": 500,
+      "step": 1,
+      "default": 35
+    }
+  ]
+}
