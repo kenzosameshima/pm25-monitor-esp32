@@ -188,14 +188,24 @@ def list_devices(conn=Depends(get_read_conn)):
 def hourly(device_id: DeviceId,
            start: datetime | None = Query(None, description="início, em ISO 8601 com fuso; padrão: 24 h antes do fim"),
            end: datetime | None = Query(None, description="fim (exclusivo); padrão: agora"),
+           hours: int | None = Query(None, ge=1, le=744,
+                                     description="em vez de start: as últimas N horas completas antes do fim"),
            conn=Depends(get_read_conn)):
     """Médias horárias, uma linha por hora de [start, end), inclusive as horas sem leitura.
 
-    O início é arredondado para baixo até a hora cheia. Intervalo de no máximo 31 dias.
+    O início é arredondado para baixo até a hora cheia. Intervalo de no máximo 31 dias. Com `hours`, o
+    fim padrão é a hora cheia atual, então a hora em andamento (sempre incompleta) fica de fora e a
+    janela vem do relógio do servidor, não do cliente.
     """
     now = _now()
-    end = _aware(end, "end") if end else now
-    start = _aware(start, "start") if start else end - timedelta(hours=24)
+    if hours is not None and start is not None:
+        raise HTTPException(422, "Use start ou hours, não os dois")
+    if hours is not None:
+        end = _aware(end, "end") if end else now.replace(minute=0, second=0)
+        start = end - timedelta(hours=hours)
+    else:
+        end = _aware(end, "end") if end else now
+        start = _aware(start, "start") if start else end - timedelta(hours=24)
     start = start.replace(minute=0, second=0, microsecond=0)
     if not start < end or end - start > MAX_RANGE:
         raise HTTPException(422, "Intervalo inválido: start < end, até 31 dias")

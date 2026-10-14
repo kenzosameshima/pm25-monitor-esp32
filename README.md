@@ -84,7 +84,7 @@ O app de consulta lê os dados pela própria API, sem acesso ao arquivo do banco
 | Rota | Devolve |
 |---|---|
 | `GET /v1/devices` | Para cada nó: local, estado (`online`, `late` a partir de 3 min sem envio, `silent` a partir de 15 min), minutos desde o último recebimento e a leitura mais recente |
-| `GET /v1/devices/{id}/hourly?start=&end=` | Uma linha por hora de `[start, end)`, inclusive as horas sem leitura: `readings`, `valid` (pelo menos 45 leituras de qualidade `ok`) e as médias, nulas quando a hora não vale. Padrão: últimas 24 h; no máximo 31 dias; o início é arredondado para a hora cheia |
+| `GET /v1/devices/{id}/hourly?start=&end=` ou `?hours=` | Uma linha por hora de `[start, end)`, inclusive as horas sem leitura: `readings`, `valid` (pelo menos 45 leituras de qualidade `ok`) e as médias, nulas quando a hora não vale. Padrão: últimas 24 h; no máximo 31 dias; o início é arredondado para a hora cheia. Com `hours=N` (no lugar de `start`), vêm as últimas N horas completas, terminando na hora cheia atual pelo relógio do servidor |
 | `GET /v1/devices/{id}/health?hours=24` | Saúde da coleta (1 a 168 h): completude, maior lacuna, mensagens perdidas, reinícios, duplicatas descartadas e leituras marcadas |
 | `GET /v1/devices/{id}/forecast?hours=48` | Observado e previsões por hora (persistência e cada modelo gravado em `forecasts`), com MAE, RMSE e skill score de cada previsor |
 
