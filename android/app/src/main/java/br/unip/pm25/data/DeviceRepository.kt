@@ -42,6 +42,9 @@ class DeviceRepository(private val api: Pm25Api) {
 
     suspend fun health(deviceId: String, hours: Int): Outcome<Health> = load { api.health(deviceId, hours) }
 
+    suspend fun forecast(deviceId: String, hours: Int): Outcome<ForecastResponse> =
+        load { api.forecast(deviceId, hours) }
+
     private suspend fun <T> load(call: suspend () -> T): Outcome<T> =
         try {
             Outcome.Success(call())

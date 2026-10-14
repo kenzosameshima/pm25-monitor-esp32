@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -50,10 +51,16 @@ import java.time.format.DateTimeFormatter
 private val DATE = DateTimeFormatter.ofPattern("dd/MM").withZone(ZoneId.systemDefault())
 
 @Composable
-fun DetailRoute(viewModel: DetailViewModel, deviceId: String, location: String?, onBack: () -> Unit) {
+fun DetailRoute(
+    viewModel: DetailViewModel,
+    deviceId: String,
+    location: String?,
+    onBack: () -> Unit,
+    onOpenForecast: () -> Unit,
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     DetailScreen(state, deviceId, location, onBack = onBack, onRefresh = viewModel::refresh,
-        onSelectRange = viewModel::select)
+        onSelectRange = viewModel::select, onOpenForecast = onOpenForecast)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -65,6 +72,7 @@ fun DetailScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onSelectRange: (HistoryRange) -> Unit,
+    onOpenForecast: () -> Unit,
 ) {
     Scaffold(topBar = {
         TopAppBar(
@@ -93,6 +101,11 @@ fun DetailScreen(
                     data != null -> {
                         state.error?.let { error -> item { StaleBanner(error, data.series.generatedAt) } }
                         item { HistoryCard(data.series, state.range) }
+                        item {
+                            FilledTonalButton(onClick = onOpenForecast, modifier = Modifier.fillMaxWidth()) {
+                                Text("Previsão: previsto × observado")
+                            }
+                        }
                         item { HealthCard(data.health, state.range) }
                     }
                     state.error != null -> item { ErrorMessage(state.error, onRefresh, Modifier.fillMaxWidth()) }
@@ -129,7 +142,10 @@ private fun HistoryCard(series: HourlySeries, range: HistoryRange) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("PM2,5 por hora (µg/m³)", style = MaterialTheme.typography.titleMedium)
-            HourlyChart(series.hours, timeFormat, description)
+            HourlyChart(series.hours.map { it.hour },
+                listOf(ChartSeries("PM2,5", series.hours.map { if (it.valid) it.pm25 else null },
+                    MaterialTheme.colorScheme.primary)),
+                timeFormat, description)
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 Metric("Média", summary.mean.format())
                 Metric("Máxima", summary.max?.let { "${it.pm25.format()} às ${DAY_CLOCK.format(it.hour)}" } ?: "—")
@@ -195,6 +211,6 @@ private fun DetailScreenPreview() {
     val health = Health(end, "no-01", end.minusSeconds(86_400), end, 0.87, 182, 3, 1, 12, 0)
     Pm25Theme {
         DetailScreen(DetailUiState(data = DetailData(series, health)), "no-01", "EE Exemplo, Vila Mariana",
-            onBack = {}, onRefresh = {}, onSelectRange = {})
+            onBack = {}, onRefresh = {}, onSelectRange = {}, onOpenForecast = {})
     }
 }
