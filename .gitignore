@@ -14,3 +14,12 @@ __pycache__/
 firmware/.pio/
 firmware/host_tests/test_core
 firmware/host_tests/payload_exemplo.json
+# app Android
+android/local.properties
+android/.gradle/
+android/.kotlin/
+android/.idea/
+android/build/
+android/app/build/
+android/captures/
+*.iml
