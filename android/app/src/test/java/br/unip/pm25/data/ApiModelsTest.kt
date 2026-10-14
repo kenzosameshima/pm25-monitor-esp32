@@ -5,9 +5,27 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 import java.time.Instant
 
+/** As fixtures saíram da API de verdade (TestClient do FastAPI sobre um banco sintético). */
 class ApiModelsTest {
-    private fun fixture(name: String): String =
-        requireNotNull(javaClass.classLoader?.getResource(name)) { "fixture $name ausente" }.readText()
+    @Test
+    fun `le a serie horaria com horas validas, incompletas e sem leitura`() {
+        val series = ApiJson.decodeFromString<HourlySeries>(fixture("hourly.json"))
+        assertEquals(45, series.minReadings)
+        assertEquals(6, series.hours.size)
+        assertEquals(listOf(60, 60, 30, 0, 60, 50), series.hours.map { it.readings })
+        assertEquals(listOf(true, true, false, false, true, true), series.hours.map { it.valid })
+        assertNull(series.hours[2].pm25)
+        assertEquals(series.start, series.hours.first().hour)
+    }
+
+    @Test
+    fun `le a saude da coleta`() {
+        val health = ApiJson.decodeFromString<Health>(fixture("health.json"))
+        assertEquals("no-01", health.deviceId)
+        assertEquals(90, health.largestGapMin)
+        assertEquals(0, health.lostMessages)
+        assertEquals(0.6167, health.completeness, 0.001)
+    }
 
     @Test
     fun `le a resposta de devices da API`() {

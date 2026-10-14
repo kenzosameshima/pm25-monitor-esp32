@@ -84,7 +84,7 @@ O app de consulta lê os dados pela própria API, sem acesso ao arquivo do banco
 | Rota | Devolve |
 |---|---|
 | `GET /v1/devices` | Para cada nó: local, estado (`online`, `late` a partir de 3 min sem envio, `silent` a partir de 15 min), minutos desde o último recebimento e a leitura mais recente |
-| `GET /v1/devices/{id}/hourly?start=&end=` | Uma linha por hora de `[start, end)`, inclusive as horas sem leitura: `readings`, `valid` (pelo menos 45 leituras de qualidade `ok`) e as médias, nulas quando a hora não vale. Padrão: últimas 24 h; no máximo 31 dias; o início é arredondado para a hora cheia |
+| `GET /v1/devices/{id}/hourly?start=&end=` ou `?hours=` | Uma linha por hora de `[start, end)`, inclusive as horas sem leitura: `readings`, `valid` (pelo menos 45 leituras de qualidade `ok`) e as médias, nulas quando a hora não vale. Padrão: últimas 24 h; no máximo 31 dias; o início é arredondado para a hora cheia. Com `hours=N` (no lugar de `start`), vêm as últimas N horas completas, terminando na hora cheia atual pelo relógio do servidor |
 | `GET /v1/devices/{id}/health?hours=24` | Saúde da coleta (1 a 168 h): completude, maior lacuna, mensagens perdidas, reinícios, duplicatas descartadas e leituras marcadas |
 | `GET /v1/devices/{id}/forecast?hours=48` | Observado e previsões por hora (persistência e cada modelo gravado em `forecasts`), com MAE, RMSE e skill score de cada previsor |
 
@@ -103,6 +103,8 @@ python -m scripts.set_location no-01 "EE Exemplo, Vila Mariana (fachada, 3 m do 
 ## App Android
 
 O app de consulta fica em `android/`, em Kotlin com Jetpack Compose, e só lê dados pelas rotas acima. A tela inicial mostra um cartão por nó com o PM2,5 da leitura mais recente, a cor da faixa da CETESB, temperatura, umidade, PM10, o estado do nó e a idade da leitura, calculada pelo relógio do servidor (`generated_at`). A tela se atualiza ao abrir, a cada minuto enquanto está visível e ao puxar a lista para baixo. Se uma atualização falhar, o app continua mostrando os últimos dados, com o motivo da falha e a hora da última atualização.
+
+Tocar num nó abre o detalhe, com as últimas 24 horas ou os últimos 7 dias, pedidos com `hours` para a janela vir do relógio do servidor. O gráfico do PM2,5 por hora interrompe a linha nas horas inválidas, começa em zero e marca com uma linha tracejada o limite da faixa Boa (25 µg/m³). Abaixo dele aparecem a média, a máxima com o horário, as horas válidas, as horas acima de 25 µg/m³ e, quando houver, quantas horas tiveram umidade média acima de 75%. A saúde da coleta da mesma janela mostra completude, maior lacuna, reinícios, mensagens perdidas, duplicatas descartadas e leituras marcadas. O histórico e a saúde são pedidos em paralelo, e a tela só troca de dados quando os dois chegam. Ao mudar de janela, os dados da anterior saem da tela, para não serem lidos como os da nova.
 
 Para rodar no emulador, com a API e o simulador no mesmo computador:
 
@@ -123,7 +125,7 @@ $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 .\gradlew.bat testDebugUnitTest lintDebug assembleDebug
 ```
 
-Os testes de unidade cobrem o contrato JSON (com uma resposta real da API), a classificação de erros, a detecção de endereços da rede local, as faixas, a idade da leitura e o estado da tela quando uma atualização falha. O fluxo completo foi verificado no emulador (API 37) contra a API local alimentada pelo simulador, inclusive o pedido de permissão e a queda da API com a lista mantida na tela. Num celular de verdade e pelo túnel, ainda não foi testado.
+Os testes de unidade cobrem o contrato JSON (com respostas reais da API), a classificação de erros, a detecção de endereços da rede local, as faixas, a idade da leitura, o resumo do histórico e o estado das duas telas quando uma atualização falha. O fluxo completo foi verificado no emulador (API 37) contra a API local alimentada pelo simulador e por um banco sintético de 3 dias com lacuna e reinício, inclusive o pedido de permissão, a troca de janela no detalhe e a queda da API com os dados mantidos na tela. Num celular de verdade e pelo túnel, ainda não foi testado.
 
 ## Banco de dados
 

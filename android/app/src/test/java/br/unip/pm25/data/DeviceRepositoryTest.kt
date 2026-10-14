@@ -13,13 +13,9 @@ import java.io.IOException
 import java.time.Instant
 
 class DeviceRepositoryTest {
-    private class FakeApi(private val answer: () -> DeviceList) : Pm25Api {
-        override suspend fun devices(): DeviceList = answer()
-    }
-
     private fun failureOf(error: () -> Nothing): LoadError {
         var result: Outcome<DeviceList>? = null
-        runTest { result = DeviceRepository(FakeApi(error)).devices() }
+        runTest { result = DeviceRepository(FakeApi(onDevices = error)).devices() }
         return (result as Outcome.Failure).error
     }
 
@@ -36,13 +32,14 @@ class DeviceRepositoryTest {
     @Test
     fun `resposta valida vira sucesso`() = runTest {
         val list = DeviceList(Instant.EPOCH, 3, 15, emptyList())
-        val result = DeviceRepository(FakeApi { list }).devices()
+        val result = DeviceRepository(FakeApi(onDevices = { list })).devices()
         assertTrue(result is Outcome.Success && result.value == list)
     }
 
     @Test
     fun `codigos http viram erros explicaveis`() {
         assertEquals(LoadError.Unauthorized, failureOf { throw http(401) })
+        assertEquals(LoadError.NotFound, failureOf { throw http(404) })
         assertEquals(LoadError.ReadDisabled, failureOf { throw http(503) })
         assertEquals(LoadError.Blocked(120), failureOf { throw http(429, mapOf("Retry-After" to "120")) })
         assertEquals(LoadError.Blocked(null), failureOf { throw http(429) })

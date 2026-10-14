@@ -136,6 +136,20 @@ def test_inicio_e_arredondado_para_a_hora_cheia(client):
     assert body["hours"][0]["readings"] == 60
 
 
+def test_ultimas_horas_completas_pelo_relogio_do_servidor(client):
+    insert_hours(client, [60, 50])
+    body = client.get("/v1/devices/no-01/hourly", headers=READ, params={"hours": 2}).json()
+    assert body["end"] == db.iso(HOUR)                       # a hora em andamento fica de fora
+    assert body["start"] == db.iso(HOUR - timedelta(hours=2))
+    assert [h["readings"] for h in body["hours"]] == [60, 50]
+
+
+def test_hours_e_start_juntos_sao_recusados(client):
+    insert_hours(client, [60])
+    params = {"hours": 2, "start": db.iso(HOUR - timedelta(hours=2))}
+    assert client.get("/v1/devices/no-01/hourly", headers=READ, params=params).status_code == 422
+
+
 @pytest.mark.parametrize("params", [
     {"start": db.iso(HOUR - timedelta(days=32)), "end": db.iso(HOUR)},        # acima de 31 dias
     {"start": db.iso(HOUR), "end": db.iso(HOUR - timedelta(hours=1))},        # fim antes do início

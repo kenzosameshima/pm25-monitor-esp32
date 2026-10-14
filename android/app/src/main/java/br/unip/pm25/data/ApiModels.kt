@@ -48,6 +48,44 @@ data class DeviceState(
 )
 
 @Serializable
+data class HourlySeries(
+    @SerialName("generated_at") @Serializable(InstantSerializer::class) val generatedAt: Instant,
+    @SerialName("device_id") val deviceId: String,
+    @Serializable(InstantSerializer::class) val start: Instant,
+    @Serializable(InstantSerializer::class) val end: Instant,
+    /** Leituras de um minuto que uma hora precisa ter para valer (45, ou 75% da hora). */
+    @SerialName("min_readings") val minReadings: Int,
+    val hours: List<HourlyPoint>,
+)
+
+/** Uma hora, mesmo sem leitura. Quando `valid` é falso, as médias vêm nulas. */
+@Serializable
+data class HourlyPoint(
+    @Serializable(InstantSerializer::class) val hour: Instant,
+    val readings: Int,
+    val valid: Boolean,
+    val pm25: Double? = null,
+    val pm10: Double? = null,
+    val pm1: Double? = null,
+    val temperature: Double? = null,
+    val humidity: Double? = null,
+)
+
+@Serializable
+data class Health(
+    @SerialName("generated_at") @Serializable(InstantSerializer::class) val generatedAt: Instant,
+    @SerialName("device_id") val deviceId: String,
+    @Serializable(InstantSerializer::class) val start: Instant,
+    @Serializable(InstantSerializer::class) val end: Instant,
+    val completeness: Double,
+    @SerialName("largest_gap_min") val largestGapMin: Int,
+    @SerialName("lost_messages") val lostMessages: Int,
+    val restarts: Int,
+    @SerialName("duplicates_discarded") val duplicatesDiscarded: Int,
+    @SerialName("flagged_readings") val flaggedReadings: Int,
+)
+
+@Serializable
 data class LatestReading(
     /** Início da janela de um minuto medida pelo nó. */
     @Serializable(InstantSerializer::class) val ts: Instant,

@@ -14,13 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -49,23 +44,22 @@ import br.unip.pm25.data.LoadError
 import br.unip.pm25.domain.AirQuality
 import br.unip.pm25.domain.formatAge
 import br.unip.pm25.domain.readingAge
+import br.unip.pm25.ui.CLOCK
+import br.unip.pm25.ui.ErrorPanel
+import br.unip.pm25.ui.Metric
+import br.unip.pm25.ui.QualityChip
+import br.unip.pm25.ui.StaleBanner
+import br.unip.pm25.ui.format
 import br.unip.pm25.ui.theme.Pm25Theme
-import br.unip.pm25.ui.theme.color
-import br.unip.pm25.ui.theme.onColor
 import kotlinx.coroutines.delay
 import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 /** Os nós fecham uma leitura por minuto; consultar mais vezes que isso não traz dado novo. */
 private const val REFRESH_INTERVAL_MS = 60_000L
-private val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
-private val CLOCK = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault())
 
 /** Tela inicial ligada ao ViewModel: atualiza ao abrir e a cada minuto enquanto estiver visível. */
 @Composable
-fun HomeRoute(viewModel: HomeViewModel) {
+fun HomeRoute(viewModel: HomeViewModel, onOpenDevice: (DeviceState) -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
@@ -76,12 +70,17 @@ fun HomeRoute(viewModel: HomeViewModel) {
             }
         }
     }
-    HomeScreen(state, onRefresh = viewModel::refresh)
+    HomeScreen(state, onRefresh = viewModel::refresh, onOpenDevice = onOpenDevice)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(state: HomeUiState, onRefresh: () -> Unit, modifier: Modifier = Modifier) {
+fun HomeScreen(
+    state: HomeUiState,
+    onRefresh: () -> Unit,
+    onOpenDevice: (DeviceState) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Scaffold(modifier = modifier, topBar = { TopAppBar(title = { Text("Qualidade do ar") }) }) { padding ->
         PullToRefreshBox(
             isRefreshing = state.loading && state.data != null,
@@ -90,7 +89,7 @@ fun HomeScreen(state: HomeUiState, onRefresh: () -> Unit, modifier: Modifier = M
         ) {
             val data = state.data
             when {
-                data != null -> DeviceListContent(data, state.error)
+                data != null -> DeviceListContent(data, state.error, onOpenDevice)
                 state.error != null -> ErrorPanel(state.error, onRefresh)
                 else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             }
@@ -99,7 +98,7 @@ fun HomeScreen(state: HomeUiState, onRefresh: () -> Unit, modifier: Modifier = M
 }
 
 @Composable
-private fun DeviceListContent(data: DeviceList, error: LoadError?) {
+private fun DeviceListContent(data: DeviceList, error: LoadError?, onOpenDevice: (DeviceState) -> Unit) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -116,11 +115,13 @@ private fun DeviceListContent(data: DeviceList, error: LoadError?) {
         if (data.devices.isEmpty()) {
             item { Text("Nenhum sensor enviou leituras ainda.") }
         }
-        items(data.devices, key = { it.deviceId }) { DeviceCard(it, data.generatedAt) }
+        items(data.devices, key = { it.deviceId }) { device ->
+            DeviceCard(device, data.generatedAt, onClick = { onOpenDevice(device) })
+        }
         item {
             Text(
                 "As cores seguem as faixas da CETESB para o PM2,5, definidas para a média de 24 horas; " +
-                    "aqui servem de referência para a leitura de um minuto.",
+                    "aqui servem de referência para a leitura de um minuto. Toque num sensor para ver o histórico.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -129,8 +130,8 @@ private fun DeviceListContent(data: DeviceList, error: LoadError?) {
 }
 
 @Composable
-private fun DeviceCard(device: DeviceState, serverNow: Instant) {
-    Card(Modifier.fillMaxWidth()) {
+private fun DeviceCard(device: DeviceState, serverNow: Instant, onClick: () -> Unit) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 StatusDot(device.status)
@@ -175,26 +176,6 @@ private fun LatestReadingContent(latest: LatestReading, serverNow: Instant) {
 }
 
 @Composable
-private fun Metric(label: String, value: String) {
-    Column {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
-@Composable
-private fun QualityChip(quality: AirQuality) {
-    Text(
-        quality.label,
-        color = quality.onColor(),
-        style = MaterialTheme.typography.labelLarge,
-        modifier = Modifier
-            .background(quality.color(), RoundedCornerShape(50))
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-    )
-}
-
-@Composable
 private fun StatusDot(status: DeviceStatus) {
     val color = when (status) {
         DeviceStatus.ONLINE -> Color(0xFF2E7D32)
@@ -204,48 +185,11 @@ private fun StatusDot(status: DeviceStatus) {
     Box(Modifier.size(10.dp).background(color, CircleShape))
 }
 
-@Composable
-private fun StaleBanner(error: LoadError, lastUpdate: Instant) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-        Column(Modifier.padding(12.dp)) {
-            Text(error.message(), color = MaterialTheme.colorScheme.onErrorContainer)
-            Text("Mostrando os dados de ${CLOCK.format(lastUpdate)}.", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer)
-        }
-    }
-}
-
-@Composable
-private fun ErrorPanel(error: LoadError, onRetry: () -> Unit) {
-    // Rolável para o gesto de puxar para atualizar também funcionar aqui.
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(error.message(), style = MaterialTheme.typography.bodyLarge)
-        Button(onClick = onRetry) { Text("Tentar de novo") }
-    }
-}
-
 private fun DeviceStatus.label() = when (this) {
     DeviceStatus.ONLINE -> "Em operação"
     DeviceStatus.LATE -> "Atrasado"
     DeviceStatus.SILENT -> "Sem dados"
 }
-
-fun LoadError.message(): String = when (this) {
-    LoadError.Network -> "Sem conexão com o servidor. Confira a internet e se a API está no ar."
-    LoadError.Unauthorized -> "O servidor recusou o token de leitura. Confira pm25.readToken no local.properties."
-    LoadError.ReadDisabled -> "A consulta está desligada no servidor (PM25_READ_TOKEN vazio)."
-    is LoadError.Blocked -> "Acesso bloqueado por tentativas inválidas. Tente de novo em " +
-        (retryAfterSeconds?.let { "$it s" } ?: "alguns minutos") + "."
-    is LoadError.Server -> "O servidor respondeu com erro $code."
-    LoadError.BadResponse -> "A resposta do servidor veio fora do formato esperado."
-}
-
-private fun Double?.format(decimals: Int = 1): String =
-    if (this == null) "—" else String.format(PT_BR, "%.${decimals}f", this)
 
 @Preview(showBackground = true)
 @Composable
@@ -259,5 +203,5 @@ private fun HomeScreenPreview() {
             DeviceState("no-02", null, DeviceStatus.SILENT, 42.0, now.minusSeconds(2520), reading.copy(pm25 = 12.0)),
         ),
     )
-    Pm25Theme { HomeScreen(HomeUiState(data = data), onRefresh = {}) }
+    Pm25Theme { HomeScreen(HomeUiState(data = data), onRefresh = {}, onOpenDevice = {}) }
 }

@@ -17,6 +17,9 @@ sealed interface LoadError {
     /** 503: o servidor está sem PM25_READ_TOKEN configurado. */
     data object ReadDisabled : LoadError
 
+    /** 404: o servidor não tem leituras desse nó. */
+    data object NotFound : LoadError
+
     /** 429: IP bloqueado por falhas de autenticação seguidas. */
     data class Blocked(val retryAfterSeconds: Int?) : LoadError
 
@@ -35,6 +38,10 @@ sealed interface Outcome<out T> {
 class DeviceRepository(private val api: Pm25Api) {
     suspend fun devices(): Outcome<DeviceList> = load { api.devices() }
 
+    suspend fun hourly(deviceId: String, hours: Int): Outcome<HourlySeries> = load { api.hourly(deviceId, hours) }
+
+    suspend fun health(deviceId: String, hours: Int): Outcome<Health> = load { api.health(deviceId, hours) }
+
     private suspend fun <T> load(call: suspend () -> T): Outcome<T> =
         try {
             Outcome.Success(call())
@@ -44,6 +51,7 @@ class DeviceRepository(private val api: Pm25Api) {
             Outcome.Failure(
                 when (e.code()) {
                     401 -> LoadError.Unauthorized
+                    404 -> LoadError.NotFound
                     503 -> LoadError.ReadDisabled
                     429 -> LoadError.Blocked(e.response()?.headers()?.get("Retry-After")?.toIntOrNull())
                     else -> LoadError.Server(e.code())
