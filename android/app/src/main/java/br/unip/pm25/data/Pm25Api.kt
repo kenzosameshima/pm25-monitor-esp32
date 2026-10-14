@@ -5,11 +5,20 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.GET
+import retrofit2.http.Path
+import retrofit2.http.Query
 import java.util.concurrent.TimeUnit
 
 interface Pm25Api {
     @GET("v1/devices")
     suspend fun devices(): DeviceList
+
+    /** As últimas `hours` horas completas, pelo relógio do servidor. */
+    @GET("v1/devices/{id}/hourly")
+    suspend fun hourly(@Path("id") deviceId: String, @Query("hours") hours: Int): HourlySeries
+
+    @GET("v1/devices/{id}/health")
+    suspend fun health(@Path("id") deviceId: String, @Query("hours") hours: Int): Health
 
     companion object {
         /** Cliente com o token de leitura em todas as requisições. `baseUrl` termina em "/". */
