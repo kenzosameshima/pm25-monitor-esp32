@@ -110,6 +110,14 @@ def test_lista_vazia_sem_leituras(client):
     assert client.get("/v1/devices", headers=READ).json()["devices"] == []
 
 
+def test_dispositivo_de_teste_fica_fora_do_app(client):
+    insert_hours(client, [60])
+    insert_hours(client, [60], device="teste-https")
+    assert [d["device_id"] for d in client.get("/v1/devices", headers=READ).json()["devices"]] == ["no-01"]
+    for path in ("hourly", "health", "forecast"):
+        assert client.get(f"/v1/devices/teste-https/{path}", headers=READ).status_code == 404
+
+
 def test_local_de_no_desconhecido_nao_e_cadastrado(client):
     assert set_location.main(["no-09", "Lugar", "--db", str(client.db_path)]) == 2
 

@@ -1,5 +1,7 @@
 """Alerta operacional: avisa no Telegram quando um sensor para de enviar dados e quando volta.
 
+Dispositivos de teste (como o teste-https) não geram alerta.
+
 Rode a cada 5 minutos (cron). Sem PM25_TELEGRAM_TOKEN configurado, só imprime as mensagens.
 O estado dos alertas fica num arquivo JSON, para o banco continuar com um único processo escritor.
 
@@ -14,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app import db
+from app.analytics import is_test_device
 from app.config import get_settings
 
 BRT = timezone(timedelta(hours=-3), "BRT")
@@ -39,17 +42,18 @@ def main() -> int:
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     now = datetime.now(timezone.utc)
     limit = timedelta(minutes=s.alert_silence_min)
+    devices = [d for d in s.device_ids if not is_test_device(d)]
 
     if Path(s.db_path).exists():
         conn = db.connect(s.db_path, readonly=True)
         try:
-            last = db.last_seen(conn, s.device_ids)
+            last = db.last_seen(conn, devices)
         finally:
             conn.close()
     else:
         last = {}
 
-    for device in s.device_ids:
+    for device in devices:
         seen = last.get(device)
         silent = seen is None or now - seen > limit
         alerting = state.get(device, {}).get("alerting", False)

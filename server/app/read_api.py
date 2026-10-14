@@ -143,7 +143,7 @@ def _now() -> datetime:
 
 
 def _require_device(conn, device_id: str) -> None:
-    if device_id not in db.last_seen(conn, [device_id]):
+    if analytics.is_test_device(device_id) or device_id not in db.last_seen(conn, [device_id]):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Nó sem leituras")
 
 
@@ -170,10 +170,11 @@ def _aware(value: datetime, name: str) -> datetime:
 
 @router.get("", response_model=DeviceList)
 def list_devices(conn=Depends(get_read_conn)):
-    """Estado de cada nó e a leitura mais recente."""
+    """Estado de cada nó e a leitura mais recente; dispositivos de teste ficam de fora."""
     now = _now()
+    status = analytics.device_status(conn, now)
     devices = []
-    for r in _records(analytics.device_status(conn, now)):
+    for r in _records(status[~status["device_id"].map(analytics.is_test_device).astype(bool)]):
         latest = None
         if r["ts_sensor"] is not None:
             latest = {"ts": r["ts_sensor"], **{k: r[k] for k in (*analytics.VARIABLES, "rssi", "quality")}}
