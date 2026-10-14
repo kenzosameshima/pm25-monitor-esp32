@@ -12,16 +12,14 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import altair as alt  # noqa: E402
-import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from app import db  # noqa: E402
+from app import analytics, db  # noqa: E402
+from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
 
 LOCAL_TZ = "America/Sao_Paulo"
-MIN_MINUTES_PER_HOUR = 45  # 75% dos minutos: critério para uma média horária válida
-HIGH_HUMIDITY = 75.0       # acima disso, sensores ópticos tendem a superestimar o PM2,5
 VARIABLES = {
     "pm25": "PM2,5 (µg/m³)",
     "pm10": "PM10 (µg/m³)",
@@ -40,63 +38,52 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
 
-def _read(fn, *args):
+def _read(fn, *args, missing, **kwargs):
+    """Roda fn(conn, ...) com o banco em modo somente leitura; sem o arquivo do banco, devolve `missing`."""
     path = get_settings().db_path
     if not Path(path).exists():
-        return []
+        return missing
     conn = db.connect(path, readonly=True)
     try:
-        return fn(conn, *args)
+        return fn(conn, *args, **kwargs)
     finally:
         conn.close()
 
 
-def _frame(rows, time_cols) -> pd.DataFrame:
-    df = pd.DataFrame([dict(r) for r in rows])
-    for col in time_cols:
-        if col in df:
-            df[col] = pd.to_datetime(df[col], utc=True)
-    return df
+@st.cache_data(ttl=30)
+def load_status(now: datetime) -> pd.DataFrame:
+    return _read(analytics.device_status, now, missing=pd.DataFrame(columns=analytics.STATUS_COLUMNS))
 
 
 @st.cache_data(ttl=30)
-def load_overview() -> pd.DataFrame:
-    return _frame(_read(db.device_overview), ["first_ts", "last_ts", "last_received"])
-
-
-@st.cache_data(ttl=30)
-def load_latest() -> pd.DataFrame:
-    return _frame(_read(db.latest_measurements), ["ts_sensor", "ts_received"])
+def load_health(start: datetime, now: datetime) -> pd.DataFrame:
+    return _read(analytics.collection_health, start, now, missing=pd.DataFrame(columns=analytics.HEALTH_COLUMNS))
 
 
 @st.cache_data(ttl=30)
 def load_measurements(start: datetime, end: datetime, devices: tuple) -> pd.DataFrame:
-    return _frame(_read(db.fetch_measurements, start, end, list(devices)), ["ts_sensor", "ts_received"])
+    df = pd.DataFrame([dict(r) for r in _read(db.fetch_measurements, start, end, list(devices), missing=[])])
+    if not df.empty:
+        df["ts_sensor"] = pd.to_datetime(df["ts_sensor"], utc=True)
+    return df
 
 
 @st.cache_data(ttl=30)
-def load_batches(since: datetime) -> pd.DataFrame:
-    return _frame(_read(db.fetch_ingest_batches, since), ["received_at"])
+def load_hourly(start: datetime, end: datetime, devices: tuple, only_ok: bool) -> pd.DataFrame:
+    """Só as horas válidas, com `n` renomeado para minutos (como sai no CSV)."""
+    hourly = _read(analytics.hourly_means, start, end, list(devices), only_ok=only_ok,
+                   missing=pd.DataFrame(columns=analytics.HOURLY_COLUMNS))
+    return hourly.dropna(subset=["pm25"]).rename(columns={"n": "minutos"})
 
 
 @st.cache_data(ttl=60)
-def load_forecasts(start: datetime, end: datetime, devices: tuple) -> pd.DataFrame:
-    return _frame(_read(db.fetch_forecasts, start, end, list(devices)), ["generated_at", "target_hour"])
+def load_forecast(device: str, now: datetime) -> analytics.ForecastComparison:
+    return _read(analytics.forecast_comparison, device, now, missing=None)
 
 
 def local_naive(series: pd.Series) -> pd.Series:
     """Horário local sem fuso, para o gráfico mostrar a hora de Brasília em qualquer navegador."""
     return series.dt.tz_convert(LOCAL_TZ).dt.tz_localize(None)
-
-
-def hourly(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    """Médias horárias por sensor, só para horas com pelo menos 45 minutos de leitura."""
-    if df.empty:
-        return pd.DataFrame(columns=["device_id", "hora", "minutos", *cols])
-    grouped = df.assign(hora=df["ts_sensor"].dt.floor("h")).groupby(["device_id", "hora"])
-    out = grouped[cols].mean()
-    out["minutos"] = grouped.size()
-    return out[out["minutos"] >= MIN_MINUTES_PER_HOUR].reset_index()
 
 
 # ---------------------------------------------------------------- formatação
@@ -119,15 +106,19 @@ def ago(minutes: float | None) -> str:
     return f"há {minutes / 1440:.0f} dias"
 
 
-def status_of(last_received, now: datetime) -> tuple[str, float | None]:
-    if last_received is None or pd.isna(last_received):
-        return "🔴 sem dados", None
-    minutes = (now - last_received).total_seconds() / 60
-    if minutes < 3:
-        return "🟢 em operação", minutes
-    if minutes < 15:
-        return "🟡 atrasado", minutes
-    return "🔴 sem dados", minutes
+STATUS_LABELS = {"em_operacao": "🟢 em operação", "atrasado": "🟡 atrasado", "sem_dados": "🔴 sem dados"}
+HEALTH_LABELS = {
+    "device_id": "Sensor",
+    "completude": "Completude",
+    "maior_lacuna_min": "Maior lacuna (min)",
+    "mensagens_perdidas": "Mensagens perdidas",
+    "reinicios": "Reinícios",
+    "duplicatas_descartadas": "Duplicatas descartadas",
+    "leituras_marcadas": "Leituras marcadas",
+}
+SERIES_LABELS = {OBSERVED: "Observado", PERSISTENCE: "Persistência"}
+METRIC_LABELS = {"previsor": "Previsor", "horas": "Horas", "mae": "MAE (µg/m³)", "rmse": "RMSE (µg/m³)",
+                 "skill": "Skill score"}
 
 
 def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta) -> pd.DataFrame:
@@ -158,68 +149,31 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
     return chart.properties(height=260)
 
 
-# ---------------------------------------------------------------- saúde da coleta
-
-def collection_health(df: pd.DataFrame, overview: pd.DataFrame, batches: pd.DataFrame,
-                      window_start: datetime, now: datetime) -> pd.DataFrame:
-    rows = []
-    for _, dev in overview.iterrows():
-        d = df[df["device_id"] == dev["device_id"]] if not df.empty else df
-        start = max(window_start, dev["first_ts"].to_pydatetime())
-        expected = max(1, int((now - start).total_seconds() // 60))
-        minutes = d["ts_sensor"].drop_duplicates().sort_values() if not d.empty else pd.Series(dtype="object")
-        if len(minutes):
-            gaps = (minutes.diff().dt.total_seconds() / 60 - 1).fillna(0)
-            trailing = (now - minutes.iloc[-1]).total_seconds() / 60 - 1
-            largest_gap = max(gaps.max(), trailing, 0)
-            per_boot = d.groupby("boot_id")["seq"].agg(["min", "max", "nunique"])
-            lost = int((per_boot["max"] - per_boot["min"] + 1 - per_boot["nunique"]).sum())
-            restarts = max(0, d["boot_id"].nunique() - 1)
-        else:
-            largest_gap, lost, restarts = (now - start).total_seconds() / 60, 0, 0
-        dup = 0
-        if not batches.empty:
-            dup = int(batches.loc[batches["device_id"] == dev["device_id"], "n_duplicates"].sum())
-        rows.append({
-            "Sensor": dev["device_id"],
-            "Completude": min(1.0, len(minutes) / expected),
-            "Maior lacuna (min)": int(round(largest_gap)),
-            "Mensagens perdidas": lost,
-            "Reinícios": restarts,
-            "Duplicatas descartadas": dup,
-            "Leituras marcadas": int((d["quality"] != "ok").sum()) if not d.empty else 0,
-        })
-    return pd.DataFrame(rows)
-
-
 # ---------------------------------------------------------------- abas
 
 @st.fragment(run_every="60s")
 def status_tab() -> None:
     now = now_utc()
-    overview, latest = load_overview(), load_latest()
-    if overview.empty:
+    status = load_status(now)
+    if status.empty:
         st.info("Nenhuma leitura recebida ainda. Ligue um nó sensor ou rode o simulador (veja o README).")
         return
 
-    cols = st.columns(len(overview))
-    for col, (_, dev) in zip(cols, overview.iterrows()):
-        last = latest[latest["device_id"] == dev["device_id"]].iloc[0]
-        label, minutes = status_of(dev["last_received"], now)
-        when = last["ts_sensor"].tz_convert(LOCAL_TZ).strftime("%d/%m %H:%M")
+    cols = st.columns(len(status))
+    for col, (_, dev) in zip(cols, status.iterrows()):
+        minutes = None if pd.isna(dev["minutes_since"]) else dev["minutes_since"]
+        when = dev["ts_sensor"].tz_convert(LOCAL_TZ).strftime("%d/%m %H:%M")
         with col:
             st.subheader(dev["device_id"])
-            st.caption(f"{label} · último envio {ago(minutes)} · leitura de {when}")
+            st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")
             a, b = st.columns(2)
-            a.metric("PM2,5", fmt(last["pm25"], " µg/m³"))
-            b.metric("Umidade", fmt(last["humidity"], "%"))
-            a.metric("Temperatura", fmt(last["temperature"], " °C"))
-            b.metric("Sinal Wi-Fi", fmt(last["rssi"], " dBm", 0))
+            a.metric("PM2,5", fmt(dev["pm25"], " µg/m³"))
+            b.metric("Umidade", fmt(dev["humidity"], "%"))
+            a.metric("Temperatura", fmt(dev["temperature"], " °C"))
+            b.metric("Sinal Wi-Fi", fmt(dev["rssi"], " dBm", 0))
 
     window_start = now - timedelta(hours=24)
-    devices = tuple(overview["device_id"])
-    df = load_measurements(window_start, now + timedelta(minutes=1), devices)
-    health = collection_health(df, overview, load_batches(window_start), window_start, now)
+    health = load_health(window_start, now).rename(columns=HEALTH_LABELS)
     st.markdown("#### Saúde da coleta nas últimas 24 horas")
     st.dataframe(
         health, hide_index=True,
@@ -228,7 +182,7 @@ def status_tab() -> None:
     st.caption("Mensagens perdidas são lacunas de sequência dentro de uma mesma inicialização do nó; "
                "minutos sem leitura e sem lacuna de sequência indicam falha do sensor, não da rede.")
 
-    recent = df[df["ts_sensor"] >= now - timedelta(hours=6)] if not df.empty else df
+    recent = load_measurements(now - timedelta(hours=6), now + timedelta(minutes=1), tuple(status["device_id"]))
     if not recent.empty:
         st.markdown("#### PM2,5 nas últimas 6 horas")
         st.altair_chart(line_chart(recent.assign(hora=local_naive(recent["ts_sensor"])), "hora", "pm25",
@@ -262,9 +216,9 @@ def series_tab(devices_all: list[str]) -> None:
         return
 
     if resolution == "Média horária":
-        data = hourly(df, list(VARIABLES))
+        data = load_hourly(start, end, tuple(devices), only_ok)
         data["hora_local"] = local_naive(data["hora"])
-        st.caption(f"Médias de horas com pelo menos {MIN_MINUTES_PER_HOUR} minutos de leitura (75%).")
+        st.caption(f"Médias de horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura (75%).")
         max_gap = pd.Timedelta(hours=1)
     else:
         data = df.assign(hora_local=local_naive(df["ts_sensor"]))
@@ -285,50 +239,13 @@ def series_tab(devices_all: list[str]) -> None:
                        file_name=f"pm25_{period[0]}_{period[1]}.csv", mime="text/csv")
 
 
-def forecast_metrics(table: pd.DataFrame) -> pd.DataFrame:
-    """MAE, RMSE e skill score (em relação à persistência) nas horas com observação e previsão."""
-    rows = []
-    predictors = [c for c in table.columns if c != "Observado"]
-    rmse_persist = None
-    for name in predictors:
-        both = table[["Observado", name]].dropna()
-        if both.empty:
-            continue
-        err = both[name] - both["Observado"]
-        rmse = float(np.sqrt((err ** 2).mean()))
-        if name == "Persistência":
-            rmse_persist = rmse
-        rows.append({"Previsor": name, "Horas": len(both), "MAE (µg/m³)": float(err.abs().mean()),
-                     "RMSE (µg/m³)": rmse})
-    out = pd.DataFrame(rows)
-    if not out.empty and rmse_persist:
-        out["Skill score"] = 1 - out["RMSE (µg/m³)"] / rmse_persist
-    return out
-
-
 def forecast_tab(devices_all: list[str]) -> None:
     device = st.selectbox("Sensor", devices_all, key="forecast_device")
-    now = now_utc()
-    current_hour = now.replace(minute=0)
-    start = current_hour - timedelta(hours=48)
-    end = current_hour + timedelta(hours=2)
+    comparison = load_forecast(device, now_utc())
+    table = comparison.series.rename(columns=SERIES_LABELS)
+    has_models = len(table.columns) > len(SERIES_LABELS)
 
-    df = load_measurements(start - timedelta(hours=1), end, (device,))
-    if not df.empty:
-        df = df[df["quality"] == "ok"]
-    hours = pd.date_range(start - timedelta(hours=1), current_hour + timedelta(hours=1), freq="h", tz="UTC")
-    observed = hourly(df, ["pm25"]).set_index("hora")["pm25"].reindex(hours)
-
-    table = pd.DataFrame({"Observado": observed, "Persistência": observed.shift(1)})
-    forecasts = load_forecasts(start, end, (device,))
-    if not forecasts.empty:
-        forecasts["previsor"] = forecasts["model_name"] + " " + forecasts["model_version"]
-        latest = forecasts.sort_values("generated_at").groupby(["target_hour", "previsor"]).last()
-        pivot = latest["predicted_pm25"].unstack("previsor").reindex(hours)
-        table = table.join(pivot)
-    table = table.loc[start:]
-
-    long = table.reset_index(names="hora").melt("hora", var_name="serie", value_name="pm25").dropna()
+    long =table.reset_index(names="hora").melt("hora", var_name="serie", value_name="pm25").dropna()
     if long.empty:
         st.info("Ainda não há horas completas para comparar.")
         return
@@ -345,7 +262,7 @@ def forecast_tab(devices_all: list[str]) -> None:
     ).properties(height=320)
     st.altair_chart(chart, width="stretch")
 
-    metrics = forecast_metrics(table)
+    metrics = comparison.metrics.replace({"previsor": SERIES_LABELS}).rename(columns=METRIC_LABELS)
     if not metrics.empty:
         st.dataframe(metrics, hide_index=True, column_config={
             "MAE (µg/m³)": st.column_config.NumberColumn(format="%.2f"),
@@ -354,7 +271,7 @@ def forecast_tab(devices_all: list[str]) -> None:
         })
     st.caption("Persistência prevê que a próxima hora repete a média da hora anterior; é o baseline que "
                "qualquer modelo precisa superar (skill score acima de zero).")
-    if forecasts.empty:
+    if not has_models:
         st.info("Nenhuma previsão de modelo registrada ainda. Quando o job horário estiver no ar, as previsões "
                 "gravadas na tabela forecasts aparecem aqui ao lado da persistência.")
 
@@ -362,7 +279,7 @@ def forecast_tab(devices_all: list[str]) -> None:
 # ---------------------------------------------------------------- página
 
 st.title("Monitoramento de PM2,5")
-overview = load_overview()
+overview = load_status(now_utc())
 if overview.empty:
     st.warning(f"Nenhum dado em {get_settings().db_path}. Inicie a API e ligue um nó sensor ou o simulador.")
     st.stop()

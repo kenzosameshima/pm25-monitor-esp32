@@ -45,12 +45,13 @@ import numpy as np
 import pandas as pd
 
 from app import db
+from app.analytics import HIGH_HUMIDITY
 from app.config import get_settings
 from scripts.period_metrics import BRT, TEST_DEVICE_PREFIX, period_bounds
 from scripts.train_forecast import MIN_SAMPLES, hourly_series
 
-HUMIDITY_LIMIT = 75.0  # % de umidade relativa; acima disso o PMS5003 tende a superestimar
-MIN_PAIRS = 24         # abaixo disso a correlação e a regressão não são reportadas como confiáveis
+HUMIDITY_LIMIT = HIGH_HUMIDITY  # % de umidade relativa; acima disso o PMS5003 tende a superestimar
+MIN_PAIRS = 24                  # abaixo disso a correlação e a regressão não são reportadas como confiáveis
 PAIR_COLUMNS = ["hora_utc", "device_id", "pm25_no", "pm25_cetesb", "umidade"]
 _DATE = re.compile(r"\d{2}/\d{2}/\d{4}$")
 # Rótulos do cabeçalho do QUALAR (sem acento e em minúsculas) e a chave usada no relatório.
