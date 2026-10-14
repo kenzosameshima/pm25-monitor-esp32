@@ -21,6 +21,7 @@ server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
 android/      app de consulta em Kotlin (Jetpack Compose), alimentado pelas rotas de leitura da API
 docs/         planejamento do sistema e estado atual de cada parte (planejamento-e-estado.md)
 wokwi/        circuito (diagram.json), chips simulados do PMS5003 e do BME280, config.h e bibliotecas para rodar o firmware no Wokwi
+.githooks/    hook commit-msg e a checagem de commits usada também no CI (ver "Padrão de commits")
 ```
 
 ## Início rápido, sem hardware
@@ -377,6 +378,16 @@ O CSV pode estar em Latin-1 (como sai do QUALAR) ou UTF-8, com `;` como separado
 O rótulo `HH:00` da CETESB é tratado como o fim da hora (`01:00` cobre 00:00 a 01:00, e `24:00` fecha o dia), no horário de Brasília. Isso é uma suposição, ainda não confirmada na documentação oficial: os arquivos LEIA-ME do QUALAR estavam inacessíveis na consulta. A favor dela há a documentação do pacote [qualR](https://docs.ropensci.org/qualR/) (rOpenSci), que descreve a média horária do QUALAR como a média até a hora do rótulo e a meia-noite como `24:00`, e o próprio arquivo exportado, que vai de `01:00` a `24:00` sem `00:00`. Se a CETESB indicar outra convenção, use `--hour-label start`; um rótulo errado desloca todo o pareamento em uma hora e piora as métricas, então rodar as duas opções e comparar `r` e RMSE também ajuda a conferir. Os valores da CETESB são inteiros, e a distância entre o nó e a estação não é corrigida: a comparação mede a concordância entre os dois pontos, não o erro absoluto do sensor. Com menos de 24 horas pareadas, ou com uma das séries constante, a correlação e a regressão não são calculadas e o JSON traz um `aviso`.
 
 O arquivo da CETESB precisa cobrir as mesmas datas da coleta do nó: horas fora da interseção simplesmente não pareiam.
+
+## Padrão de commits
+
+As mensagens seguem Conventional Commits (`tipo(escopo): descrição`, no imperativo, até 72 caracteres no cabeçalho). O hook `commit-msg` em `.githooks/` recusa mensagens fora do formato e as que têm termos proibidos, como rodapés de coautoria; a lista está em `.githooks/check-commit.sh`. Ative uma vez em cada clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+O hook pode ser pulado localmente, então o workflow `commit-standards` repete a checagem em cada PR e em cada envio para a `main`, conferindo também o autor e o committer de cada commit e o título do PR, que vira a mensagem num squash merge.
 
 ## Próximos passos
 

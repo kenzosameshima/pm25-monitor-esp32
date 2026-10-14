@@ -1,0 +1,2 @@
+# Hooks rodam com sh também no Windows: CRLF quebraria o script
+.githooks/* text eol=lf

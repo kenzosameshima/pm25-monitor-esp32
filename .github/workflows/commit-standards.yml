@@ -1,0 +1,45 @@
+# Mesma checagem do hook commit-msg, que pode ser pulado localmente, mais o autor e o committer de
+# cada commit e o título do PR (que vira a mensagem num squash merge).
+name: commit-standards
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Commits do PR
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: sh .githooks/check-commit.sh range "$BASE..$HEAD"
+
+      - name: Título do PR
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: sh .githooks/check-commit.sh title "$TITLE"
+
+      - name: Commits enviados para a main
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            sh .githooks/check-commit.sh range "$AFTER^!"  # só o próprio commit
+          else
+            sh .githooks/check-commit.sh range "$BEFORE..$AFTER"
+          fi
