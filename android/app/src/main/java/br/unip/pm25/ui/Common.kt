@@ -32,6 +32,13 @@ val PT_BR: Locale = Locale.forLanguageTag("pt-BR")
 val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault())
 val DAY_CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM HH:mm").withZone(ZoneId.systemDefault())
 
+/** "14:30" se `moment` é de hoje (no fuso do celular); "13/10 14:30" se não é. */
+fun formatMoment(moment: Instant, now: Instant = Instant.now()): String {
+    val zone = ZoneId.systemDefault()
+    val sameDay = moment.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()
+    return (if (sameDay) CLOCK else DAY_CLOCK).format(moment)
+}
+
 fun Double?.format(decimals: Int = 1): String =
     if (this == null) "—" else String.format(PT_BR, "%.${decimals}f", this)
 
@@ -52,7 +59,7 @@ fun StaleBanner(error: LoadError, lastUpdate: Instant) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
         Column(Modifier.padding(12.dp)) {
             Text(error.message(), color = MaterialTheme.colorScheme.onErrorContainer)
-            Text("Mostrando os dados de ${CLOCK.format(lastUpdate)}.", style = MaterialTheme.typography.bodySmall,
+            Text("Mostrando os dados de ${formatMoment(lastUpdate)}.", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onErrorContainer)
         }
     }

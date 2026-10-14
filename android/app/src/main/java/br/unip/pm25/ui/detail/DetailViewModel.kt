@@ -7,6 +7,7 @@ import br.unip.pm25.data.Health
 import br.unip.pm25.data.HourlySeries
 import br.unip.pm25.data.LoadError
 import br.unip.pm25.data.Outcome
+import br.unip.pm25.data.Timed
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -15,13 +16,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.Instant
 
 enum class HistoryRange(val hours: Int, val label: String) {
     DAY(24, "24 horas"),
     WEEK(168, "7 dias"),
 }
 
-data class DetailData(val series: HourlySeries, val health: Health)
+/** Histórico e saúde da mesma janela; `receivedAt` é o da resposta que chegou por último. */
+data class DetailData(val series: HourlySeries, val health: Health, val receivedAt: Instant)
 
 /** Como na tela inicial, uma falha mantém os dados anteriores da mesma janela, com o aviso do erro. */
 data class DetailUiState(
@@ -37,6 +40,7 @@ class DetailViewModel(private val deviceId: String, private val repository: Devi
     private var inFlight: Job? = null
 
     init {
+        showSaved(HistoryRange.DAY)
         refresh()
     }
 
@@ -45,6 +49,7 @@ class DetailViewModel(private val deviceId: String, private val repository: Devi
         if (range == _state.value.range) return
         inFlight?.cancel()
         _state.value = DetailUiState(range = range)
+        showSaved(range)
         refresh()
     }
 
@@ -60,6 +65,16 @@ class DetailViewModel(private val deviceId: String, private val repository: Devi
         }
     }
 
+    /** A versão salva da janela, só se as duas partes existirem e a rede ainda não tiver respondido. */
+    private fun showSaved(range: HistoryRange) {
+        viewModelScope.launch {
+            val series = repository.cachedHourly(deviceId, range.hours) ?: return@launch
+            val health = repository.cachedHealth(deviceId, range.hours) ?: return@launch
+            val saved = combine(series, health)
+            _state.update { if (it.range == range && it.data == null) it.copy(data = saved) else it }
+        }
+    }
+
     /** Histórico e saúde da coleta em paralelo; a tela só troca de dados quando os dois chegam. */
     private suspend fun load(range: HistoryRange): Outcome<DetailData> = coroutineScope {
         val series = async { repository.hourly(deviceId, range.hours) }
@@ -69,7 +84,10 @@ class DetailViewModel(private val deviceId: String, private val repository: Devi
         when {
             s is Outcome.Failure -> s
             h is Outcome.Failure -> h
-            else -> Outcome.Success(DetailData((s as Outcome.Success).value, (h as Outcome.Success).value))
+            else -> Outcome.Success(combine((s as Outcome.Success).value, (h as Outcome.Success).value))
         }
     }
+
+    private fun combine(series: Timed<HourlySeries>, health: Timed<Health>) =
+        DetailData(series.value, health.value, maxOf(series.receivedAt, health.receivedAt))
 }

@@ -210,7 +210,7 @@ private fun DetailScreenPreview() {
     val series = HourlySeries(end, "no-01", end.minusSeconds(86_400), end, 45, hours)
     val health = Health(end, "no-01", end.minusSeconds(86_400), end, 0.87, 182, 3, 1, 12, 0)
     Pm25Theme {
-        DetailScreen(DetailUiState(data = DetailData(series, health)), "no-01", "EE Exemplo, Vila Mariana",
+        DetailScreen(DetailUiState(data = DetailData(series, health, end)), "no-01", "EE Exemplo, Vila Mariana",
             onBack = {}, onRefresh = {}, onSelectRange = {}, onOpenForecast = {})
     }
 }
