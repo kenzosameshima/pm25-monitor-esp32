@@ -17,6 +17,7 @@ MIN_READINGS_PER_HOUR = 45  # 75% dos minutos: critério para uma média horári
 HIGH_HUMIDITY = 75.0        # acima disso, sensores ópticos tendem a superestimar o PM2,5
 LATE_AFTER_MIN = 3          # sem envio há esse tempo, o nó aparece como atrasado
 SILENT_AFTER_MIN = 15       # e, a partir deste, como sem dados
+TEST_DEVICE_PREFIX = "teste"  # ex.: teste-https, criado por scripts/check_https.py
 VARIABLES = ("pm25", "pm10", "pm1", "temperature", "humidity")
 OBSERVED = "observado"
 PERSISTENCE = "persistencia"
@@ -32,6 +33,11 @@ METRIC_COLUMNS = ["previsor", "horas", "mae", "rmse", "skill"]
 class ForecastComparison(NamedTuple):
     series: pd.DataFrame   # índice: hora UTC; colunas: observado, persistencia e um previsor por modelo
     metrics: pd.DataFrame  # METRIC_COLUMNS, uma linha por previsor com horas para comparar
+
+
+def is_test_device(device_id: str) -> bool:
+    """Dispositivos de teste ficam fora do painel e das métricas do período."""
+    return device_id.startswith(TEST_DEVICE_PREFIX)
 
 
 def _frame(rows, time_cols) -> pd.DataFrame:

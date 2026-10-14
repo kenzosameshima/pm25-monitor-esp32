@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from app import db
+from app.analytics import is_test_device
 from app.config import get_settings
 from scripts.train_forecast import MIN_SAMPLES, hourly_series
 
@@ -32,7 +33,6 @@ HOURS_PER_DAY = 24
 # Uma média de 24 h só conta com a mesma cobertura mínima de 75% usada para a média horária.
 MIN_VALID_HOURS_PER_DAY = math.ceil(HOURS_PER_DAY * MIN_SAMPLES / 60)  # 18 horas
 WEEKDAYS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
-TEST_DEVICE_PREFIX = "teste"  # ex.: teste-https, criado por scripts/check_https.py
 
 # ---- Diretrizes e padrões de PM2,5, µg/m³, média de 24 h. Valores conferidos nos textos oficiais. ----
 # OMS (2021): "WHO global air quality guidelines", Tabela 0.1. Nível-guia (AQG) e metas intermediárias (IT);
@@ -252,7 +252,7 @@ def run(db_path: str, start: date, end: date, out_dir: Path, devices: list[str] 
     try:
         ids = devices if devices is not None else [
             r[0] for r in conn.execute("SELECT device_id FROM devices ORDER BY device_id")
-            if not r[0].startswith(TEST_DEVICE_PREFIX)]
+            if not is_test_device(r[0])]
         nodes, daily_rows, hour_rows, weekday_rows = {}, [], [], []
         for device in ids:
             operational, daily = operational_metrics(conn, device, start_utc, end_utc, days)

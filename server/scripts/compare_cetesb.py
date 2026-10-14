@@ -45,9 +45,9 @@ import numpy as np
 import pandas as pd
 
 from app import db
-from app.analytics import HIGH_HUMIDITY
+from app.analytics import HIGH_HUMIDITY, is_test_device
 from app.config import get_settings
-from scripts.period_metrics import BRT, TEST_DEVICE_PREFIX, period_bounds
+from scripts.period_metrics import BRT, period_bounds
 from scripts.train_forecast import MIN_SAMPLES, hourly_series
 
 HUMIDITY_LIMIT = HIGH_HUMIDITY  # % de umidade relativa; acima disso o PMS5003 tende a superestimar
@@ -195,7 +195,7 @@ def run(db_path: str, cetesb_path: str, out_dir: Path, start: date | None, end: 
     try:
         ids = devices if devices is not None else [
             r[0] for r in conn.execute("SELECT device_id FROM devices ORDER BY device_id")
-            if not r[0].startswith(TEST_DEVICE_PREFIX)]
+            if not is_test_device(r[0])]
         report: dict = {"periodo": {"inicio": start.isoformat(), "fim": end.isoformat(), "fuso": "America/Sao_Paulo (UTC-3)"},
                         "cetesb": info, "regras": {"min_leituras_por_hora": min_samples, "limite_umidade_pct": humidity_limit,
                                                    "min_pares": MIN_PAIRS}, "nos": {}}
