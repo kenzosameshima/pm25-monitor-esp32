@@ -19,6 +19,7 @@ server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
 android/      app de consulta em Kotlin (Jetpack Compose), alimentado pelas rotas de leitura da API
+docs/         planejamento do sistema e estado atual de cada parte (planejamento-e-estado.md)
 wokwi/        chips simulados do PMS5003 e do BME280, config.h e bibliotecas para rodar o firmware no Wokwi
 ```
 
