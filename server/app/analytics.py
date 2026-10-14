@@ -145,23 +145,34 @@ def collection_health(conn: sqlite3.Connection, start: datetime, now: datetime) 
     return pd.DataFrame(rows, columns=HEALTH_COLUMNS)
 
 
+def forecast_scores(y: np.ndarray, pred: np.ndarray, pred_persistence: np.ndarray) -> dict:
+    """MAE, RMSE e skill score (1 − RMSE do previsor ÷ RMSE da persistência), todos nas mesmas horas.
+
+    Os três vetores se alinham hora a hora. Com a persistência perfeita (RMSE zero), o skill score
+    fica indefinido (None).
+    """
+    err = pred - y
+    rmse = float(np.sqrt(np.mean(err ** 2)))
+    rmse_p = float(np.sqrt(np.mean((pred_persistence - y) ** 2)))
+    return {"n": int(len(y)), "mae": float(np.mean(np.abs(err))), "rmse": rmse,
+            "skill": float(1 - rmse / rmse_p) if rmse_p > 0 else None}
+
+
 def _forecast_metrics(series: pd.DataFrame) -> pd.DataFrame:
-    """MAE, RMSE e skill score (em relação à persistência) nas horas com observação e previsão."""
+    """Métricas de cada previsor nas horas com observação, persistência e previsão do previsor.
+
+    Exigir a persistência em todas as horas faz o skill score comparar o previsor e a persistência
+    sobre as mesmas horas, como na avaliação offline.
+    """
     rows = []
-    rmse_persist = None
     for name in (c for c in series.columns if c != OBSERVED):
-        both = series[[OBSERVED, name]].dropna()
-        if both.empty:
+        hours = series[list(dict.fromkeys([OBSERVED, PERSISTENCE, name]))].dropna()
+        if hours.empty:
             continue
-        err = both[name] - both[OBSERVED]
-        rmse = float(np.sqrt((err ** 2).mean()))
-        if name == PERSISTENCE:
-            rmse_persist = rmse
-        rows.append({"previsor": name, "horas": len(both), "mae": float(err.abs().mean()), "rmse": rmse})
-    out = pd.DataFrame(rows, columns=METRIC_COLUMNS)
-    if not out.empty and rmse_persist:
-        out["skill"] = 1 - out["rmse"] / rmse_persist
-    return out
+        s = forecast_scores(hours[OBSERVED].to_numpy(float), hours[name].to_numpy(float),
+                            hours[PERSISTENCE].to_numpy(float))
+        rows.append({"previsor": name, "horas": s["n"], "mae": s["mae"], "rmse": s["rmse"], "skill": s["skill"]})
+    return pd.DataFrame(rows, columns=METRIC_COLUMNS)
 
 
 def forecast_comparison(conn: sqlite3.Connection, device: str, now: datetime,

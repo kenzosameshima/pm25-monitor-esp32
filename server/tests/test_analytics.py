@@ -137,6 +137,28 @@ def test_comparacao_com_persistencia_e_modelo(conn):
     assert m.loc[analytics.PERSISTENCE, "skill"] == pytest.approx(0.0)
 
 
+def test_skill_score_usa_as_mesmas_horas_da_persistencia(conn):
+    insert(conn, [reading("no-01", -180 + m, pm25=10.0 + (m // 60) * 5) for m in range(180)])  # 10, 15, 20
+    with conn:
+        # a hora -3 não tem persistência (falta a hora anterior): o acerto exato nela não pode contar
+        for h, value in ((3, 10.0), (1, 21.0)):
+            target = NOW - timedelta(hours=h)
+            conn.execute("INSERT INTO forecasts (device_id, generated_at, target_hour, predicted_pm25, model_name,"
+                         " model_version) VALUES (?, ?, ?, ?, 'ridge', 'v1')",
+                         ("no-01", db.iso(target - timedelta(minutes=5)), db.iso(target), value))
+    m = analytics.forecast_comparison(conn, "no-01", NOW + timedelta(minutes=30)).metrics.set_index("previsor")
+    assert m.loc["ridge v1", "horas"] == 1
+    assert m.loc["ridge v1", "rmse"] == pytest.approx(1.0)
+    assert m.loc["ridge v1", "skill"] == pytest.approx(0.8)  # 1 − 1/5, só na hora -1
+
+
+def test_skill_score_indefinido_com_persistencia_perfeita(conn):
+    insert(conn, [reading("no-01", -120 + m, pm25=10.0) for m in range(120)])
+    m = analytics.forecast_comparison(conn, "no-01", NOW + timedelta(minutes=30)).metrics.set_index("previsor")
+    assert m.loc[analytics.PERSISTENCE, "rmse"] == 0.0
+    assert pd.isna(m.loc[analytics.PERSISTENCE, "skill"])
+
+
 def test_comparacao_sem_dados(conn):
     comp = analytics.forecast_comparison(conn, "no-01", NOW)
     assert comp.series.isna().all().all()

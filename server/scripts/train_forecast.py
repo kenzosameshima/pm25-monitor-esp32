@@ -156,13 +156,7 @@ def predict_mlp(train, test, seed: int = 42, hidden=(32, 16), lr: float = 1e-3, 
     return test["pm25"].to_numpy(float) + model.predict(xte, verbose=0).ravel()
 
 
-def metrics(y: np.ndarray, pred: np.ndarray, pred_persistence: np.ndarray) -> dict:
-    """MAE, RMSE e skill score (1 − RMSE do modelo ÷ RMSE da persistência), como no painel."""
-    err = pred - y
-    rmse = float(np.sqrt(np.mean(err ** 2)))
-    rmse_p = float(np.sqrt(np.mean((pred_persistence - y) ** 2)))
-    return {"n": int(len(y)), "mae": float(np.mean(np.abs(err))), "rmse": rmse,
-            "skill": float(1 - rmse / rmse_p) if rmse_p > 0 else None}
+metrics = analytics.forecast_scores  # a mesma definição do painel
 
 
 def evaluate(frame: pd.DataFrame, models: dict, folds, final, predictions: dict | None = None, **kw) -> dict:
