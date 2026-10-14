@@ -50,14 +50,26 @@ def _read(fn, *args, missing, **kwargs):
         conn.close()
 
 
+def without_test_devices(df: pd.DataFrame) -> pd.DataFrame:
+    return df[~df["device_id"].map(analytics.is_test_device).astype(bool)]
+
+
 @st.cache_data(ttl=30)
 def load_status(now: datetime) -> pd.DataFrame:
-    return _read(analytics.device_status, now, missing=pd.DataFrame(columns=analytics.STATUS_COLUMNS))
+    return without_test_devices(
+        _read(analytics.device_status, now, missing=pd.DataFrame(columns=analytics.STATUS_COLUMNS)))
 
 
 @st.cache_data(ttl=30)
 def load_health(start: datetime, now: datetime) -> pd.DataFrame:
-    return _read(analytics.collection_health, start, now, missing=pd.DataFrame(columns=analytics.HEALTH_COLUMNS))
+    return without_test_devices(
+        _read(analytics.collection_health, start, now, missing=pd.DataFrame(columns=analytics.HEALTH_COLUMNS)))
+
+
+def expected_devices(status: pd.DataFrame) -> list[str]:
+    """Nós com leitura mais os cadastrados em PM25_DEVICE_TOKENS que ainda não enviaram, sem os de teste."""
+    ids = set(status["device_id"]) | set(get_settings().device_ids)
+    return sorted(d for d in ids if not analytics.is_test_device(d))
 
 
 @st.cache_data(ttl=30)
@@ -159,12 +171,17 @@ def status_tab() -> None:
         st.info("Nenhuma leitura recebida ainda. Ligue um nó sensor ou rode o simulador (veja o README).")
         return
 
-    cols = st.columns(len(status))
-    for col, (_, dev) in zip(cols, status.iterrows()):
-        minutes = None if pd.isna(dev["minutes_since"]) else dev["minutes_since"]
-        when = dev["ts_sensor"].tz_convert(LOCAL_TZ).strftime("%d/%m %H:%M")
+    by_id = status.set_index("device_id")
+    devices = expected_devices(status)
+    for col, device in zip(st.columns(len(devices)), devices):
         with col:
-            st.subheader(dev["device_id"])
+            st.subheader(device)
+            if device not in by_id.index:
+                st.caption("⚪ aguardando instalação · nenhuma leitura recebida")
+                continue
+            dev = by_id.loc[device]
+            minutes = None if pd.isna(dev["minutes_since"]) else dev["minutes_since"]
+            when = dev["ts_sensor"].tz_convert(LOCAL_TZ).strftime("%d/%m %H:%M")
             if isinstance(dev["location"], str):
                 st.caption(dev["location"])
             st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")

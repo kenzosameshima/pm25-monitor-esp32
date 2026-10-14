@@ -16,11 +16,11 @@ from scripts.simulate_sensor import synthetic  # noqa: E402
 DASHBOARD = str(Path(__file__).resolve().parents[1] / "dashboard" / "app.py")
 
 
-def populate(path: Path, hours: int = 30) -> None:
+def populate(path: Path, hours: int = 30, devices=(("no-01", 1), ("no-02", 2))) -> None:
     conn = db.connect(str(path))
     db.init_db(conn)
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-    for device, boots in (("no-01", 1), ("no-02", 2)):
+    for device, boots in devices:
         state: dict = {}
         rows = []
         for i in range(hours * 60):
@@ -79,6 +79,19 @@ def test_dashboard_renderiza_as_tres_abas(app_env):
     metrics = at.dataframe[1].value.set_index("Previsor")
     assert {"Persistência", "ridge v1"} <= set(metrics.index)
     assert "Skill score" in metrics.columns
+
+
+def test_esconde_no_de_teste_e_reserva_card_do_no_cadastrado_sem_dados(app_env, monkeypatch):
+    monkeypatch.setenv("PM25_DEVICE_TOKENS", "no-01:token-do-no-01-0000000000,no-02:token-do-no-02-0000000000,"
+                                             "teste-https:token-do-teste-000000000")
+    populate(app_env, hours=3, devices=(("no-01", 1), ("teste-https", 1)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert [h.value for h in at.subheader] == ["no-01", "no-02"]
+    assert any("aguardando instalação" in c.value for c in at.caption)
+    assert len(at.metric) == 4  # só o no-01 tem leitura
+    assert list(at.dataframe[0].value["Sensor"]) == ["no-01"]
+    assert at.multiselect[0].options == ["no-01"]
 
 
 def test_troca_para_resolucao_de_um_minuto(app_env):
