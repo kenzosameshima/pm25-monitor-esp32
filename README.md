@@ -18,6 +18,7 @@ server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py, set_location.
 server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
+android/      app de consulta em Kotlin (Jetpack Compose), alimentado pelas rotas de leitura da API
 wokwi/        chips simulados do PMS5003 e do BME280, config.h e bibliotecas para rodar o firmware no Wokwi
 ```
 
@@ -98,6 +99,31 @@ O local de cada nó aparece no app e no dashboard. Ele é gravado depois da prim
 ```bash
 python -m scripts.set_location no-01 "EE Exemplo, Vila Mariana (fachada, 3 m do chão)"
 ```
+
+## App Android
+
+O app de consulta fica em `android/`, em Kotlin com Jetpack Compose, e só lê dados pelas rotas acima. A tela inicial mostra um cartão por nó com o PM2,5 da leitura mais recente, a cor da faixa da CETESB, temperatura, umidade, PM10, o estado do nó e a idade da leitura, calculada pelo relógio do servidor (`generated_at`). A tela se atualiza ao abrir, a cada minuto enquanto está visível e ao puxar a lista para baixo. Se uma atualização falhar, o app continua mostrando os últimos dados, com o motivo da falha e a hora da última atualização.
+
+Para rodar no emulador, com a API e o simulador no mesmo computador:
+
+1. Defina `PM25_READ_TOKEN` no `server/.env`, inicie a API e o simulador (ver "Início rápido").
+2. Abra a pasta `android/` no Android Studio e deixe o Gradle sincronizar.
+3. Copie as linhas de `android/local.properties.example` para `android/local.properties` (o Android Studio cria esse arquivo) e coloque o token de leitura. No emulador, `http://10.0.2.2:8000/` é a API do computador.
+4. Rode a configuração `app` num emulador. Na primeira abertura, o app explica e pede o acesso à rede local (ver abaixo).
+
+O Android 17 bloqueia a rede local para apps com `targetSdk` 37, e o `10.0.2.2` do emulador é um endereço privado. Por isso o app declara `ACCESS_LOCAL_NETWORK` e, só quando a URL configurada aponta para a rede local (endereço privado, link-local ou `.local`), mostra uma tela com o motivo antes do pedido do sistema, que aparece como "Dispositivos próximos". Pela URL pública do túnel nada é pedido. Se a permissão for negada, a tela indica onde liberá-la nas configurações.
+
+O HTTP sem criptografia só é aceito na versão de depuração e só para `10.0.2.2` e `localhost`; a versão de release exige HTTPS, que é o caminho do túnel. O token de leitura vai embutido no APK e pode ser extraído dele: ele só dá acesso de leitura e pode ser trocado no `.env` a qualquer momento.
+
+O projeto usa o Android Gradle Plugin 9.4 (com o Kotlin embutido), Gradle 9.8.1, Kotlin 2.4 e `compileSdk` 37. O wrapper confere o SHA-256 da distribuição do Gradle. Pela linha de comando, use o JDK do Android Studio:
+
+```powershell
+cd android
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug
+```
+
+Os testes de unidade cobrem o contrato JSON (com uma resposta real da API), a classificação de erros, a detecção de endereços da rede local, as faixas, a idade da leitura e o estado da tela quando uma atualização falha. O fluxo completo foi verificado no emulador (API 37) contra a API local alimentada pelo simulador, inclusive o pedido de permissão e a queda da API com a lista mantida na tela. Num celular de verdade e pelo túnel, ainda não foi testado.
 
 ## Banco de dados
 
