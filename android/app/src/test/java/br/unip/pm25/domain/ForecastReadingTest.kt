@@ -38,6 +38,12 @@ class ForecastReadingTest {
     }
 
     @Test
+    fun `resposta salva ha horas nao finge que a hora dela ainda esta em andamento`() {
+        assertNull(pendingHour(forecast, serverNow = forecast.generatedAt.plusSeconds(3 * 3600)))
+        assertEquals(forecast.hours[5].hour, pendingHour(forecast, forecast.generatedAt.plusSeconds(3600))?.hour)
+    }
+
+    @Test
     fun `nomes e leitura do skill score`() {
         assertEquals("Persistência", predictorLabel(PERSISTENCE))
         assertEquals("ridge v1", predictorLabel("ridge v1"))

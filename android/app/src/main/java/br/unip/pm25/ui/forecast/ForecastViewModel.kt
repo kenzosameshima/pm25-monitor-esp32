@@ -6,6 +6,7 @@ import br.unip.pm25.data.DeviceRepository
 import br.unip.pm25.data.ForecastResponse
 import br.unip.pm25.data.LoadError
 import br.unip.pm25.data.Outcome
+import br.unip.pm25.data.Timed
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,9 +17,9 @@ import kotlinx.coroutines.launch
 /** Janela da comparação, a mesma do painel do servidor. */
 const val FORECAST_HOURS = 48
 
-/** Como nas outras telas, uma falha mantém a última resposta na tela, com o aviso do erro. */
+/** Como nas outras telas, uma falha mantém a última resposta (desta sessão ou salva), com o aviso do erro. */
 data class ForecastUiState(
-    val data: ForecastResponse? = null,
+    val data: Timed<ForecastResponse>? = null,
     val error: LoadError? = null,
     val loading: Boolean = false,
 )
@@ -29,6 +30,10 @@ class ForecastViewModel(private val deviceId: String, private val repository: De
     private var inFlight: Job? = null
 
     init {
+        viewModelScope.launch {
+            val saved = repository.cachedForecast(deviceId, FORECAST_HOURS) ?: return@launch
+            _state.update { if (it.data == null) it.copy(data = saved) else it }
+        }
         refresh()
     }
 

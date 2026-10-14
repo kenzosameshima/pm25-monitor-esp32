@@ -34,8 +34,10 @@ import br.unip.pm25.R
 import br.unip.pm25.data.ForecastHour
 import br.unip.pm25.data.ForecastResponse
 import br.unip.pm25.data.PredictorScore
+import br.unip.pm25.data.Timed
 import br.unip.pm25.domain.AirQuality
 import br.unip.pm25.domain.PERSISTENCE
+import br.unip.pm25.domain.estimatedServerNow
 import br.unip.pm25.domain.pendingHour
 import br.unip.pm25.domain.predictorLabel
 import br.unip.pm25.domain.skillVerdict
@@ -79,11 +81,12 @@ fun ForecastScreen(state: ForecastUiState, deviceId: String, onBack: () -> Unit,
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                val data = state.data
+                val timed = state.data
                 when {
-                    data != null -> {
+                    timed != null -> {
+                        val data = timed.value
                         state.error?.let { error -> item { StaleBanner(error, data.generatedAt) } }
-                        item { PendingHourCard(data) }
+                        item { PendingHourCard(data, estimatedServerNow(data.generatedAt, timed.receivedAt, Instant.now())) }
                         item { ComparisonCard(data) }
                         item { ScoresCard(data.scores) }
                     }
@@ -108,14 +111,15 @@ private fun predictorColors(predictors: List<String>): Map<String, Color> {
 }
 
 @Composable
-private fun PendingHourCard(data: ForecastResponse) {
-    val pending = pendingHour(data)
+private fun PendingHourCard(data: ForecastResponse, serverNow: Instant) {
+    val pending = pendingHour(data, serverNow)
     val models = data.predictors.filter { it != PERSISTENCE }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Hora em andamento", style = MaterialTheme.typography.titleMedium)
             if (pending == null) {
-                Text("A resposta não trouxe a hora atual.", style = MaterialTheme.typography.bodyMedium)
+                Text("Os dados disponíveis não incluem a hora atual; puxe para atualizar.",
+                    style = MaterialTheme.typography.bodyMedium)
             } else {
                 val end = pending.hour.plusSeconds(3600)
                 Text("Média prevista de ${CLOCK.format(pending.hour)} às ${CLOCK.format(end)}; a observada só fecha às ${CLOCK.format(end)}.",
@@ -217,5 +221,5 @@ private fun ForecastScreenPreview() {
     }
     val data = ForecastResponse(now, "no-01", listOf(PERSISTENCE, "ridge v1"), hours,
         listOf(PredictorScore(PERSISTENCE, 46, 5.3, 6.1, 0.0), PredictorScore("ridge v1", 46, 1.2, 1.6, 0.74)))
-    Pm25Theme { ForecastScreen(ForecastUiState(data = data), "no-01", onBack = {}, onRefresh = {}) }
+    Pm25Theme { ForecastScreen(ForecastUiState(data = Timed(data, now)), "no-01", onBack = {}, onRefresh = {}) }
 }

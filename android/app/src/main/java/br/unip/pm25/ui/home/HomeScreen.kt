@@ -41,15 +41,18 @@ import br.unip.pm25.data.DeviceState
 import br.unip.pm25.data.DeviceStatus
 import br.unip.pm25.data.LatestReading
 import br.unip.pm25.data.LoadError
+import br.unip.pm25.data.Timed
 import br.unip.pm25.domain.AirQuality
+import br.unip.pm25.domain.currentStatus
+import br.unip.pm25.domain.estimatedServerNow
 import br.unip.pm25.domain.formatAge
 import br.unip.pm25.domain.readingAge
-import br.unip.pm25.ui.CLOCK
 import br.unip.pm25.ui.ErrorPanel
 import br.unip.pm25.ui.Metric
 import br.unip.pm25.ui.QualityChip
 import br.unip.pm25.ui.StaleBanner
 import br.unip.pm25.ui.format
+import br.unip.pm25.ui.formatMoment
 import br.unip.pm25.ui.theme.Pm25Theme
 import kotlinx.coroutines.delay
 import java.time.Instant
@@ -98,7 +101,10 @@ fun HomeScreen(
 }
 
 @Composable
-private fun DeviceListContent(data: DeviceList, error: LoadError?, onOpenDevice: (DeviceState) -> Unit) {
+private fun DeviceListContent(timed: Timed<DeviceList>, error: LoadError?, onOpenDevice: (DeviceState) -> Unit) {
+    val data = timed.value
+    // Idades medidas pela hora estimada do servidor agora: um dado salvo ontem não parece recente.
+    val serverNow = estimatedServerNow(data.generatedAt, timed.receivedAt, Instant.now())
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -108,7 +114,7 @@ private fun DeviceListContent(data: DeviceList, error: LoadError?, onOpenDevice:
             item { StaleBanner(error, data.generatedAt) }
         } else {
             item {
-                Text("Atualizado às ${CLOCK.format(data.generatedAt)}", style = MaterialTheme.typography.labelMedium,
+                Text("Atualizado: ${formatMoment(data.generatedAt)}", style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -116,7 +122,7 @@ private fun DeviceListContent(data: DeviceList, error: LoadError?, onOpenDevice:
             item { Text("Nenhum sensor enviou leituras ainda.") }
         }
         items(data.devices, key = { it.deviceId }) { device ->
-            DeviceCard(device, data.generatedAt, onClick = { onOpenDevice(device) })
+            DeviceCard(device, currentStatus(device, data, serverNow), serverNow, onClick = { onOpenDevice(device) })
         }
         item {
             Text(
@@ -130,15 +136,15 @@ private fun DeviceListContent(data: DeviceList, error: LoadError?, onOpenDevice:
 }
 
 @Composable
-private fun DeviceCard(device: DeviceState, serverNow: Instant, onClick: () -> Unit) {
+private fun DeviceCard(device: DeviceState, status: DeviceStatus, serverNow: Instant, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(device.status)
+                StatusDot(status)
                 Spacer(Modifier.width(8.dp))
                 Text(device.deviceId, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
-                Text(device.status.label(), style = MaterialTheme.typography.labelMedium,
+                Text(status.label(), style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             device.location?.let {
@@ -203,5 +209,5 @@ private fun HomeScreenPreview() {
             DeviceState("no-02", null, DeviceStatus.SILENT, 42.0, now.minusSeconds(2520), reading.copy(pm25 = 12.0)),
         ),
     )
-    Pm25Theme { HomeScreen(HomeUiState(data = data), onRefresh = {}, onOpenDevice = {}) }
+    Pm25Theme { HomeScreen(HomeUiState(data = Timed(data, now)), onRefresh = {}, onOpenDevice = {}) }
 }

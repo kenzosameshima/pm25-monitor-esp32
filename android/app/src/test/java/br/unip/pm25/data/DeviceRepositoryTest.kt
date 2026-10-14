@@ -5,17 +5,21 @@ import kotlinx.serialization.SerializationException
 import okhttp3.Headers.Companion.headersOf
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import retrofit2.HttpException
 import retrofit2.Response
 import java.io.IOException
+import java.time.Duration
 import java.time.Instant
 
 class DeviceRepositoryTest {
+    private val list = DeviceList(Instant.parse("2026-10-14T11:59:00Z"), 3, 15, emptyList())
+
     private fun failureOf(error: () -> Nothing): LoadError {
-        var result: Outcome<DeviceList>? = null
-        runTest { result = DeviceRepository(FakeApi(onDevices = error)).devices() }
+        var result: Outcome<Timed<DeviceList>>? = null
+        runTest { result = repository(FakeApi(onDevices = error)).devices() }
         return (result as Outcome.Failure).error
     }
 
@@ -30,10 +34,11 @@ class DeviceRepositoryTest {
     }
 
     @Test
-    fun `resposta valida vira sucesso`() = runTest {
-        val list = DeviceList(Instant.EPOCH, 3, 15, emptyList())
-        val result = DeviceRepository(FakeApi(onDevices = { list })).devices()
-        assertTrue(result is Outcome.Success && result.value == list)
+    fun `resposta valida vira sucesso com a hora de chegada`() = runTest {
+        val clock = TestClock()
+        val result = repository(FakeApi(onDevices = { list }), clock = clock).devices()
+        assertTrue(result is Outcome.Success)
+        assertEquals(Timed(list, clock.now), (result as Outcome.Success).value)
     }
 
     @Test
@@ -50,5 +55,47 @@ class DeviceRepositoryTest {
     fun `falha de rede e resposta fora do contrato`() {
         assertEquals(LoadError.Network, failureOf { throw IOException("sem rota") })
         assertEquals(LoadError.BadResponse, failureOf { throw SerializationException("campo faltando") })
+    }
+
+    @Test
+    fun `resposta salva sobrevive ao app reaberto`() = runTest {
+        val store = InMemorySnapshotStore()
+        val clock = TestClock()
+        repository(FakeApi(onDevices = { list }), store, clock).devices()
+        val receivedAt = clock.now
+        clock.advance(Duration.ofDays(1))
+
+        val reopened = repository(FakeApi(onDevices = { throw IOException() }), store, clock)
+        assertEquals(Timed(list, receivedAt), reopened.cachedDevices())
+    }
+
+    @Test
+    fun `falha nao apaga a resposta salva`() = runTest {
+        val store = InMemorySnapshotStore()
+        val api = FakeApi(onDevices = { list })
+        val repo = repository(api, store)
+        repo.devices()
+        api.onDevices = { throw IOException() }
+        repo.devices()
+        assertEquals(list, repo.cachedDevices()?.value)
+    }
+
+    @Test
+    fun `cada rota e cada janela tem a sua copia`() = runTest {
+        val series = ApiJson.decodeFromString<HourlySeries>(fixture("hourly.json"))
+        val repo = repository(FakeApi(onHourly = { _, _ -> series }))
+        repo.hourly("no-01", 24)
+        assertEquals(series, repo.cachedHourly("no-01", 24)?.value)
+        assertNull(repo.cachedHourly("no-01", 168))
+        assertNull(repo.cachedHourly("no-02", 24))
+    }
+
+    @Test
+    fun `copia estragada ou de outro formato e ignorada`() = runTest {
+        val store = InMemorySnapshotStore()
+        store.texts["devices"] = "{\"value\": {\"isto\": \"não é uma lista\"}, \"received_at\": \"2026-10-14T12:00:00Z\"}"
+        assertNull(repository(FakeApi(), store).cachedDevices())
+        store.texts["devices"] = "{ cortado no meio"
+        assertNull(repository(FakeApi(), store).cachedDevices())
     }
 }

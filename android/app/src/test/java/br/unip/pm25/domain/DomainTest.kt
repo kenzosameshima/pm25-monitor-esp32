@@ -1,5 +1,8 @@
 package br.unip.pm25.domain
 
+import br.unip.pm25.data.DeviceList
+import br.unip.pm25.data.DeviceState
+import br.unip.pm25.data.DeviceStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -33,6 +36,29 @@ class FreshnessTest {
         assertEquals(Duration.ofMinutes(4), readingAge(start, start.plusSeconds(5 * 60)))
         assertEquals(Duration.ZERO, readingAge(start, start.plusSeconds(30)))   // minuto ainda aberto
         assertEquals(Duration.ZERO, readingAge(start, start.minusSeconds(600))) // servidor "atrás" da leitura
+    }
+
+    @Test
+    fun `hora do servidor soma o tempo desde a chegada, sem depender da hora do celular`() {
+        val generatedAt = Instant.parse("2026-10-14T12:00:00Z")
+        val phoneWrong = Instant.parse("2026-10-14T09:13:00Z")   // celular 3 h atrasado
+        val later = phoneWrong.plus(Duration.ofHours(20))
+        assertEquals(generatedAt.plus(Duration.ofHours(20)), estimatedServerNow(generatedAt, phoneWrong, later))
+        // leitura salva com 1 min de idade fica com 20 h e 1 min
+        assertEquals("há 20 h", formatAge(readingAge(generatedAt.minusSeconds(120), estimatedServerNow(generatedAt, phoneWrong, later))))
+        // relógio do celular voltou para trás: não inventa tempo negativo
+        assertEquals(generatedAt, estimatedServerNow(generatedAt, later, phoneWrong))
+    }
+
+    @Test
+    fun `estado do no envelhece com a resposta salva, pelos limites do servidor`() {
+        val received = Instant.parse("2026-10-14T12:00:00Z")
+        val device = DeviceState("no-01", null, DeviceStatus.ONLINE, 0.5, received.minusSeconds(30), null)
+        val list = DeviceList(received, lateAfterMin = 3, silentAfterMin = 15, devices = listOf(device))
+        assertEquals(DeviceStatus.ONLINE, currentStatus(device, list, received))                 // igual ao servidor
+        assertEquals(DeviceStatus.LATE, currentStatus(device, list, received.plusSeconds(4 * 60)))
+        assertEquals(DeviceStatus.SILENT, currentStatus(device, list, received.plusSeconds(20 * 60)))
+        assertEquals(DeviceStatus.SILENT, currentStatus(device.copy(lastReceived = null), list, received))
     }
 
     @Test
