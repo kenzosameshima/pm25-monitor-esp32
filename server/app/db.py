@@ -165,12 +165,20 @@ def fetch_ingest_batches(conn: sqlite3.Connection, since: datetime) -> list[sqli
 
 
 def device_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Resumo por dispositivo: primeira e última leitura, último recebimento e total de inicializações."""
+    """Resumo por dispositivo: local, primeira e última leitura, último recebimento e total de inicializações."""
     return conn.execute(
-        "SELECT device_id, MIN(ts_sensor) AS first_ts, MAX(ts_sensor) AS last_ts,"
-        " MAX(ts_received) AS last_received, COUNT(DISTINCT boot_id) AS boots, COUNT(*) AS n"
-        " FROM measurements GROUP BY device_id ORDER BY device_id"
+        "SELECT m.device_id, d.location, MIN(m.ts_sensor) AS first_ts, MAX(m.ts_sensor) AS last_ts,"
+        " MAX(m.ts_received) AS last_received, COUNT(DISTINCT m.boot_id) AS boots, COUNT(*) AS n"
+        " FROM measurements m JOIN devices d ON d.device_id = m.device_id"
+        " GROUP BY m.device_id ORDER BY m.device_id"
     ).fetchall()
+
+
+def set_location(conn: sqlite3.Connection, device_id: str, location: str | None) -> bool:
+    """Grava a descrição do local de instalação de um nó (None apaga). Falso se o nó nunca enviou dados."""
+    with conn:
+        cur = conn.execute("UPDATE devices SET location = ? WHERE device_id = ?", (location, device_id))
+    return cur.rowcount == 1
 
 
 def latest_measurements(conn: sqlite3.Connection) -> list[sqlite3.Row]:

@@ -1,4 +1,8 @@
-"""API de ingestão. Recebe lotes de leituras dos nós e só responde 201 depois de gravar no banco."""
+"""API de ingestão e consulta.
+
+Recebe lotes de leituras dos nós e só responde 201 depois de gravar no banco. As rotas de leitura do
+app de consulta ficam em read_api.
+"""
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -9,7 +13,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import db
+from . import db, read_api
 from .config import get_settings
 from .guard import AuthThrottle, BodySizeLimit
 from .models import Batch, IngestResult, quality_flags
@@ -29,8 +33,9 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="PM2,5 — API de ingestão", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="PM2,5 — API de ingestão e consulta", version="1.1.0", lifespan=lifespan)
 app.add_middleware(BodySizeLimit, limit=lambda: get_settings().max_body_bytes)
+app.include_router(read_api.router)
 
 
 def get_conn() -> Iterator:

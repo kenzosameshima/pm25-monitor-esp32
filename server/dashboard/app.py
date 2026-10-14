@@ -165,6 +165,8 @@ def status_tab() -> None:
         when = dev["ts_sensor"].tz_convert(LOCAL_TZ).strftime("%d/%m %H:%M")
         with col:
             st.subheader(dev["device_id"])
+            if isinstance(dev["location"], str):
+                st.caption(dev["location"])
             st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")
             a, b = st.columns(2)
             a.metric("PM2,5", fmt(dev["pm25"], " µg/m³"))
