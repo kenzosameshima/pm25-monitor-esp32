@@ -20,6 +20,9 @@ interface Pm25Api {
     @GET("v1/devices/{id}/health")
     suspend fun health(@Path("id") deviceId: String, @Query("hours") hours: Int): Health
 
+    @GET("v1/devices/{id}/forecast")
+    suspend fun forecast(@Path("id") deviceId: String, @Query("hours") hours: Int): ForecastResponse
+
     companion object {
         /** Cliente com o token de leitura em todas as requisições. `baseUrl` termina em "/". */
         fun create(baseUrl: String, readToken: String): Pm25Api {

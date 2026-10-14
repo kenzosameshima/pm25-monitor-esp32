@@ -86,6 +86,35 @@ data class Health(
 )
 
 @Serializable
+data class ForecastResponse(
+    @SerialName("generated_at") @Serializable(InstantSerializer::class) val generatedAt: Instant,
+    @SerialName("device_id") val deviceId: String,
+    /** "persistence" primeiro, depois um por modelo gravado no servidor ("<nome> <versão>"). */
+    val predictors: List<String>,
+    val hours: List<ForecastHour>,
+    val scores: List<PredictorScore>,
+)
+
+@Serializable
+data class ForecastHour(
+    @Serializable(InstantSerializer::class) val hour: Instant,
+    /** Média horária observada; nula se a hora não vale ou ainda não terminou. */
+    val observed: Double? = null,
+    val predictions: Map<String, Double?> = emptyMap(),
+)
+
+/** Métricas de um previsor nas horas com observação, persistência e previsão dele. */
+@Serializable
+data class PredictorScore(
+    val predictor: String,
+    val hours: Int,
+    val mae: Double,
+    val rmse: Double,
+    /** 1 − RMSE do previsor ÷ RMSE da persistência; acima de zero, o previsor supera a persistência. */
+    val skill: Double? = null,
+)
+
+@Serializable
 data class LatestReading(
     /** Início da janela de um minuto medida pelo nó. */
     @Serializable(InstantSerializer::class) val ts: Instant,
