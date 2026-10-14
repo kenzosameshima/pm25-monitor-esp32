@@ -41,12 +41,12 @@ from importlib import metadata
 import numpy as np
 import pandas as pd
 
-from app import db
+from app import analytics, db
 from app.config import get_settings
 
 LAGS = (1, 2, 3, 6, 12, 24)
 FEATURES = ["pm25", *[f"lag_{k}" for k in LAGS], "humidity", "temperature", "hour_sin", "hour_cos"]
-MIN_SAMPLES = 45        # minutos com leitura para uma hora entrar na série (75% de cobertura)
+MIN_SAMPLES = analytics.MIN_READINGS_PER_HOUR  # minutos com leitura para uma hora entrar na série
 MIN_TRAIN_ROWS = 100    # abaixo disso o treino não é confiável
 EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 PERSISTENCE = "Persistência"
@@ -55,23 +55,12 @@ MLP = "MLP (Keras)"
 
 def hourly_series(conn, device_id: str, min_samples: int = MIN_SAMPLES) -> pd.DataFrame:
     """Média horária de PM2,5, umidade e temperatura; horas com poucas leituras ficam como NaN."""
-    rows = db.fetch_measurements(conn, EPOCH, datetime.now(timezone.utc) + timedelta(days=1), [device_id])
-    df = pd.DataFrame([dict(r) for r in rows])
-    if df.empty:
-        return pd.DataFrame(columns=["pm25", "humidity", "temperature", "n"])
-    df = df[df["quality"] == "ok"]
-    if df.empty:
-        return pd.DataFrame(columns=["pm25", "humidity", "temperature", "n"])
-    df = df.assign(ts=pd.to_datetime(df["ts_sensor"], utc=True)).set_index("ts").sort_index()
-    grouped = df.resample("1h")
-    hourly = pd.DataFrame({
-        "pm25": grouped["pm25"].mean(),
-        "humidity": grouped["humidity"].mean(),
-        "temperature": grouped["temperature"].mean(),
-        "n": grouped["pm25"].count(),
-    })
-    hourly.loc[hourly["n"] < min_samples, ["pm25", "humidity", "temperature"]] = np.nan
-    return hourly
+    hourly = analytics.hourly_means(conn, EPOCH, datetime.now(timezone.utc) + timedelta(days=1), [device_id],
+                                    min_readings=min_samples)
+    columns = ["pm25", "humidity", "temperature", "n"]
+    if hourly.empty:
+        return pd.DataFrame(columns=columns)
+    return hourly.set_index("hora").rename_axis("ts")[columns]
 
 
 def make_features(hourly: pd.DataFrame, device_id: str) -> pd.DataFrame:
