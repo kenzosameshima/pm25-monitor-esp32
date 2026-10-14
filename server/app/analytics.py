@@ -22,7 +22,7 @@ OBSERVED = "observado"
 PERSISTENCE = "persistencia"
 
 HOURLY_COLUMNS = ["device_id", "hora", "n", *VARIABLES]
-STATUS_COLUMNS = ["device_id", "first_ts", "last_received", "status", "minutes_since",
+STATUS_COLUMNS = ["device_id", "location", "first_ts", "last_received", "status", "minutes_since",
                   "ts_sensor", *VARIABLES, "rssi", "quality"]
 HEALTH_COLUMNS = ["device_id", "completude", "maior_lacuna_min", "mensagens_perdidas", "reinicios",
                   "duplicatas_descartadas", "leituras_marcadas"]
@@ -87,7 +87,7 @@ def _status(last_received, now: datetime) -> tuple[str, float]:
 
 
 def device_status(conn: sqlite3.Connection, now: datetime) -> pd.DataFrame:
-    """Uma linha por nó: estado da coleta, minutos desde o último envio e a leitura mais recente.
+    """Uma linha por nó: local, estado da coleta, minutos desde o último envio e a leitura mais recente.
 
     `status` é 'em_operacao' (envio há menos de LATE_AFTER_MIN), 'atrasado' (menos de
     SILENT_AFTER_MIN) ou 'sem_dados'. `ts_sensor` e as variáveis são da leitura mais recente.

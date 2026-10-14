@@ -1,19 +1,20 @@
 # Sistema de coleta de PM2,5 — TCC (UNIP, 2026)
 
-Este repositório reúne a cadeia de coleta e o painel do projeto: o firmware dos nós sensores (ESP32 + PMS5003 + BME280 ou DHT22), a API de ingestão, o banco SQLite, o backup diário, o alerta no Telegram, o dashboard em Streamlit, um simulador de sensor e os chips simulados do Wokwi, para testar tudo sem hardware. O pipeline de modelagem e o job horário de previsão são as próximas etapas e vão ler e gravar no mesmo banco.
+Este repositório reúne a cadeia de coleta e o painel do projeto: o firmware dos nós sensores (ESP32 + PMS5003 + BME280 ou DHT22), a API de ingestão, o banco SQLite, o backup diário, o alerta no Telegram, o dashboard em Streamlit, as rotas de leitura para o app de consulta, um simulador de sensor e os chips simulados do Wokwi, para testar tudo sem hardware. O pipeline de modelagem e o job horário de previsão são as próximas etapas e vão ler e gravar no mesmo banco.
 
 ```
 nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──▶ SQLite (WAL) ──▶ backup diário
    │ buffer em flash se a rede cair                           ├──▶ alerta Telegram (sensor mudo 15 min)
-                                                              └──▶ dashboard Streamlit (somente leitura)
+                                                              ├──▶ dashboard Streamlit (somente leitura)
+                                                              └──▶ rotas de leitura (GET /v1/devices) ──HTTPS──▶ app de consulta
 ```
 
 ## Estrutura
 
 ```
 firmware/     código do ESP32 (PlatformIO); host_tests/ testa a parte sem hardware no computador
-server/app/   API (main.py), contrato de dados (models.py), acesso ao banco (db.py), regras de análise (analytics.py), esquema (schema.sql)
-server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py, check_https.py, train_forecast.py, period_metrics.py, compare_cetesb.py
+server/app/   API (main.py), rotas de leitura (read_api.py), contrato de dados (models.py), acesso ao banco (db.py), regras de análise (analytics.py), esquema (schema.sql)
+server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py, set_location.py, check_https.py, train_forecast.py, period_metrics.py, compare_cetesb.py
 server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
@@ -74,6 +75,29 @@ O campo `ts` marca o início da janela de um minuto, sempre em UTC. `pm25` é o 
 | Falha de rede ou 5xx | Nada foi gravado | Mantém o lote e tenta de novo com espera crescente |
 
 Cada leitura é identificada por `(device_id, boot_id, seq)`. O `boot_id` é um contador gravado na memória não volátil do ESP32 e incrementado a cada inicialização; o `seq` recomeça do zero a cada boot. A API ignora leituras repetidas, então reenviar um lote é sempre seguro, e um reinício nunca faz uma leitura nova colidir com uma antiga. Isso também separa os tipos de falha: um salto de `seq` dentro do mesmo `boot_id` é perda de mensagem, um intervalo de tempo sem salto de `seq` é minuto sem leitura válida do sensor, e um `boot_id` novo é um reinício.
+
+## Rotas de leitura (app de consulta)
+
+O app de consulta lê os dados pela própria API, sem acesso ao arquivo do banco. As rotas ficam sob `/v1/devices`, aceitam só `GET` e pedem `Authorization: Bearer <PM25_READ_TOKEN>`. Esse token é diferente dos tokens dos nós: um nó não lê e o app não grava, e a configuração recusa um token de leitura igual ao de um nó. Sem `PM25_READ_TOKEN`, as rotas respondem 503. As falhas de autenticação contam para o mesmo bloqueio de IP da ingestão. As rotas abrem o banco em modo somente leitura e usam as regras de `app/analytics.py`, as mesmas do dashboard, então os números do app e do painel coincidem.
+
+| Rota | Devolve |
+|---|---|
+| `GET /v1/devices` | Para cada nó: local, estado (`online`, `late` a partir de 3 min sem envio, `silent` a partir de 15 min), minutos desde o último recebimento e a leitura mais recente |
+| `GET /v1/devices/{id}/hourly?start=&end=` | Uma linha por hora de `[start, end)`, inclusive as horas sem leitura: `readings`, `valid` (pelo menos 45 leituras de qualidade `ok`) e as médias, nulas quando a hora não vale. Padrão: últimas 24 h; no máximo 31 dias; o início é arredondado para a hora cheia |
+| `GET /v1/devices/{id}/health?hours=24` | Saúde da coleta (1 a 168 h): completude, maior lacuna, mensagens perdidas, reinícios, duplicatas descartadas e leituras marcadas |
+| `GET /v1/devices/{id}/forecast?hours=48` | Observado e previsões por hora (persistência e cada modelo gravado em `forecasts`), com MAE, RMSE e skill score de cada previsor |
+
+Os horários são UTC, em ISO 8601 com `Z`, e cada resposta traz `generated_at`, o relógio do servidor: o app calcula a idade de um dado por ele, sem depender do relógio do celular. Um nó sem leituras responde 404, e parâmetros fora dos limites, ou datas sem fuso, respondem 422. O contrato completo aparece em `http://localhost:8000/docs`, que não é publicado pelo túnel.
+
+```bash
+curl -H "Authorization: Bearer <token de leitura>" http://localhost:8000/v1/devices
+```
+
+O local de cada nó aparece no app e no dashboard. Ele é gravado depois da primeira leitura do nó, que o cadastra no banco:
+
+```bash
+python -m scripts.set_location no-01 "EE Exemplo, Vila Mariana (fachada, 3 m do chão)"
+```
 
 ## Banco de dados
 
@@ -177,10 +201,10 @@ Os nós ficam em redes diferentes da do servidor, então a leitura viaja pela in
                        internet                                    computador do servidor (Windows)
 nó ESP32 ──HTTPS──▶ Funnel (retransmissão da Tailscale) ──TCP cifrado──▶ tailscaled ──HTTP──▶ API (127.0.0.1:8000) ──▶ SQLite
  valida o certificado    https://MAQUINA.TAILNET.ts.net                  termina o TLS            uvicorn --proxy-headers
- (ISRG Root X1)          só /v1/measurements e /health                   coloca X-Forwarded-For   (o dashboard, :8501, não é publicado)
+ (ISRG Root X1)          /v1/measurements, /v1/devices e /health         coloca X-Forwarded-For   (o dashboard, :8501, não é publicado)
 ```
 
-O túnel publica só dois caminhos, `/v1/measurements` (ingestão) e `/health`. A documentação e o painel interativo da API (`/docs`, `/openapi.json`) não passam, e o dashboard Streamlit não é exposto. A API continua escutando apenas em `127.0.0.1`, e o `--proxy-headers` do uvicorn (aceito só de `127.0.0.1`) faz o IP gravado em `ingest_batches` e `invalid_messages` ser o do nó, não o do túnel.
+O túnel publica só três caminhos: `/v1/measurements` (ingestão), `/v1/devices` (leitura, para o app de consulta) e `/health`. A documentação e o painel interativo da API (`/docs`, `/openapi.json`) não passam, e o dashboard Streamlit não é exposto. A API continua escutando apenas em `127.0.0.1`, e o `--proxy-headers` do uvicorn (aceito só de `127.0.0.1`) faz o IP gravado em `ingest_batches` e `invalid_messages` ser o do nó, não o do túnel.
 
 ### Passos do usuário
 
@@ -190,17 +214,18 @@ Nada disto foi executado na implementação: dependem da sua conta e do computad
 2. No painel de administração, em DNS, ative o **MagicDNS** e o **HTTPS Certificates** (a Tailscale emite o certificado pela Let's Encrypt).
 3. Ative a exposição pública (o atributo `funnel`). Ao rodar o primeiro `tailscale funnel`, o cliente abre uma página para aprovar. Também dá para editar a política da conta (Access controls) e acrescentar `"nodeAttrs": [{"target": ["autogroup:member"], "attr": ["funnel"]}]`; restrinja `target` ao seu usuário ou à máquina do servidor se a conta tiver outros membros.
 4. Atualize o servidor: reinstale as tarefas com `server\deploy\windows\install.ps1` (a API passa a escutar só em `127.0.0.1` e a regra de firewall da porta 8000 é removida), e reinicie a API.
-5. Cadastre um token para o dispositivo de teste e um para cada nó em `server\.env`, por exemplo `PM25_DEVICE_TOKENS=no-01:<token>,no-02:<token>,teste-https:<token>`. Gere cada token com `python -c "import secrets; print(secrets.token_urlsafe(24))"`.
-6. Publique só os dois caminhos, apontando para a API local (PowerShell, no servidor):
+5. Cadastre um token para o dispositivo de teste e um para cada nó em `server\.env`, por exemplo `PM25_DEVICE_TOKENS=no-01:<token>,no-02:<token>,teste-https:<token>`. Gere cada token com `python -c "import secrets; print(secrets.token_urlsafe(24))"`. Para o app de consulta, gere mais um e grave em `PM25_READ_TOKEN`.
+6. Publique só os três caminhos, apontando para a API local (PowerShell, no servidor):
 
    ```powershell
    tailscale funnel --bg --set-path=/v1/measurements http://127.0.0.1:8000/v1/measurements
+   tailscale funnel --bg --set-path=/v1/devices http://127.0.0.1:8000/v1/devices
    tailscale funnel --bg --set-path=/health http://127.0.0.1:8000/health
    tailscale funnel status
    ```
 
    O Funnel só aceita as portas 443, 8443 e 10000 (a padrão é a 443, sem porta na URL). O `--bg` mantém a publicação depois de reinicializações. O prefixo do caminho é removido antes de a requisição chegar à API, por isso o destino repete o caminho. A URL pública é `https://<máquina>.<tailnet>.ts.net`, exibida pelo `status`. Para desfazer: repita o comando com `off` no fim.
-7. Confira o isolamento, de qualquer rede: `curl -i https://<URL pública>/health` deve responder 200, e `/docs` e `/` devem responder 404.
+7. Confira o isolamento, de qualquer rede: `curl -i https://<URL pública>/health` deve responder 200, e `/docs` e `/` devem responder 404. `/v1/devices` deve responder 401 sem token e 200 com `-H "Authorization: Bearer <token de leitura>"`; `/v1/devices/<id>/hourly` com o mesmo token confirma que os subcaminhos passam pelo túnel (o código-fonte do cliente repassa o resto do caminho, mas isso não foi testado com o Funnel).
 8. Teste o caminho completo, **de outra rede** (por exemplo, o celular como roteador ou outro computador), com o `check_https.py`:
 
    ```bash
@@ -218,6 +243,7 @@ Nada disto foi executado na implementação: dependem da sua conta e do computad
 | Corpo acima de `PM25_MAX_BODY_BYTES` (padrão 256 KiB; um lote de 500 leituras ocupa ~125 KiB) | 413 | nenhum |
 | Token ausente ou inválido | 401 com a mesma mensagem nos dois casos | `invalid_messages`, sem o token |
 | Token válido para outro `device_id` | 403 | `invalid_messages` |
+| Rota de leitura sem o token de leitura (inclusive com o token de um nó) | 401 | nenhum (conta para o bloqueio do IP) |
 | `PM25_AUTH_MAX_FAILS` (10) falhas de autenticação seguidas do mesmo IP | 429 com `Retry-After`, por `PM25_AUTH_BLOCK_MIN` (5) minutos, mesmo com token correto | nenhum |
 
 O contador fica só na memória, por IP, e zera com uma autenticação válida (um 403 conta como autenticação válida). Reiniciar a API libera todos os IPs. O firmware trata 401, 403 e 429 como erro a corrigir ou a esperar: o lote continua no buffer e é reenviado com espera crescente.

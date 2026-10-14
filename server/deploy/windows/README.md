@@ -39,7 +39,7 @@ Ao final ele testa `http://127.0.0.1:8000/health`.
 
 ## Depois de instalar
 
-1. Siga a seção "Transporte HTTPS entre redes" do README principal: instalar o Tailscale, publicar os caminhos `/v1/measurements` e `/health` com `tailscale funnel` e testar com `scripts/check_https.py`. Use a URL pública em `API_URL` no `config.h` de cada nó.
+1. Siga a seção "Transporte HTTPS entre redes" do README principal: instalar o Tailscale, publicar os caminhos `/v1/measurements`, `/v1/devices` e `/health` com `tailscale funnel` e testar com `scripts/check_https.py`. Use a URL pública em `API_URL` no `config.h` de cada nó.
 2. Defina `PM25_BACKUP_DIR` no `.env` como uma pasta fora do disco do servidor (pendrive ou pasta sincronizada com a nuvem).
 3. Alternativa HTTP na rede local, sem túnel: defina a variável de sistema `PM25_API_HOST=0.0.0.0`, reinstale com `-OpenApiPort`, reserve o IP da máquina no roteador, deixe a rede do Windows como **Privada** (em rede Pública a regra do firewall não vale) e use `http://<ip>:8000/v1/measurements` em `API_URL`.
 

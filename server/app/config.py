@@ -15,6 +15,7 @@ load_dotenv(os.environ.get("PM25_ENV_FILE", ".env"))
 class Settings:
     db_path: str
     device_tokens: dict[str, str]  # token -> device_id
+    read_token: str                # token do app de consulta; vazio desliga as rotas de leitura
     backup_dir: str
     backup_keep: int
     telegram_token: str
@@ -28,6 +29,9 @@ class Settings:
     @property
     def device_ids(self) -> list[str]:
         return sorted(set(self.device_tokens.values()))
+
+    def is_read_token(self, token: str) -> bool:
+        return bool(self.read_token) and hmac.compare_digest(self.read_token.encode(), token.encode())
 
     def device_for_token(self, token: str) -> str | None:
         """Compara o token com todos os cadastrados em tempo constante."""
@@ -51,12 +55,23 @@ def _parse_tokens(raw: str) -> dict[str, str]:
     return tokens
 
 
+def _parse_read_token(raw: str, device_tokens: dict[str, str]) -> str:
+    token = raw.strip()
+    if token and len(token) < 16:
+        raise ValueError("PM25_READ_TOKEN muito curto (mínimo 16 caracteres)")
+    if token in device_tokens:
+        raise ValueError("PM25_READ_TOKEN não pode repetir o token de um nó")
+    return token
+
+
 @lru_cache
 def get_settings() -> Settings:
     env = os.environ.get
+    device_tokens = _parse_tokens(env("PM25_DEVICE_TOKENS", ""))
     return Settings(
         db_path=env("PM25_DB_PATH", "data/pm25.db"),
-        device_tokens=_parse_tokens(env("PM25_DEVICE_TOKENS", "")),
+        device_tokens=device_tokens,
+        read_token=_parse_read_token(env("PM25_READ_TOKEN", ""), device_tokens),
         backup_dir=env("PM25_BACKUP_DIR", "backups"),
         backup_keep=int(env("PM25_BACKUP_KEEP", "14")),
         telegram_token=env("PM25_TELEGRAM_TOKEN", ""),
