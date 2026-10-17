@@ -124,7 +124,7 @@ def test_main_gera_relatorio(conn, tmp_path, capsys):
     assert rc == 0
     report = json.loads(out.read_text(encoding="utf-8"))
     assert report["devices"] == ["no-01", "no-02"]
-    assert set(report["results"]) == {tf.PERSISTENCE, "Ridge"}
+    assert set(report["results"]) == {tf.PERSISTENCE, "Ridge", tf.GBOOST}
     assert report["results"]["Ridge"]["test"]["n"] > 0
     assert "Ridge" in capsys.readouterr().out
 
@@ -148,6 +148,16 @@ def test_dados_insuficientes_retorna_erro(conn, capsys):
 def test_banco_inexistente(tmp_path, capsys):
     assert tf.main(["--db", str(tmp_path / "nao-existe.db")]) == 1
     assert "não encontrado" in capsys.readouterr().err
+
+
+def test_gradient_boosting_supera_a_persistencia_em_serie_com_reversao_a_media(conn):
+    insert_hours(conn, "no-01", series(24 * 45, seed=1))
+    frame = tf.build_dataset(conn, ["no-01"], min_samples=1)
+    folds, final = tf.make_splits(frame.index, 7, 14, 7)
+    res = tf.evaluate(frame, {tf.GBOOST: tf.predict_gboost}, folds, final)
+    # a série é linear: as árvores a aproximam em degraus e ganham menos que o Ridge, mas ganham
+    assert res[tf.GBOOST]["validation"]["skill"] > 0.05
+    assert res[tf.GBOOST]["test"]["skill"] > 0.05
 
 
 def mlp_split(conn):
@@ -250,7 +260,7 @@ def test_predictions_csv_traz_previsoes_do_teste_final(conn, tmp_path):
     rc, report = run_main(conn, tmp_path, "--no-mlp", "--predictions-csv", str(csv_path))
     assert rc == 0
     df = pd.read_csv(csv_path)
-    assert list(df.columns) == ["hora", "no", "observado", "persistencia", "ridge"]   # sem mlp com --no-mlp
+    assert list(df.columns) == ["hora", "no", "observado", "persistencia", "ridge", "gboost"]   # sem mlp com --no-mlp
     assert len(df) == report["results"]["Ridge"]["test"]["n"] == report["results"][tf.PERSISTENCE]["test"]["n"]
     assert set(df["no"]) == {"no-01", "no-02"}
     assert df.groupby("no")["hora"].apply(lambda h: h.is_monotonic_increasing).all()
@@ -278,7 +288,7 @@ def test_predictions_csv_inclui_a_mlp_da_semente_de_referencia(conn, tmp_path, m
     rc, _ = run_main(conn, tmp_path, "--predictions-csv", str(csv_path), "--seeds", "3")
     assert rc == 0
     df = pd.read_csv(csv_path)
-    assert list(df.columns) == ["hora", "no", "observado", "persistencia", "ridge", "mlp"]
+    assert list(df.columns) == ["hora", "no", "observado", "persistencia", "ridge", "gboost", "mlp"]
     assert np.allclose(df["mlp"] - df["persistencia"], (42 % 5) * 0.5)                 # semente 42, não 43 nem 44
 
 

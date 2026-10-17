@@ -1,8 +1,8 @@
 """Avaliação offline de modelos de previsão da média horária de PM2,5 (horizonte de 1 hora).
 
-Compara a persistência (último valor observado), uma regressão linear regularizada (Ridge) e um
-perceptron multicamadas (MLP), ambos do scikit-learn. Um único modelo é treinado com as séries de
-todos os nós.
+Compara a persistência (último valor observado), uma regressão linear regularizada (Ridge), um
+gradient boosting de árvores (HistGradientBoostingRegressor) e um perceptron multicamadas (MLP), todos
+do scikit-learn. Um único modelo é treinado com as séries de todos os nós.
 A avaliação tem duas partes, ambas cronológicas:
 
 - validação progressiva (walk-forward): janela de treino que cresce a cada dobra, sempre avaliando
@@ -22,7 +22,7 @@ congelado por `scripts.period_metrics --freeze`, não o banco em uso (no modo WA
 pode estar fora do arquivo principal).
 
 --predictions-csv grava, para o teste final, uma linha por hora e nó com as colunas hora (hora-alvo
-prevista, em UTC), no, observado, persistencia, ridge e mlp (sem a coluna mlp com --no-mlp).
+prevista, em UTC), no, observado, persistencia, ridge, gboost e mlp (sem a coluna mlp com --no-mlp).
 --seeds N repete o treino da MLP com N sementes consecutivas a partir de --seed; a primeira (42, por
 padrão) é a de referência e é a que aparece nos resultados e no CSV. Com N > 1 o relatório traz
 também a média e o desvio-padrão amostral do RMSE e do índice de habilidade entre as sementes.
@@ -51,6 +51,7 @@ MIN_SAMPLES = analytics.MIN_READINGS_PER_HOUR  # minutos com leitura para uma ho
 MIN_TRAIN_ROWS = 100    # abaixo disso o treino não é confiável
 EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 PERSISTENCE = "Persistência"
+GBOOST = "Gradient boosting"
 MLP = "MLP"
 
 
@@ -133,6 +134,18 @@ def predict_ridge(train, test, alpha: float = 10.0, **_) -> np.ndarray:
 
     xtr, xte, ytr = _prepare(train, test)
     model = make_pipeline(StandardScaler(), Ridge(alpha=alpha)).fit(xtr, ytr)
+    return test["pm25"].to_numpy(float) + model.predict(xte)
+
+
+def predict_gboost(train, test, seed: int = 42, gb_lr: float = 0.1, gb_max_iter: int = 100,
+                   gb_max_leaf_nodes: int = 31, gb_min_samples_leaf: int = 20, **_) -> np.ndarray:
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    xtr, xte, ytr = _prepare(train, test)
+    # Sem parada antecipada: o padrão "auto" a liga só acima de 10 000 linhas e valida numa amostra aleatória
+    model = HistGradientBoostingRegressor(learning_rate=gb_lr, max_iter=gb_max_iter, max_leaf_nodes=gb_max_leaf_nodes,
+                                          min_samples_leaf=gb_min_samples_leaf, early_stopping=False,
+                                          random_state=seed).fit(xtr, ytr)
     return test["pm25"].to_numpy(float) + model.predict(xte)
 
 
@@ -258,7 +271,7 @@ def database_info(path: str) -> dict:
     return {"file": os.path.basename(path), "sha256": digest.hexdigest(), "size_bytes": os.path.getsize(path)}
 
 
-COLUMN_NAMES = {PERSISTENCE: "persistencia", "Ridge": "ridge", MLP: "mlp"}
+COLUMN_NAMES = {PERSISTENCE: "persistencia", "Ridge": "ridge", GBOOST: "gboost", MLP: "mlp"}
 
 
 def write_predictions_csv(path: str, predictions: dict) -> int:
@@ -297,15 +310,15 @@ def format_seeds(results: dict) -> str:
 
 
 def format_table(results: dict) -> str:
-    lines = [f"{'Modelo':<14}{'Etapa':<12}{'Horas':>7}{'MAE':>9}{'RMSE':>9}{'Skill':>9}"]
+    lines = [f"{'Modelo':<19}{'Etapa':<12}{'Horas':>7}{'MAE':>9}{'RMSE':>9}{'Skill':>9}"]
     for name, stages in results.items():
         for stage, label in (("validation", "validação"), ("test", "teste")):
             m = stages[stage]
             if m is None:
-                lines.append(f"{name:<14}{label:<12}{'—':>7}")
+                lines.append(f"{name:<19}{label:<12}{'—':>7}")
                 continue
             skill = "—" if m["skill"] is None else f"{m['skill']:+.3f}"
-            lines.append(f"{name:<14}{label:<12}{m['n']:>7}{m['mae']:>9.2f}{m['rmse']:>9.2f}{skill:>9}")
+            lines.append(f"{name:<19}{label:<12}{m['n']:>7}{m['mae']:>9.2f}{m['rmse']:>9.2f}{skill:>9}")
     return "\n".join(lines)
 
 
@@ -319,12 +332,16 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--min-samples", type=int, default=MIN_SAMPLES, help="leituras por hora para a hora valer")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--ridge-alpha", type=float, default=10.0)
+    p.add_argument("--gb-lr", type=float, default=0.1)
+    p.add_argument("--gb-max-iter", type=int, default=100)
+    p.add_argument("--gb-max-leaf-nodes", type=int, default=31)
+    p.add_argument("--gb-min-samples-leaf", type=int, default=20)
     p.add_argument("--hidden", type=int, nargs="+", default=[32, 16])
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--epochs", type=int, default=200)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--patience", type=int, default=15)
-    p.add_argument("--no-mlp", action="store_true", help="avalia só persistência e Ridge")
+    p.add_argument("--no-mlp", action="store_true", help="não treina a MLP (a etapa mais demorada)")
     p.add_argument("--predictions-csv", default=None, help="grava as previsões do teste final em CSV")
     p.add_argument("--seeds", type=int, default=1, help="sementes da MLP (consecutivas a partir de --seed; padrão 1)")
     return p.parse_args(argv)
@@ -353,14 +370,17 @@ def main(argv=None) -> int:
         return 1
 
     folds, final = make_splits(frame.index, args.test_days, args.min_train_days, args.fold_days)
-    models = {PERSISTENCE: predict_persistence, "Ridge": predict_ridge}
-    hyper = {"seed": args.seed, "ridge_alpha": args.ridge_alpha}
+    models = {PERSISTENCE: predict_persistence, "Ridge": predict_ridge, GBOOST: predict_gboost}
+    hyper = {"seed": args.seed, "ridge_alpha": args.ridge_alpha, "gb_lr": args.gb_lr, "gb_max_iter": args.gb_max_iter,
+             "gb_max_leaf_nodes": args.gb_max_leaf_nodes, "gb_min_samples_leaf": args.gb_min_samples_leaf}
     if not args.no_mlp:
         models[MLP] = predict_mlp
         hyper.update(hidden=args.hidden, lr=args.lr, epochs=args.epochs, batch_size=args.batch_size,
                      patience=args.patience, optimizer="Adam", early_stopping=True, seeds=args.seeds)
-    kw = dict(alpha=args.ridge_alpha, seed=args.seed, hidden=tuple(args.hidden), lr=args.lr, epochs=args.epochs,
-              batch_size=args.batch_size, patience=args.patience)
+    kw = dict(alpha=args.ridge_alpha, seed=args.seed, gb_lr=args.gb_lr, gb_max_iter=args.gb_max_iter,
+              gb_max_leaf_nodes=args.gb_max_leaf_nodes, gb_min_samples_leaf=args.gb_min_samples_leaf,
+              hidden=tuple(args.hidden), lr=args.lr, epochs=args.epochs, batch_size=args.batch_size,
+              patience=args.patience)
     predictions: dict = {}
     results = evaluate(frame, models, folds, final, predictions=predictions, **kw)
     if args.seeds > 1:
