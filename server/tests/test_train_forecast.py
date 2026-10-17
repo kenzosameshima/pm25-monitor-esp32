@@ -1,9 +1,6 @@
 """Testes da avaliação offline de modelos de previsão: dados sintéticos, sem depender da coleta real."""
 
 import json
-import math
-import random
-from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -12,76 +9,9 @@ import pytest
 pytest.importorskip("sklearn")
 
 from app import db  # noqa: E402
+from app import forecasting as fc  # noqa: E402
 from scripts import train_forecast as tf  # noqa: E402
-
-START = datetime(2026, 9, 1, tzinfo=timezone.utc)
-
-
-def series(hours: int, seed: int = 0) -> list[float]:
-    """PM2,5 horário com reversão à média: a persistência erra bastante, um modelo linear acerta mais."""
-    rng = random.Random(seed)
-    x, out = 15.0, []
-    for h in range(hours):
-        daily = 6 * math.sin(2 * math.pi * (h % 24) / 24)
-        x = 0.4 * x + 0.6 * (15 + daily) + rng.gauss(0, 2.5)
-        out.append(max(1.0, x))
-    return out
-
-
-def insert_hours(conn, device: str, values: list[float], per_hour: int = 1, quality: str = "ok") -> None:
-    rows = []
-    for h, v in enumerate(values):
-        for m in range(per_hour):
-            ts = START + timedelta(hours=h, minutes=m)
-            rows.append({"device_id": device, "boot_id": 1, "seq": h * 60 + m, "ts_sensor": db.iso(ts),
-                         "ts_received": db.iso(ts), "pm1": None, "pm25": v, "pm10": None, "pm25_cf1": None,
-                         "temperature": 20.0 + h % 24 / 4, "humidity": 60.0, "rssi": -60, "uptime_s": 0,
-                         "samples": 58, "schema_version": "1", "quality": quality})
-    db.insert_batch(conn, device, rows, START)
-
-
-@pytest.fixture
-def conn(tmp_path):
-    c = db.connect(str(tmp_path / "pm25.db"))
-    db.init_db(c)
-    yield c
-    c.close()
-
-
-def test_hora_com_poucas_leituras_vira_lacuna(conn):
-    assert tf.MIN_SAMPLES == 45
-    insert_hours(conn, "no-01", [10.0, 20.0], per_hour=50)
-    insert_hours(conn, "no-02", [10.0, 20.0], per_hour=44)
-    assert list(tf.hourly_series(conn, "no-01")["pm25"]) == [10.0, 20.0]
-    assert tf.hourly_series(conn, "no-02")["pm25"].isna().all()           # 44 < 45 leituras: hora ausente
-    assert tf.hourly_series(conn, "no-01", min_samples=51)["pm25"].isna().all()
-
-
-def test_leituras_com_qualidade_ruim_sao_ignoradas(conn):
-    insert_hours(conn, "no-01", [10.0, 20.0, 30.0], quality="suspect")
-    assert tf.hourly_series(conn, "no-01", min_samples=1).empty
-
-
-def test_features_alvo_e_atrasos_sem_vazamento():
-    idx = pd.date_range(START, periods=48, freq="h")
-    hourly = pd.DataFrame({"pm25": np.arange(48.0), "humidity": 60.0, "temperature": 20.0, "n": 60}, index=idx)
-    f = tf.make_features(hourly, "no-01")
-    t = idx[30]
-    assert f.loc[t, "pm25"] == 30
-    assert f.loc[t, "y"] == 31                    # alvo: média da hora seguinte
-    assert f.loc[t, "lag_1"] == 29 and f.loc[t, "lag_24"] == 6
-    assert math.isnan(f.iloc[-1]["y"])            # a última hora não tem alvo
-
-
-def test_dataset_descarta_linhas_com_lacuna_nos_atrasos(conn):
-    values = series(100)
-    insert_hours(conn, "no-01", values[:50])
-    insert_hours(conn, "no-01", [])  # sem efeito
-    frame = tf.build_dataset(conn, ["no-01"], min_samples=1)
-    assert frame.index.min() == pd.Timestamp(START) + pd.Timedelta(hours=24)   # precisa de 24 h de histórico
-    assert frame.index.max() == pd.Timestamp(START) + pd.Timedelta(hours=48)   # a hora 49 não tem alvo
-    assert frame[tf.FEATURES].notna().all().all()
-
+from tests.forecast_data import START, conn, db_path, insert_hours, series  # noqa: E402,F401
 
 def test_divisoes_sao_cronologicas_e_sem_sobreposicao():
     idx = pd.date_range(START, periods=24 * 40, freq="h")
@@ -107,7 +37,7 @@ def test_skill_score():
 
 def test_ridge_supera_a_persistencia_em_serie_com_reversao_a_media(conn):
     insert_hours(conn, "no-01", series(24 * 45, seed=1))
-    frame = tf.build_dataset(conn, ["no-01"], min_samples=1)
+    frame = fc.dataset(conn, ["no-01"], min_samples=1)
     folds, final = tf.make_splits(frame.index, 7, 14, 7)
     res = tf.evaluate(frame, {tf.PERSISTENCE: tf.predict_persistence, "Ridge": tf.predict_ridge}, folds, final)
     assert res[tf.PERSISTENCE]["test"]["skill"] == pytest.approx(0.0)
@@ -119,7 +49,7 @@ def test_main_gera_relatorio(conn, tmp_path, capsys):
     insert_hours(conn, "no-01", series(24 * 40, seed=2))
     insert_hours(conn, "no-02", series(24 * 40, seed=3))
     out = tmp_path / "relatorio.json"
-    rc = tf.main(["--db", conn.execute("PRAGMA database_list").fetchone()[2], "--no-mlp",
+    rc = tf.main(["--db", db_path(conn), "--no-mlp",
                   "--min-samples", "1", "--out", str(out)])
     assert rc == 0
     report = json.loads(out.read_text(encoding="utf-8"))
@@ -131,7 +61,7 @@ def test_main_gera_relatorio(conn, tmp_path, capsys):
 
 def test_main_nao_escreve_no_banco(conn):
     insert_hours(conn, "no-01", series(24 * 40))
-    path = conn.execute("PRAGMA database_list").fetchone()[2]
+    path = db_path(conn)
     before = conn.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
     tf.main(["--db", path, "--no-mlp", "--min-samples", "1"])
     assert conn.execute("SELECT COUNT(*) FROM measurements").fetchone()[0] == before
@@ -140,7 +70,7 @@ def test_main_nao_escreve_no_banco(conn):
 
 def test_dados_insuficientes_retorna_erro(conn, capsys):
     insert_hours(conn, "no-01", series(60))
-    path = conn.execute("PRAGMA database_list").fetchone()[2]
+    path = db_path(conn)
     assert tf.main(["--db", path, "--no-mlp", "--min-samples", "1"]) == 1
     assert "insuficientes" in capsys.readouterr().err
 
@@ -152,7 +82,7 @@ def test_banco_inexistente(tmp_path, capsys):
 
 def test_gradient_boosting_supera_a_persistencia_em_serie_com_reversao_a_media(conn):
     insert_hours(conn, "no-01", series(24 * 45, seed=1))
-    frame = tf.build_dataset(conn, ["no-01"], min_samples=1)
+    frame = fc.dataset(conn, ["no-01"], min_samples=1)
     folds, final = tf.make_splits(frame.index, 7, 14, 7)
     res = tf.evaluate(frame, {tf.GBOOST: tf.predict_gboost}, folds, final)
     # a série é linear: as árvores a aproximam em degraus e ganham menos que o Ridge, mas ganham
@@ -160,64 +90,7 @@ def test_gradient_boosting_supera_a_persistencia_em_serie_com_reversao_a_media(c
     assert res[tf.GBOOST]["test"]["skill"] > 0.05
 
 
-def mlp_split(conn):
-    insert_hours(conn, "no-01", series(24 * 30, seed=4))
-    frame = tf.build_dataset(conn, ["no-01"], min_samples=1)
-    return frame.iloc[:-100], frame.iloc[-100:]
-
-
-def test_mlp_preve_com_formato_e_valores_validos(conn):
-    train, test = mlp_split(conn)
-    pred = tf.predict_mlp(train, test, seed=1, hidden=(8,), epochs=5, batch_size=64, patience=2)
-    assert pred.shape == (len(test),)
-    assert np.isfinite(pred).all()
-    assert abs(pred.mean() - test["y"].mean()) < 10
-
-
-def test_mlp_e_reproduzivel_pela_semente(conn):
-    train, test = mlp_split(conn)
-    kw = dict(hidden=(8,), epochs=5, batch_size=64, patience=2)
-    a, b = tf.predict_mlp(train, test, seed=1, **kw), tf.predict_mlp(train, test, seed=1, **kw)
-    assert np.array_equal(a, b)
-    assert not np.array_equal(a, tf.predict_mlp(train, test, seed=2, **kw))
-
-
-def test_mlp_valida_no_bloco_final_e_restaura_a_melhor_epoca(conn, monkeypatch):
-    from sklearn.neural_network import MLPRegressor
-
-    train, test = mlp_split(conn)
-    n_val = max(1, int(len(train) * 0.15))
-    yval = (train["y"] - train["pm25"]).to_numpy(float)[-n_val:]
-    fit_rows, epochs, final = set(), [], {}
-    original_fit, original_predict = MLPRegressor.partial_fit, MLPRegressor.predict
-
-    def partial_fit(self, x, y):
-        fit_rows.add(len(x))
-        return original_fit(self, x, y)
-
-    def predict(self, x):
-        out = original_predict(self, x)
-        if len(x) == n_val:                                        # validação ao fim de cada época
-            epochs.append((float(np.mean((out - yval) ** 2)), [w.copy() for w in self.coefs_]))
-        else:                                                      # previsão do teste
-            final["coefs"] = [w.copy() for w in self.coefs_]
-        return out
-
-    monkeypatch.setattr(MLPRegressor, "partial_fit", partial_fit)
-    monkeypatch.setattr(MLPRegressor, "predict", predict)
-    tf.predict_mlp(train, test, seed=1, hidden=(8,), epochs=30, batch_size=64, patience=3)
-
-    assert fit_rows == {len(train) - n_val}                        # o bloco final do treino fica de fora
-    best = int(np.argmin([loss for loss, _ in epochs]))
-    assert len(epochs) == min(30, best + 1 + 3)                    # para após 3 épocas sem melhora
-    assert all(np.array_equal(a, b) for a, b in zip(final["coefs"], epochs[best][1]))   # pesos da melhor época
-
-
 # ---------------- Reprodutibilidade, previsões do teste final e várias sementes ----------------
-
-def db_path(conn):
-    return conn.execute("PRAGMA database_list").fetchone()[2]
-
 
 def fake_mlp(train, test, seed=42, **_):
     """Substitui a MLP nos testes, mais rápida: persistência deslocada por um valor que depende da semente."""
@@ -294,7 +167,7 @@ def test_predictions_csv_inclui_a_mlp_da_semente_de_referencia(conn, tmp_path, m
 
 def test_evaluate_com_predictions_nao_muda_as_metricas(conn):
     insert_hours(conn, "no-01", series(24 * 40, seed=5))
-    frame = tf.build_dataset(conn, ["no-01"], min_samples=1)
+    frame = fc.dataset(conn, ["no-01"], min_samples=1)
     folds, final = tf.make_splits(frame.index, 7, 14, 7)
     models = {tf.PERSISTENCE: tf.predict_persistence, "Ridge": tf.predict_ridge}
     base = tf.evaluate(frame, models, folds, final)
@@ -328,7 +201,7 @@ def test_seeds_repete_o_treino_e_reporta_media_e_desvio(conn, tmp_path, mlp_fals
     assert agg["per_seed"][0]["test"] == mlp["test"] and agg["per_seed"][0]["validation"] == mlp["validation"]
 
     # confere com um cálculo independente, semente a semente
-    frame = tf.build_dataset(db_conn(conn), ["no-01", "no-02"], min_samples=1)
+    frame = fc.dataset(db_conn(conn), ["no-01", "no-02"], min_samples=1)
     folds, final = tf.make_splits(frame.index, 7, 14, 7)
     rmses = [tf.evaluate(frame, {"m": fake_mlp}, folds, final, seed=s)["m"]["test"]["rmse"] for s in (42, 43, 44)]
     assert [r["test"]["rmse"] for r in agg["per_seed"]] == pytest.approx(rmses)
