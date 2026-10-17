@@ -82,7 +82,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | Banco | pronto | Esquema com `measurements`, `ingest_batches`, `invalid_messages`, `forecasts` e `devices.location` | Testes | Coordenadas para mapa (exigiria migração) |
 | Backup, alerta, dashboard | pronto | Backup diário com verificação de integridade; alerta Telegram de nó mudo; dashboard local de 3 abas | Dashboard testado com o AppTest do Streamlit; backup e alerta sem testes automáticos | Testes do backup e do alerta; alerta de PM2,5 alto (hoje só de silêncio) |
 | Regras de análise (`analytics.py`) | pronto | Hora válida, estado, saúde da coleta, comparação de previsões, métricas | Testes próprios e comparação com a implementação anterior | Unificar a saúde da coleta do painel com a do `period_metrics` (definições diferentes; decisão pendente) |
-| Avaliação de modelos (`train_forecast.py`) | parcial | Persistência, Ridge e MLP, validação progressiva, teste final, relatório reproduzível | Testes com dados sintéticos | **Rodar com os dados reais da coleta** |
+| Avaliação de modelos (`train_forecast.py`) | parcial | Persistência, Ridge, gradient boosting e MLP (scikit-learn), validação progressiva, teste final, relatório reproduzível | Testes com dados sintéticos | **Rodar com os dados reais da coleta** |
 | **Job horário de previsão** | pendente | A tabela `forecasts` e todas as telas que a leem estão prontas | — | **Implementar o job que grava as previsões** |
 | Métricas do período e comparação CETESB | pronto | `period_metrics.py` (com congelamento do banco) e `compare_cetesb.py` | Testes | Rodar com os dados reais e o CSV do QUALAR |
 | Implantação | parcial | Scripts do Windows (tarefas agendadas), serviços systemd e crontab para Linux, passo a passo do túnel | Scripts escritos, sem registro de instalação verificada neste repositório | **Testar o túnel de verdade**, de outra rede, inclusive os subcaminhos de `/v1/devices` |
@@ -92,7 +92,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 
 | Parte | Automatizado | Verificado à mão |
 |---|---|---|
-| Servidor | 134 testes passando, 1 pulado (exige TensorFlow) | API real com o simulador e `curl` nas rotas de leitura |
+| Servidor | 141 testes passando | API real com o simulador e `curl` nas rotas de leitura |
 | Firmware | Testes no computador (parser, média, JSON) e compilação nas quatro combinações | — |
 | App Android | 40 testes de unidade: contrato JSON com respostas geradas pela própria API, erros, rede local, faixas, idade, hora estimada do servidor, resumo, previsão, cache em arquivo e estado das três telas | Emulador: permissão de rede local, as três telas, troca de janela, banco de 3 dias com lacuna e reinício, modelo de demonstração em `forecasts`, queda da API e reabertura sem servidor |
 
