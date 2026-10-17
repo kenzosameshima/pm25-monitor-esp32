@@ -28,7 +28,9 @@ VARIABLES = {
     "humidity": "Umidade relativa (%)",
 }
 
-st.set_page_config(page_title="PM2,5 — monitoramento", page_icon="🌫️", layout="wide")
+# Ícone em arquivo: um emoji como page_icon depende da fonte do sistema e quase some em 16 px.
+st.set_page_config(page_title="PM2,5 — monitoramento", page_icon=str(Path(__file__).with_name("favicon.svg")),
+                   layout="wide")
 alt.data_transformers.disable_max_rows()
 
 
