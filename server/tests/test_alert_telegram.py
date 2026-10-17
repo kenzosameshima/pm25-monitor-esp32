@@ -1,6 +1,8 @@
 """Testes do alerta operacional, sem Telegram configurado: as mensagens só são impressas."""
 
+import io
 import json
+import sys
 
 import pytest
 
@@ -32,6 +34,16 @@ def test_alerta_ignora_dispositivo_de_teste(state_path, capsys):
     out = capsys.readouterr().out
     assert "no-01 sem enviar dados" in out
     assert "teste-https" not in out
+
+
+def test_log_em_cp1252_nao_derruba_o_alerta(state_path, monkeypatch):
+    # No Windows, a saída redirecionada para o log é cp1252 fora do modo UTF-8, e o cp1252 não tem o ⚠️.
+    log = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", log)
+    assert alert_telegram.main() == 0
+    log.flush()
+    assert "[simulação] \\u26a0\\ufe0f no-01 sem enviar dados" in log.buffer.getvalue().decode("cp1252")
+    assert json.loads(state_path.read_text())["no-01"]["alerting"] is True
 
 
 def test_falha_no_envio_grava_o_estado_dos_avisos_anteriores(state_path, monkeypatch):

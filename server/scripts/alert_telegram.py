@@ -28,7 +28,9 @@ def fmt(dt: datetime | None) -> str:
 
 def send(token: str, chat_id: str, text: str) -> None:
     if not token or not chat_id:
-        print(f"[simulação] {text}")
+        # Um log que não codifica os emojis (cp1252 no Windows, fora do modo UTF-8) recebe escapes \uXXXX.
+        encoding = sys.stdout.encoding or "utf-8"
+        print(f"[simulação] {text}".encode(encoding, "backslashreplace").decode(encoding))
         return
     data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
