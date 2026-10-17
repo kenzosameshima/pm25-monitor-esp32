@@ -1,7 +1,8 @@
-"""Previsão da média horária de PM2,5 da hora seguinte: dados e modelos.
+"""Previsão da média horária de PM2,5 da hora seguinte: dados, modelos e arquivo do modelo treinado.
 
-A avaliação offline (scripts.train_forecast) monta as variáveis e treina os modelos por aqui, e
-`latest_row` monta as mesmas variáveis para a última hora completa, para prever a hora em andamento.
+A avaliação offline (scripts.train_forecast), o treino do modelo de produção (scripts.fit_forecast) e
+o job horário (scripts.forecast_job) passam todos por aqui, então as variáveis que um modelo vê em
+produção são as mesmas do treino e da avaliação.
 
 A tarefa: com as médias conhecidas até a hora t, prever a média de PM2,5 da hora t+1. Os modelos
 aprendem a variação em relação à persistência (PM2,5 de t+1 menos o de t) e devolvem o nível previsto.
@@ -9,9 +10,11 @@ aprendem a variação em relação à persistência (PM2,5 de t+1 menos o de t) 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from importlib import metadata
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -25,6 +28,7 @@ MIN_TRAIN_ROWS = 100    # abaixo disso o treino não é confiável
 _REQUIRED = ["pm25", *[f"lag_{k}" for k in LAGS]]  # sem elas a linha não entra; umidade e temperatura são imputadas
 _IMPUTED = ["humidity", "temperature"]
 _EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
+_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 # Hiperparâmetros fixados antes de ver os dados reais (ver README, "Avaliação de modelos de previsão").
 DEFAULTS = {
@@ -160,12 +164,13 @@ class Forecaster:
     estimator: object    # prevê a variação em relação à persistência a partir de FEATURES
     medians: dict        # umidade e temperatura do treino, para imputar horas sem esses sensores
     trained_on: dict     # linhas, nós, primeira e última hora t do treino
-    sklearn: str         # versão do scikit-learn do treino
+    sklearn: str         # versão do scikit-learn do treino; o arquivo só carrega com a mesma versão
+    version: str | None = None  # vira model_version em forecasts; definida por scripts.fit_forecast
 
     def predict(self, rows: pd.DataFrame) -> np.ndarray:
-        """PM2,5 médio previsto para a hora seguinte a cada linha, em µg/m³."""
+        """PM2,5 médio previsto para a hora seguinte a cada linha, em µg/m³ (nunca negativo)."""
         x = rows[FEATURES].fillna(self.medians).to_numpy(float)
-        return rows["pm25"].to_numpy(float) + self.estimator.predict(x)
+        return np.maximum(0.0, rows["pm25"].to_numpy(float) + self.estimator.predict(x))
 
 
 def fit(kind: str, train: pd.DataFrame, **params) -> Forecaster:
@@ -184,3 +189,54 @@ def fit(kind: str, train: pd.DataFrame, **params) -> Forecaster:
     trained_on = {"rows": len(train), "devices": sorted(set(train["device_id"])),
                   "first_hour": db.iso(train.index.min()), "last_hour": db.iso(train.index.max())}
     return Forecaster(kind, used, _BUILDERS[kind](x, y, **used), medians, trained_on, metadata.version("scikit-learn"))
+
+
+# ---------------------------------------------------------------- arquivo do modelo
+
+def file_name(kind: str, version: str) -> str:
+    """Nome do arquivo de um modelo: <kind>-<version>.joblib. Erro se a versão tiver caracteres inválidos."""
+    if not _VERSION.match(version):
+        raise ValueError(f"Versão inválida: {version!r} (use letras, números, ponto, hífen ou sublinhado)")
+    return f"{kind}-{version}.joblib"
+
+
+def save(forecaster: Forecaster, version: str, models_dir: str) -> Path:
+    """Grava o modelo com a versão dada. Erro se o arquivo já existir: uma versão gravada em forecasts
+    tem que corresponder a um único modelo."""
+    import joblib
+
+    path = Path(models_dir) / file_name(forecaster.kind, version)
+    if path.exists():
+        raise FileExistsError(f"{path} já existe; use outra versão")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    joblib.dump(replace(forecaster, version=version), tmp)
+    tmp.replace(path)
+    return path
+
+
+def load(path: str | Path) -> Forecaster:
+    """Carrega um modelo gravado por `save`. É um pickle: só carregue arquivos gerados neste servidor.
+
+    Erro se o scikit-learn instalado não for o do treino, porque o pickle não é garantido entre versões."""
+    import joblib
+
+    forecaster = joblib.load(path)
+    if not isinstance(forecaster, Forecaster) or forecaster.version is None:
+        raise ValueError(f"{path} não é um modelo gravado por scripts.fit_forecast")
+    installed = metadata.version("scikit-learn")
+    if forecaster.sklearn != installed:
+        raise ValueError(f"{path} foi treinado com scikit-learn {forecaster.sklearn}, e o instalado é o {installed}: "
+                         "treine de novo com scripts.fit_forecast")
+    return forecaster
+
+
+def load_all(models_dir: str) -> tuple[list[Forecaster], list[str]]:
+    """Todos os modelos de `models_dir`, em ordem de nome, e as mensagens de erro dos que não carregaram."""
+    loaded, errors = [], []
+    for path in sorted(Path(models_dir).glob("*.joblib")):
+        try:
+            loaded.append(load(path))
+        except Exception as exc:  # um arquivo ruim não impede os outros modelos
+            errors.append(f"{path.name}: {exc}")
+    return loaded, errors

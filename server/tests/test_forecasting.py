@@ -1,5 +1,6 @@
-"""Testes do módulo de previsão: dados de treino, linha da hora mais recente e modelos."""
+"""Testes do módulo de previsão: dados de treino, linha do job, modelos e arquivo do modelo."""
 
+from dataclasses import replace
 from datetime import timedelta
 
 import numpy as np
@@ -85,10 +86,19 @@ def train_test(conn):
 def test_fit_registra_o_treino_e_preve_cada_linha(train_test):
     train, test = train_test
     model = fc.fit("ridge", train)
-    assert model.params == fc.DEFAULTS["ridge"]
+    assert model.params == fc.DEFAULTS["ridge"] and model.version is None
     assert model.trained_on["rows"] == len(train) and model.trained_on["devices"] == ["no-01"]
     pred = model.predict(test)
     assert pred.shape == (len(test),) and np.isfinite(pred).all()
+
+
+def test_previsao_nunca_e_negativa(train_test):
+    class Queda:
+        def predict(self, x):
+            return np.full(len(x), -1000.0)
+
+    train, test = train_test
+    assert (replace(fc.fit("ridge", train), estimator=Queda()).predict(test) == 0).all()
 
 
 def test_fit_recusa_modelo_ou_hiperparametro_desconhecido(train_test):
@@ -151,3 +161,42 @@ def test_mlp_valida_no_bloco_final_e_restaura_a_melhor_epoca(train_test, monkeyp
     best = int(np.argmin([loss for loss, _ in epochs]))
     assert len(epochs) == min(30, best + 1 + 3)                    # para após 3 épocas sem melhora
     assert all(np.array_equal(a, b) for a, b in zip(final["coefs"], epochs[best][1]))   # pesos da melhor época
+
+
+# ---------------------------------------------------------------- arquivo do modelo
+
+def test_save_e_load_preservam_o_modelo(train_test, tmp_path):
+    train, test = train_test
+    model = fc.fit("ridge", train)
+    path = fc.save(model, "v0", str(tmp_path / "models"))
+    assert path.name == "ridge-v0.joblib"
+    loaded = fc.load(path)
+    assert loaded.version == "v0" and loaded.kind == "ridge"
+    assert np.array_equal(loaded.predict(test), model.predict(test))
+
+
+def test_versao_gravada_nao_e_sobrescrita(train_test, tmp_path):
+    train, _ = train_test
+    fc.save(fc.fit("ridge", train), "v0", str(tmp_path))
+    with pytest.raises(FileExistsError):
+        fc.save(fc.fit("ridge", train, alpha=1.0), "v0", str(tmp_path))
+    with pytest.raises(ValueError, match="Versão inválida"):
+        fc.save(fc.fit("ridge", train), "../v1", str(tmp_path))
+
+
+def test_load_recusa_outra_versao_do_scikit_learn(train_test, tmp_path, monkeypatch):
+    train, _ = train_test
+    path = fc.save(fc.fit("ridge", train), "v0", str(tmp_path))
+    monkeypatch.setattr(fc.metadata, "version", lambda name: "0.0.0")
+    with pytest.raises(ValueError, match="treine de novo"):
+        fc.load(path)
+
+
+def test_load_all_ignora_arquivo_ruim_e_conta_o_erro(train_test, tmp_path):
+    train, _ = train_test
+    fc.save(fc.fit("ridge", train), "v0", str(tmp_path))
+    (tmp_path / "estragado.joblib").write_bytes(b"isto nao e um modelo")
+    (tmp_path / "anotacoes.txt").write_text("fora do padrão de nome")
+    models, errors = fc.load_all(str(tmp_path))
+    assert [(m.kind, m.version) for m in models] == [("ridge", "v0")]
+    assert len(errors) == 1 and errors[0].startswith("estragado.joblib")
