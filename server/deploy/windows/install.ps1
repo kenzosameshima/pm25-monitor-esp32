@@ -13,6 +13,7 @@ O que faz:
       pm25-api        na inicializacao, reinicia se cair
       pm25-dashboard  na inicializacao, reinicia se cair (pule com -NoDashboard)
       pm25-alert      a cada 5 minutos
+      pm25-forecast   a cada hora, aos 5 minutos (previsao de PM2,5)
       pm25-backup     todo dia as 03:15
 
 Uso (PowerShell como administrador, dentro de server\deploy\windows):
@@ -48,6 +49,11 @@ try {
     if (-not $NoDashboard) {
         & $py -c "import streamlit, pandas, altair"
         if ($LASTEXITCODE -ne 0) { throw 'Dependencias do dashboard ausentes: rode .venv\Scripts\python.exe -m pip install -r requirements-dashboard.txt' }
+    }
+    & $py -c "import importlib.util as u, sys; sys.exit(0 if u.find_spec('sklearn') and u.find_spec('joblib') else 1)"
+    if ($LASTEXITCODE -ne 0) { Warn 'scikit-learn ausente: a tarefa pm25-forecast vai falhar ate rodar .venv\Scripts\python.exe -m pip install -r requirements-ml.txt' }
+    if (-not (Get-ChildItem (Join-Path $server 'data\models') -Filter *.joblib -ErrorAction SilentlyContinue)) {
+        Warn 'nenhum modelo em data\models: a tarefa pm25-forecast so grava previsoes depois de python -m scripts.fit_forecast'
     }
 } finally { Pop-Location }
 
@@ -124,6 +130,10 @@ $every5 = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval
     -RepetitionDuration (New-TimeSpan -Days 3650)
 Register-Pm25Task 'pm25-alert' 'run-alert.cmd' $every5 'PM2.5 - alerta no Telegram a cada 5 minutos'
 
+$hourly = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddMinutes(5) -RepetitionInterval (New-TimeSpan -Hours 1) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)
+Register-Pm25Task 'pm25-forecast' 'run-forecast.cmd' $hourly 'PM2.5 - previsao da hora em andamento, a cada hora (HH:05)'
+
 Register-Pm25Task 'pm25-backup' 'run-backup.cmd' (New-ScheduledTaskTrigger -Daily -At '03:15') `
     'PM2.5 - backup diario do banco'
 
@@ -154,4 +164,4 @@ if ($OpenApiPort) {
 } else {
     Write-Host 'API em http://127.0.0.1:8000, so nesta maquina. Publique-a pelo tunel HTTPS (secao "Transporte HTTPS entre redes" do README).'
 }
-Write-Host "Logs em $server\data (api.log, dashboard.log, alert.log, backup.log)."
+Write-Host "Logs em $server\data (api.log, dashboard.log, alert.log, forecast.log, backup.log)."
