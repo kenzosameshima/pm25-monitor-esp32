@@ -1,7 +1,8 @@
 """Avaliação offline de modelos de previsão da média horária de PM2,5 (horizonte de 1 hora).
 
 Compara a persistência (último valor observado), uma regressão linear regularizada (Ridge) e um
-perceptron multicamadas (MLP) em Keras. Um único modelo é treinado com as séries de todos os nós.
+perceptron multicamadas (MLP), ambos do scikit-learn. Um único modelo é treinado com as séries de
+todos os nós.
 A avaliação tem duas partes, ambas cronológicas:
 
 - validação progressiva (walk-forward): janela de treino que cresce a cada dobra, sempre avaliando
@@ -15,7 +16,7 @@ Uso: python -m scripts.train_forecast [--db CAMINHO] [--out relatorio.json] [--n
                                       [--predictions-csv previsao_teste.csv] [--seeds N]
 Requer as dependências de requirements-ml.txt.
 
-O relatório JSON registra as versões de Python, numpy, pandas, scikit-learn e TensorFlow e o hash
+O relatório JSON registra as versões de Python, numpy, pandas e scikit-learn e o hash
 SHA-256 do arquivo de banco lido. Para o hash identificar o conjunto de dados, passe o banco
 congelado por `scripts.period_metrics --freeze`, não o banco em uso (no modo WAL, parte dos dados
 pode estar fora do arquivo principal).
@@ -50,7 +51,7 @@ MIN_SAMPLES = analytics.MIN_READINGS_PER_HOUR  # minutos com leitura para uma ho
 MIN_TRAIN_ROWS = 100    # abaixo disso o treino não é confiável
 EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 PERSISTENCE = "Persistência"
-MLP = "MLP (Keras)"
+MLP = "MLP"
 
 
 def hourly_series(conn, device_id: str, min_samples: int = MIN_SAMPLES) -> pd.DataFrame:
@@ -137,23 +138,33 @@ def predict_ridge(train, test, alpha: float = 10.0, **_) -> np.ndarray:
 
 def predict_mlp(train, test, seed: int = 42, hidden=(32, 16), lr: float = 1e-3, epochs: int = 200,
                 batch_size: int = 32, patience: int = 15, val_fraction: float = 0.15, **_) -> np.ndarray:
-    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
-    from sklearn.preprocessing import StandardScaler
-    from tensorflow import keras
+    """MLP treinada época a época (`partial_fit`), com parada antecipada no bloco final do treino.
 
-    keras.utils.set_random_seed(seed)
+    O `early_stopping` do próprio MLPRegressor sorteia a validação; aqui ela é o bloco mais recente, em
+    ordem cronológica, e os pesos da melhor época são restaurados ao fim."""
+    from sklearn.neural_network import MLPRegressor
+    from sklearn.preprocessing import StandardScaler
+
     xtr, xte, ytr = _prepare(train, test)
     scaler = StandardScaler().fit(xtr)
     xtr, xte = scaler.transform(xtr), scaler.transform(xte)
-    n_val = max(1, int(len(xtr) * val_fraction))  # validação = bloco final do treino, em ordem cronológica
-    model = keras.Sequential([keras.Input(shape=(xtr.shape[1],)),
-                              *[keras.layers.Dense(h, activation="relu") for h in hidden],
-                              keras.layers.Dense(1)])
-    model.compile(optimizer=keras.optimizers.Adam(learning_rate=lr), loss="mse")
-    stop = keras.callbacks.EarlyStopping(monitor="val_loss", patience=patience, restore_best_weights=True)
-    model.fit(xtr[:-n_val], ytr[:-n_val], validation_data=(xtr[-n_val:], ytr[-n_val:]),
-              epochs=epochs, batch_size=batch_size, callbacks=[stop], shuffle=True, verbose=0)
-    return test["pm25"].to_numpy(float) + model.predict(xte, verbose=0).ravel()
+    n_val = max(1, int(len(xtr) * val_fraction))
+    xfit, yfit, xval, yval = xtr[:-n_val], ytr[:-n_val], xtr[-n_val:], ytr[-n_val:]
+    model = MLPRegressor(hidden_layer_sizes=hidden, activation="relu", solver="adam", learning_rate_init=lr,
+                         batch_size=batch_size, alpha=0.0, shuffle=True, random_state=seed)
+    best_loss, best_weights, waited = np.inf, None, 0
+    for _ in range(epochs):
+        model.partial_fit(xfit, yfit)  # uma época, com os lotes embaralhados pela semente
+        val_loss = float(np.mean((model.predict(xval) - yval) ** 2))
+        if val_loss < best_loss:
+            best_loss, waited = val_loss, 0
+            best_weights = ([w.copy() for w in model.coefs_], [b.copy() for b in model.intercepts_])
+        else:
+            waited += 1
+            if waited >= patience:
+                break
+    model.coefs_, model.intercepts_ = best_weights
+    return test["pm25"].to_numpy(float) + model.predict(xte)
 
 
 metrics = analytics.forecast_scores  # a mesma definição do painel
@@ -236,8 +247,7 @@ def package_version(*names: str) -> str | None:
 def environment_info() -> dict:
     """Versões das bibliotecas que determinam os números do relatório (RNF06)."""
     return {"python": platform.python_version(), "numpy": np.__version__, "pandas": pd.__version__,
-            "scikit-learn": package_version("scikit-learn"),
-            "tensorflow": package_version("tensorflow", "tensorflow-cpu", "tensorflow-intel", "tensorflow-macos")}
+            "scikit-learn": package_version("scikit-learn")}
 
 
 def database_info(path: str) -> dict:
@@ -346,11 +356,6 @@ def main(argv=None) -> int:
     models = {PERSISTENCE: predict_persistence, "Ridge": predict_ridge}
     hyper = {"seed": args.seed, "ridge_alpha": args.ridge_alpha}
     if not args.no_mlp:
-        try:
-            import tensorflow  # noqa: F401
-        except ImportError:
-            print("TensorFlow não instalado: use `pip install -r requirements-ml.txt` ou --no-mlp.", file=sys.stderr)
-            return 1
         models[MLP] = predict_mlp
         hyper.update(hidden=args.hidden, lr=args.lr, epochs=args.epochs, batch_size=args.batch_size,
                      patience=args.patience, optimizer="Adam", early_stopping=True, seeds=args.seeds)

@@ -150,15 +150,57 @@ def test_banco_inexistente(tmp_path, capsys):
     assert "não encontrado" in capsys.readouterr().err
 
 
-def test_mlp_keras_preve_com_formato_e_valores_validos(conn):
-    pytest.importorskip("tensorflow")
+def mlp_split(conn):
     insert_hours(conn, "no-01", series(24 * 30, seed=4))
     frame = tf.build_dataset(conn, ["no-01"], min_samples=1)
-    train, test = frame.iloc[:-100], frame.iloc[-100:]
+    return frame.iloc[:-100], frame.iloc[-100:]
+
+
+def test_mlp_preve_com_formato_e_valores_validos(conn):
+    train, test = mlp_split(conn)
     pred = tf.predict_mlp(train, test, seed=1, hidden=(8,), epochs=5, batch_size=64, patience=2)
     assert pred.shape == (len(test),)
     assert np.isfinite(pred).all()
     assert abs(pred.mean() - test["y"].mean()) < 10
+
+
+def test_mlp_e_reproduzivel_pela_semente(conn):
+    train, test = mlp_split(conn)
+    kw = dict(hidden=(8,), epochs=5, batch_size=64, patience=2)
+    a, b = tf.predict_mlp(train, test, seed=1, **kw), tf.predict_mlp(train, test, seed=1, **kw)
+    assert np.array_equal(a, b)
+    assert not np.array_equal(a, tf.predict_mlp(train, test, seed=2, **kw))
+
+
+def test_mlp_valida_no_bloco_final_e_restaura_a_melhor_epoca(conn, monkeypatch):
+    from sklearn.neural_network import MLPRegressor
+
+    train, test = mlp_split(conn)
+    n_val = max(1, int(len(train) * 0.15))
+    yval = (train["y"] - train["pm25"]).to_numpy(float)[-n_val:]
+    fit_rows, epochs, final = set(), [], {}
+    original_fit, original_predict = MLPRegressor.partial_fit, MLPRegressor.predict
+
+    def partial_fit(self, x, y):
+        fit_rows.add(len(x))
+        return original_fit(self, x, y)
+
+    def predict(self, x):
+        out = original_predict(self, x)
+        if len(x) == n_val:                                        # validação ao fim de cada época
+            epochs.append((float(np.mean((out - yval) ** 2)), [w.copy() for w in self.coefs_]))
+        else:                                                      # previsão do teste
+            final["coefs"] = [w.copy() for w in self.coefs_]
+        return out
+
+    monkeypatch.setattr(MLPRegressor, "partial_fit", partial_fit)
+    monkeypatch.setattr(MLPRegressor, "predict", predict)
+    tf.predict_mlp(train, test, seed=1, hidden=(8,), epochs=30, batch_size=64, patience=3)
+
+    assert fit_rows == {len(train) - n_val}                        # o bloco final do treino fica de fora
+    best = int(np.argmin([loss for loss, _ in epochs]))
+    assert len(epochs) == min(30, best + 1 + 3)                    # para após 3 épocas sem melhora
+    assert all(np.array_equal(a, b) for a, b in zip(final["coefs"], epochs[best][1]))   # pesos da melhor época
 
 
 # ---------------- Reprodutibilidade, previsões do teste final e várias sementes ----------------
@@ -168,16 +210,12 @@ def db_path(conn):
 
 
 def fake_mlp(train, test, seed=42, **_):
-    """Substitui a MLP nos testes, sem TensorFlow: persistência deslocada por um valor que depende da semente."""
+    """Substitui a MLP nos testes, mais rápida: persistência deslocada por um valor que depende da semente."""
     return test["pm25"].to_numpy(float) + (seed % 5) * 0.5
 
 
 @pytest.fixture
 def mlp_falsa(monkeypatch):
-    import sys
-    import types
-
-    monkeypatch.setitem(sys.modules, "tensorflow", types.ModuleType("tensorflow"))
     monkeypatch.setattr(tf, "predict_mlp", fake_mlp)
 
 
@@ -200,7 +238,7 @@ def test_relatorio_registra_versoes_e_hash_do_banco(conn, tmp_path):
     assert env["python"] == platform.python_version()
     assert env["numpy"] == np.__version__ and env["pandas"] == pd.__version__
     assert env["scikit-learn"] == sklearn.__version__
-    assert set(env) == {"python", "numpy", "pandas", "scikit-learn", "tensorflow"}   # None se não instalado
+    assert set(env) == {"python", "numpy", "pandas", "scikit-learn"}
     path = db_path(conn)
     with open(path, "rb") as fh:
         assert report["database"]["sha256"] == hashlib.sha256(fh.read()).hexdigest()
@@ -273,7 +311,7 @@ def test_agregacao_de_sementes_media_e_desvio_amostral():
 def test_seeds_repete_o_treino_e_reporta_media_e_desvio(conn, tmp_path, mlp_falsa):
     rc, report = run_main(conn, tmp_path, "--seeds", "3")
     assert rc == 0
-    mlp = report["results"]["MLP (Keras)"]
+    mlp = report["results"][tf.MLP]
     agg = mlp["seeds"]
     assert agg["seeds"] == [42, 43, 44] and report["hyperparameters"]["seeds"] == 3
     # a semente de referência continua sendo a 42: é o resultado principal e a primeira da lista
@@ -292,7 +330,7 @@ def test_seeds_repete_o_treino_e_reporta_media_e_desvio(conn, tmp_path, mlp_fals
 def test_uma_semente_mantem_o_formato_anterior(conn, tmp_path, mlp_falsa):
     rc, report = run_main(conn, tmp_path)               # --seeds padrão: 1
     assert rc == 0
-    assert "seeds" not in report["results"]["MLP (Keras)"]
+    assert "seeds" not in report["results"][tf.MLP]
     assert report["hyperparameters"]["seeds"] == 1
 
 
