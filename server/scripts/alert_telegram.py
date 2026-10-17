@@ -53,23 +53,26 @@ def main() -> int:
     else:
         last = {}
 
-    for device in devices:
-        seen = last.get(device)
-        silent = seen is None or now - seen > limit
-        alerting = state.get(device, {}).get("alerting", False)
-        if silent and not alerting:
-            send(s.telegram_token, s.telegram_chat_id,
-                 f"⚠️ {device} sem enviar dados há mais de {s.alert_silence_min} min "
-                 f"(último recebimento: {fmt(seen)}).")
-            state[device] = {"alerting": True, "since": db.iso(now)}
-        elif not silent and alerting:
-            since = datetime.fromisoformat(state[device]["since"].replace("Z", "+00:00"))
-            send(s.telegram_token, s.telegram_chat_id,
-                 f"✅ {device} voltou a enviar dados (alerta aberto às {fmt(since)}).")
-            state[device] = {"alerting": False}
-
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, indent=2))
+    # O estado muda só depois de cada envio. Se um falhar, os avisos já enviados ficam gravados
+    # (não se repetem) e o que falhou é tentado de novo na próxima execução.
+    try:
+        for device in devices:
+            seen = last.get(device)
+            silent = seen is None or now - seen > limit
+            alerting = state.get(device, {}).get("alerting", False)
+            if silent and not alerting:
+                send(s.telegram_token, s.telegram_chat_id,
+                     f"⚠️ {device} sem enviar dados há mais de {s.alert_silence_min} min "
+                     f"(último recebimento: {fmt(seen)}).")
+                state[device] = {"alerting": True, "since": db.iso(now)}
+            elif not silent and alerting:
+                since = datetime.fromisoformat(state[device]["since"].replace("Z", "+00:00"))
+                send(s.telegram_token, s.telegram_chat_id,
+                     f"✅ {device} voltou a enviar dados (alerta aberto às {fmt(since)}).")
+                state[device] = {"alerting": False}
+    finally:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(state, indent=2))
     return 0
 
 
