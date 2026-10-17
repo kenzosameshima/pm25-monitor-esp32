@@ -1,6 +1,6 @@
 # Sistema de monitoramento de PM2,5: planejamento e estado atual
 
-Situação em 14/10/2026, no commit `33a5ecd` da `main`. O [README](../README.md) é a referência de uso e de detalhes de cada parte; este documento reúne o plano, as decisões e o que está pronto, verificado ou pendente.
+Situação em 17/10/2026, com o job horário de previsão integrado à `main`. O [README](../README.md) é a referência de uso e de detalhes de cada parte; este documento reúne o plano, as decisões e o que está pronto, verificado ou pendente.
 
 ## 1. Objetivo e escopo
 
@@ -25,10 +25,11 @@ Um único tema ambiental basta para a atividade; o recorte é a poluição do ar
                                        │ SQLite (WAL, measurements imutável)      │
                                        │   ├─▶ backup diário (pendrive/nuvem)     │
                                        │   ├─▶ alerta Telegram (nó mudo 15 min)   │
+                                       │   ├─▶ job de previsão (HH:05, forecasts) │
                                        │   ├─▶ dashboard Streamlit (só local) ◀───┼──── navegador no servidor
                                        │   └─▶ scripts de análise (offline)       │
                                        │        train_forecast, period_metrics,   │
-                                       │        compare_cetesb                    │
+                                       │        compare_cetesb, fit_forecast      │
                                        └──────────────────────────────────────────┘
 ```
 
@@ -46,7 +47,10 @@ Fluxos:
 | Identidade da leitura `(device_id, boot_id, seq)` e descarte de duplicatas | Reenviar um lote é sempre seguro (entrega pelo menos uma vez com efeito de exatamente uma vez), e os tipos de falha ficam separáveis: salto de `seq` é perda, `boot_id` novo é reinício, minuto sem salto é falha do sensor |
 | Buffer de cinco dias em flash, reenvio com espera crescente, watchdog de 90 s, reinício após 15 min sem Wi-Fi | Tolerância a quedas de rede, de servidor e de energia sem perder dado |
 | Envio só depois do NTP; horários em UTC | Sem hora válida não há certificado TLS válido nem minuto confiável |
-| SQLite em WAL, `synchronous=FULL`, `measurements` imutável por gatilhos | Um arquivo, leitores concorrentes com um escritor, e a leitura bruta nunca é alterada; limpezas e agregações vão para tabelas e rotinas derivadas |
+| SQLite em WAL, `synchronous=FULL`, `measurements` imutável por gatilhos | Um arquivo, leitores concorrentes com as gravações serializadas, e a leitura bruta nunca é alterada; limpezas e agregações vão para tabelas e rotinas derivadas |
+| Job de previsão grava direto no SQLite, só em `forecasts` | A API deixa de ser o único escritor, mas o job faz uma transação curta por hora numa tabela que a API não usa; o WAL serializa as gravações e a conexão espera até 10 s por uma trava. Uma rota `POST` na API manteria um escritor só, com mais código, outro token e mais superfície exposta |
+| Dados e modelos de previsão num módulo só (`forecasting.py`) | A avaliação, o treino do modelo de produção e o job horário montam as variáveis com o mesmo código, então o modelo em produção vê o que viu no treino |
+| Versão de modelo imutável (`<modelo>-<versão>.joblib`) | Cada linha de `forecasts` aponta para um único modelo; versões diferentes aparecem lado a lado no painel e no app |
 | Túnel gerenciado (Tailscale Funnel) com certificado público, API presa ao loopback | Sem porta aberta, IP fixo, domínio ou CA própria; o túnel publica só `/v1/measurements`, `/v1/devices` e `/health` |
 | Token de leitura separado dos tokens dos nós | Um nó não lê e o app não grava; a configuração recusa um token de leitura igual ao de um nó |
 | Regras de análise num módulo só (`analytics.py`) | A hora válida (45 leituras), o estado do nó, a saúde da coleta e as métricas de previsão dão o mesmo número no painel, nos scripts e no app |
@@ -65,7 +69,7 @@ Fluxos:
 | Semântica de entrega e idempotência | Pelo menos uma vez com descarte de duplicatas por `(device_id, boot_id, seq)`; duplicatas contadas em `ingest_batches` e mostradas no app |
 | Relógios | NTP no nó; `generated_at` do servidor; idade e estado calculados no app com diferenças do relógio do celular, nunca com o valor absoluto dele |
 | Detecção de falhas | Alerta de nó mudo; estado `online`/`late`/`silent`; saúde da coleta com lacunas, perdas e reinícios |
-| Concorrência e consistência | WAL com um escritor e vários leitores; o app troca histórico e saúde juntos, só quando as duas respostas chegam |
+| Concorrência e consistência | WAL com dois escritores (a API e o job de previsão, que se revezam na trava) e vários leitores; previsões idempotentes por `UNIQUE (nó, hora-alvo, modelo, versão)`; o app troca histórico e saúde juntos, só quando as duas respostas chegam |
 | Segurança | TLS com raiz embutida no nó, tokens por papel, bloqueio de IP após falhas, limite de corpo, HTTP só no debug para endereços locais |
 | Limites | Servidor e banco únicos (ponto único de falha); o alerta não avisa se o próprio servidor cair |
 
@@ -83,7 +87,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | Backup, alerta, dashboard | pronto | Backup diário com verificação de integridade; alerta Telegram de nó mudo; dashboard local de 3 abas | Dashboard testado com o AppTest do Streamlit; backup e alerta sem testes automáticos | Testes do backup e do alerta; alerta de PM2,5 alto (hoje só de silêncio) |
 | Regras de análise (`analytics.py`) | pronto | Hora válida, estado, saúde da coleta, comparação de previsões, métricas | Testes próprios e comparação com a implementação anterior | Unificar a saúde da coleta do painel com a do `period_metrics` (definições diferentes; decisão pendente) |
 | Avaliação de modelos (`train_forecast.py`) | parcial | Persistência, Ridge, gradient boosting e MLP (scikit-learn), validação progressiva, teste final, relatório reproduzível | Testes com dados sintéticos | **Rodar com os dados reais da coleta** |
-| **Job horário de previsão** | pendente | A tabela `forecasts` e todas as telas que a leem estão prontas | — | **Implementar o job que grava as previsões** |
+| Job horário de previsão (`fit_forecast.py`, `forecast_job.py`) | parcial | Treino e gravação do modelo versionado, job a cada hora (HH:05) na tarefa `pm25-forecast` e no crontab, `ridge v0` provisório | Testes com dados sintéticos; uma execução pelo `run-forecast.cmd` no banco local, vista na série `ridge v0` do previsto × observado | **Treinar o modelo do TCC e instalar a tarefa no servidor** |
 | Métricas do período e comparação CETESB | pronto | `period_metrics.py` (com congelamento do banco) e `compare_cetesb.py` | Testes | Rodar com os dados reais e o CSV do QUALAR |
 | Implantação | parcial | Scripts do Windows (tarefas agendadas), serviços systemd e crontab para Linux, passo a passo do túnel | Scripts escritos, sem registro de instalação verificada neste repositório | **Testar o túnel de verdade**, de outra rede, inclusive os subcaminhos de `/v1/devices` |
 | App Android (`android/`) | pronto para demonstração | Tela inicial, detalhe com 24 h ou 7 dias e saúde da coleta, previsão previsto × observado, cache offline, permissão de rede local | 40 testes de unidade e lint sem problemas; fluxo completo no emulador (API 37) contra a API local, inclusive offline | Notificações; teste num celular real e pelo túnel; build de release assinado |
@@ -92,11 +96,11 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 
 | Parte | Automatizado | Verificado à mão |
 |---|---|---|
-| Servidor | 141 testes passando | API real com o simulador e `curl` nas rotas de leitura |
+| Servidor | 162 testes passando | API real com o simulador e `curl` nas rotas de leitura |
 | Firmware | Testes no computador (parser, média, JSON) e compilação nas quatro combinações | — |
 | App Android | 40 testes de unidade: contrato JSON com respostas geradas pela própria API, erros, rede local, faixas, idade, hora estimada do servidor, resumo, previsão, cache em arquivo e estado das três telas | Emulador: permissão de rede local, as três telas, troca de janela, banco de 3 dias com lacuna e reinício, modelo de demonstração em `forecasts`, queda da API e reabertura sem servidor |
 
-**Nunca verificado:** o nó com o hardware real; o túnel Funnel; o app num celular de verdade; o modelo real de previsão em produção. Os resultados do emulador usaram dados sintéticos e um modelo de demonstração (`demo v1`), que não é o modelo do TCC.
+**Nunca verificado:** o nó com o hardware real; o túnel Funnel; o app num celular de verdade; a tarefa `pm25-forecast` registrada pelo `install.ps1` e o modelo do TCC em produção. Os resultados do emulador usaram dados sintéticos e um modelo de demonstração (`demo v1`), que não é o modelo do TCC.
 
 ## 7. Pendências e riscos
 
@@ -104,7 +108,7 @@ Em ordem de prioridade:
 
 1. **Hardware real e coleta contínua.** É a base do TCC. Sem ela, os modelos, a comparação com a CETESB e as métricas do período só rodam com dados sintéticos.
 2. **Túnel em produção.** Seguir o passo a passo do README e testar de outra rede, com `check_https.py` para a ingestão e `curl` para `/v1/devices` e seus subcaminhos.
-3. **Job horário de previsão.** Hoje a tabela `forecasts` fica vazia e o app mostra só a persistência (e diz isso). O job precisa do modelo escolhido na avaliação offline e de um agendamento no servidor.
+3. **Modelo do TCC em produção.** O job horário e o `ridge v0` provisório estão prontos. Falta escolher o modelo na avaliação offline, com as cerca de 5 semanas de coleta, treiná-lo numa versão nova e instalar a tarefa `pm25-forecast` no servidor.
 4. **Notificações no app.** PM2,5 alto e nó mudo, verificados periodicamente em segundo plano (WorkManager, intervalo mínimo de 15 min) com notificação local, sem depender de Firebase.
 5. **Saúde da coleta com duas definições.** O painel e o `period_metrics` calculam completude e maior lacuna de jeitos diferentes; os números do app (que segue o painel) podem não bater com os do capítulo de resultados. Decidir se unifica.
 6. **Hooks de commit.** O `core.hooksPath` aponta para `.githooks`, que só existe na branch `chore/commit-hooks`, ainda não integrada; na prática nenhum hook roda nos clones atuais.
@@ -120,7 +124,7 @@ Riscos já conhecidos:
 
 1. Instalar um nó, validar no monitor serial e no dashboard, e deixar dois nós lado a lado de 3 a 7 dias para medir a concordância.
 2. Publicar o túnel e apontar o app para a URL pública (`pm25.apiUrl` no `local.properties`).
-3. Com algumas semanas de coleta, rodar `train_forecast.py` sobre o banco congelado, escolher o modelo e implementar o job horário.
+3. Com algumas semanas de coleta, rodar `train_forecast.py` sobre o banco congelado, escolher o modelo e treiná-lo com `fit_forecast.py` numa versão nova, que o job horário passa a gravar ao lado do `ridge v0`.
 4. Notificações no app.
 5. Rodar `period_metrics.py` e `compare_cetesb.py` para o capítulo de resultados.
 

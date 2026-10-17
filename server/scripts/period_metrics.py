@@ -25,7 +25,7 @@ import pandas as pd
 from app import db
 from app.analytics import is_test_device
 from app.config import get_settings
-from scripts.train_forecast import MIN_SAMPLES, hourly_series
+from app.forecasting import MIN_SAMPLES, hourly_series
 
 BRT = timezone(timedelta(hours=-3))
 MINUTES_PER_DAY = 1440

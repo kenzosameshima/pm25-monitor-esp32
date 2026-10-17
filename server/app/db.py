@@ -156,6 +156,23 @@ def fetch_forecasts(
     return conn.execute(sql, [iso(start), iso(end), *ids]).fetchall()
 
 
+def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> int:
+    """Grava previsões do job horário numa única transação. Retorna quantas eram novas.
+
+    Uma previsão já gravada (mesmo nó, hora-alvo, modelo e versão) é ignorada, então rodar o job de novo
+    na mesma hora não muda nada. `generated_at` e `target_hour` são datetimes com fuso."""
+    values = [(r["device_id"], iso(r["generated_at"]), iso(r["target_hour"]), r["predicted_pm25"],
+               r["model_name"], r["model_version"]) for r in rows]
+    with conn:
+        before = conn.total_changes
+        conn.executemany(
+            "INSERT OR IGNORE INTO forecasts (device_id, generated_at, target_hour, predicted_pm25, model_name,"
+            " model_version) VALUES (?, ?, ?, ?, ?, ?)",
+            values,
+        )
+        return conn.total_changes - before
+
+
 def fetch_ingest_batches(conn: sqlite3.Connection, since: datetime) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT received_at, device_id, n_readings, n_inserted, n_duplicates FROM ingest_batches"

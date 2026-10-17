@@ -1,6 +1,6 @@
 # Sistema de coleta de PM2,5 — TCC (UNIP, 2026)
 
-Este repositório reúne a cadeia de coleta e o painel do projeto: o firmware dos nós sensores (ESP32 + PMS5003 + BME280 ou DHT22), a API de ingestão, o banco SQLite, o backup diário, o alerta no Telegram, o dashboard em Streamlit, as rotas de leitura para o app de consulta, um simulador de sensor e os chips simulados do Wokwi, para testar tudo sem hardware. O pipeline de modelagem e o job horário de previsão são as próximas etapas e vão ler e gravar no mesmo banco.
+Este repositório reúne a cadeia de coleta e o painel do projeto: o firmware dos nós sensores (ESP32 + PMS5003 + BME280 ou DHT22), a API de ingestão, o banco SQLite, o backup diário, o alerta no Telegram, o dashboard em Streamlit, as rotas de leitura para o app de consulta, um simulador de sensor e os chips simulados do Wokwi, para testar tudo sem hardware. A avaliação dos modelos de previsão e o job horário que grava as previsões no mesmo banco também estão aqui; o modelo do TCC depende das semanas de coleta real.
 
 ```
 nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──▶ SQLite (WAL) ──▶ backup diário
@@ -13,8 +13,8 @@ nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──
 
 ```
 firmware/     código do ESP32 (PlatformIO); host_tests/ testa a parte sem hardware no computador
-server/app/   API (main.py), rotas de leitura (read_api.py), contrato de dados (models.py), acesso ao banco (db.py), regras de análise (analytics.py), esquema (schema.sql)
-server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py, set_location.py, check_https.py, train_forecast.py, period_metrics.py, compare_cetesb.py
+server/app/   API (main.py), rotas de leitura (read_api.py), contrato de dados (models.py), acesso ao banco (db.py), regras de análise (analytics.py), dados e modelos de previsão (forecasting.py), esquema (schema.sql)
+server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py, set_location.py, check_https.py, train_forecast.py, fit_forecast.py, forecast_job.py, period_metrics.py, compare_cetesb.py
 server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
@@ -137,7 +137,7 @@ Os testes de unidade cobrem o contrato JSON (com respostas reais da API), a clas
 
 ## Banco de dados
 
-O arquivo único do SQLite opera em modo WAL, que deixa o dashboard ler enquanto a API grava, e com `synchronous=FULL`, para que o 201 só saia depois de a leitura estar no disco. A tabela `measurements` é imutável: gatilhos impedem `UPDATE` e `DELETE`, e toda limpeza ou agregação vai para tabelas derivadas. Na ingestão só se marcam valores fisicamente implausíveis na coluna `quality`; critérios que podem mudar depois, como a marcação de umidade alta, ficam no processamento em batch. A tabela `ingest_batches` registra cada requisição aceita, e a `forecasts` já está pronta para o job horário.
+O arquivo único do SQLite opera em modo WAL, que deixa o dashboard ler enquanto a API grava, e com `synchronous=FULL`, para que o 201 só saia depois de a leitura estar no disco. A tabela `measurements` é imutável: gatilhos impedem `UPDATE` e `DELETE`, e toda limpeza ou agregação vai para tabelas derivadas. Na ingestão só se marcam valores fisicamente implausíveis na coluna `quality`; critérios que podem mudar depois, como a marcação de umidade alta, ficam no processamento em batch. A tabela `ingest_batches` registra cada requisição aceita, e a `forecasts` recebe as previsões do job horário (ver "Previsão em produção").
 
 Consultas que viram métricas de infraestrutura no capítulo de resultados:
 
@@ -225,6 +225,8 @@ crontab -e     # cole o conteúdo de server/deploy/crontab.example
 curl http://127.0.0.1:8000/health   # no próprio servidor; de fora, pelo túnel
 ```
 
+Para a previsão horária, instale também o `requirements-ml.txt` e treine um modelo (seção "Previsão em produção"); sem modelo em `data/models`, a linha do job no crontab só registra o aviso no log.
+
 Aponte `PM25_BACKUP_DIR` para um pendrive ou uma pasta sincronizada com a nuvem: um backup no mesmo cartão SD não protege contra falha do cartão, o risco mais comum em Raspberry Pi ligado por meses. Para o alerta, crie um bot com o @BotFather no Telegram, mande uma mensagem a ele e descubra o `chat_id` em `https://api.telegram.org/bot<token>/getUpdates`. Sem essas variáveis, `alert_telegram.py` só imprime as mensagens, o que serve para testar.
 
 Antes de instalar cada nó, meça o RSSI no ponto exato de instalação (o log mostra o valor a cada minuto), confirme que a rede permite NTP (porta UDP 123) e deixe os dois sensores lado a lado nos primeiros 3 a 7 dias, para medir a concordância entre eles.
@@ -310,7 +312,7 @@ Quando nó e servidor estão na mesma rede, dá para dispensar o túnel. Defina 
 
 ## Limitações conhecidas
 
-Leituras anteriores à primeira sincronização NTP após um boot são descartadas, porque não teriam horário confiável; um módulo de relógio DS3231 resolveria isso, se as redes bloquearem NTP. Entre redes, a comunicação depende do serviço de túnel (conta Tailscale, retransmissão e limite de banda da Tailscale, nome público atrelado à conta): se o serviço cair, os nós guardam até cinco dias de leituras em flash e reenviam depois. Na alternativa HTTP da rede local não há criptografia, só o token. O alerta roda no próprio servidor, então não avisa se o servidor inteiro cair; um serviço externo de monitoramento de disponibilidade cobriria esse caso. O banco pressupõe um único processo escritor (a API), coerente com a decisão de usar SQLite; o alerta e o backup só leem.
+Leituras anteriores à primeira sincronização NTP após um boot são descartadas, porque não teriam horário confiável; um módulo de relógio DS3231 resolveria isso, se as redes bloquearem NTP. Entre redes, a comunicação depende do serviço de túnel (conta Tailscale, retransmissão e limite de banda da Tailscale, nome público atrelado à conta): se o serviço cair, os nós guardam até cinco dias de leituras em flash e reenviam depois. Na alternativa HTTP da rede local não há criptografia, só o token. O alerta roda no próprio servidor, então não avisa se o servidor inteiro cair; um serviço externo de monitoramento de disponibilidade cobriria esse caso. Dois processos gravam no banco: a API, nas tabelas de ingestão, e o job horário de previsão, só em `forecasts`, numa transação curta por hora. O SQLite em WAL serializa as gravações, e cada conexão espera até 10 s por uma trava; com mais escritores ou gravações longas, a escolha do SQLite teria de ser revista. O alerta, o backup, o dashboard e os scripts de análise só leem.
 
 ## Avaliação de modelos de previsão
 
@@ -339,6 +341,24 @@ A MLP é treinada época a época (`partial_fit`), com parada antecipada nos 15%
 
 Os hiperparâmetros (`--hidden`, `--lr`, `--epochs`, `--seed` etc.) vão para o relatório em JSON.
 
+## Previsão em produção
+
+A avaliação offline escolhe o modelo; dois scripts o colocam no ar. Os três passam por `server/app/forecasting.py`, então o modelo em produção vê as mesmas variáveis e usa os mesmos hiperparâmetros fixos da avaliação.
+
+```
+pip install -r server/requirements-ml.txt
+cd server
+python -m scripts.fit_forecast --model ridge --version v0   # grava data/models/ridge-v0.joblib
+python -m scripts.forecast_job                              # o que a tarefa horária executa
+```
+
+- **`fit_forecast.py`** treina o modelo (`ridge`, `gboost` ou `mlp`) com todas as horas completas do banco, sem os nós de teste, e grava `<modelo>-<versão>.joblib` em `PM25_MODELS_DIR` (padrão `data/models`). Exige pelo menos 100 horas completas. Uma versão nunca é sobrescrita: um modelo novo, ou o mesmo modelo treinado com mais dados, ganha outra versão, para que cada linha de `forecasts` aponte para um único modelo. O arquivo registra a versão do scikit-learn do treino e só carrega com ela; depois de atualizar o scikit-learn, treine uma versão nova. O arquivo é um pickle: só carregue modelos gerados no próprio servidor.
+- **`forecast_job.py`** roda a cada hora, aos 5 minutos, para dar tempo de chegarem as últimas leituras da hora: tarefa `pm25-forecast` no Windows, linha do `crontab.example` no Linux, log em `data/forecast.log`. Para cada nó e cada modelo da pasta, usa as médias até a última hora completa e grava em `forecasts` a previsão da hora em andamento. Como a hora-alvo ainda não terminou, toda previsão antecede o valor observado (validação prospectiva). Um nó sem média válida na última hora, ou sem algum dos atrasos, fica sem previsão nessa hora, e uma hora perdida com o servidor desligado não é preenchida depois. Rodar de novo na mesma hora não duplica nada. O job termina com código 1 se nenhum modelo carregar ou se algum arquivo falhar (os outros modelos rodam assim mesmo), o que aparece no `LastTaskResult` da tarefa.
+- **Onde aparece:** cada modelo vira uma série "<modelo> <versão>" (por exemplo, `ridge v0`) na aba Previsto × observado do dashboard, na rota `/forecast` e na tela de previsão do app, ao lado da persistência, com MAE, RMSE e skill score medidos nas horas já observadas. Nenhum dos três precisou mudar.
+- **Trocar ou aposentar um modelo:** treine a versão nova e deixe as duas na pasta enquanto quiser compará-las lado a lado; para aposentar uma, tire o arquivo de `data/models`. As previsões já gravadas continuam no banco.
+
+Antes das cerca de 5 semanas de coleta, dá para pôr o caminho todo no ar com um Ridge provisório (`--version v0`), treinado com o que houver: ele começa a acumular previsões prospectivas e não interfere na avaliação offline, porque não influencia nenhuma escolha de hiperparâmetro. O modelo do TCC sai da avaliação e entra como uma versão nova.
+
 ## Métricas do período
 
 `server/scripts/period_metrics.py` consolida a coleta para a QP1 (completude, lacunas, reinícios) e para as estatísticas de PM2,5. Lê o banco em modo somente leitura e, com `--freeze`, congela o conjunto de dados usado.
@@ -358,7 +378,7 @@ Precisa de `pandas` (já instalado com o dashboard). Por padrão analisa todos o
 
 Definições. O período vai de `--start` 00:00 até o fim de `--end`, em horário de Brasília (UTC-3), e espera uma leitura por minuto. Completude é a fração dos minutos esperados com ao menos uma leitura recebida. A classificação das lacunas usa as definições do contrato de dados: entre duas leituras consecutivas, mudança de `boot_id` é **reinício**, salto de `seq` na mesma inicialização é **comunicação** (limitada aos minutos que faltam) e o restante é **aquisição**; o início e o fim do período sem leitura entram na completude e na maior lacuna como `bordas`, e `comunicacao + aquisicao + reinicio + bordas` soma os minutos faltantes. Mensagens perdidas são os saltos de `seq` na mesma inicialização; reinícios, as trocas de `boot_id`; duplicatas, a soma de `n_duplicates` dos lotes recebidos no período; RSSI, a média das leituras.
 
-As estatísticas de PM2,5 usam médias horárias válidas, isto é, horas com pelo menos 45 leituras de qualidade `ok`: a regra e a função vêm de `app/analytics.py` (`MIN_READINGS_PER_HOUR` e `hourly_means`, usadas pelo `hourly_series` de `train_forecast.py`), então o dashboard, a análise descritiva e a avaliação dos modelos usam as mesmas horas. O desvio-padrão é o amostral e os percentis usam interpolação linear. Uma média de 24 h (dia de calendário de Brasília) só conta com pelo menos 18 horas válidas, o mesmo 75% da hora.
+As estatísticas de PM2,5 usam médias horárias válidas, isto é, horas com pelo menos 45 leituras de qualidade `ok`: a regra e a função vêm de `app/analytics.py` (`MIN_READINGS_PER_HOUR` e `hourly_means`, usadas pelo `hourly_series` de `app/forecasting.py`), então o dashboard, a análise descritiva e a avaliação dos modelos usam as mesmas horas. O desvio-padrão é o amostral e os percentis usam interpolação linear. Uma média de 24 h (dia de calendário de Brasília) só conta com pelo menos 18 horas válidas, o mesmo 75% da hora.
 
 Limiares de média de 24 h (µg/m³), conferidos nos textos oficiais: OMS 2021 (Tabela 0.1 das diretrizes globais), nível-guia 15 e metas intermediárias 25, 37,5, 50 e 75; Resolução CONAMA nº 506/2024 (Anexo I), PI-1 60, PI-2 50, PI-3 37, PI-4 25 e PF 15. Para dados de 2026 o padrão nacional em vigor é o PI-2 (desde 2025-01-01). Cada limiar tem nome e comentário com a fonte em `period_metrics.py`. Nem a OMS nem o CONAMA definem limite horário de PM2,5: a contagem de horas acima de cada valor é só uma referência, e a comparação normativa é a das médias de 24 h.
 
@@ -393,4 +413,4 @@ O hook pode ser pulado localmente, então o workflow `commit-standards` repete a
 
 ## Próximos passos
 
-O pipeline de modelagem começa com os dados públicos da CETESB (QUALAR) e do INMET ou Open-Meteo, com baseline de persistência e validação walk-forward, e depois roda sobre este banco. O job horário grava previsões na tabela `forecasts` para a validação prospectiva. Com a coleta contínua em andamento, também fica possível simular ciclos de leitura do PMS5003 a partir dos dados de um minuto, para o estudo de consumo de energia.
+O pipeline de modelagem começa com os dados públicos da CETESB (QUALAR) e do INMET ou Open-Meteo, com baseline de persistência e validação walk-forward, e depois roda sobre este banco. O job horário já grava previsões na tabela `forecasts` para a validação prospectiva; falta o modelo escolhido com os dados reais. Com a coleta contínua em andamento, também fica possível simular ciclos de leitura do PMS5003 a partir dos dados de um minuto, para o estudo de consumo de energia.

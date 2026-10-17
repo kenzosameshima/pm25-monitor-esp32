@@ -47,8 +47,8 @@ import pandas as pd
 from app import db
 from app.analytics import HIGH_HUMIDITY, is_test_device
 from app.config import get_settings
+from app.forecasting import MIN_SAMPLES, hourly_series
 from scripts.period_metrics import BRT, period_bounds
-from scripts.train_forecast import MIN_SAMPLES, hourly_series
 
 HUMIDITY_LIMIT = HIGH_HUMIDITY  # % de umidade relativa; acima disso o PMS5003 tende a superestimar
 MIN_PAIRS = 24                  # abaixo disso a correlação e a regressão não são reportadas como confiáveis

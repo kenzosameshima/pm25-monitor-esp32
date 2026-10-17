@@ -8,9 +8,11 @@ Na máquina que será o servidor, dentro de `server`:
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements-dashboard.txt
+.venv\Scripts\python.exe -m pip install -r requirements-dashboard.txt -r requirements-ml.txt
 copy .env.example .env     # defina PM25_DEVICE_TOKENS (um nó: no-01:<token de 16+ caracteres>)
 ```
+
+O `requirements-ml.txt` (scikit-learn) é da previsão horária. Ela só grava depois que houver um modelo em `data\models`: com pelo menos 100 horas completas no banco, treine um com `.venv\Scripts\python.exe -m scripts.fit_forecast --model ridge --version v0` (seção "Previsão em produção" do README principal). Até lá, a tarefa `pm25-forecast` só registra o aviso no log.
 
 Depois, num PowerShell **como administrador**:
 
@@ -27,12 +29,13 @@ A instalação pode ser repetida depois de atualizar o projeto: ela recria as ta
 
 | Item | Efeito |
 |---|---|
-| Validação | Confere o `.venv`, o `.env` (tokens válidos) e as dependências do dashboard |
+| Validação | Confere o `.venv`, o `.env` (tokens válidos) e as dependências do dashboard; avisa se faltar o scikit-learn ou um modelo em `data\models` |
 | Energia | Desativa suspensão e hibernação (bateria e tomada) e a ação de fechar a tampa. Pule com `-SkipPower` |
 | Firewall | Nenhuma porta de entrada é aberta: a API (`127.0.0.1:8000`) é publicada pelo túnel. `-OpenApiPort` libera a TCP 8000 nas redes Privada e Domínio (alternativa HTTP na rede local) e `-OpenDashboardPort` a 8501 (dashboard) |
 | `pm25-api` | Tarefa na inicialização, como SYSTEM, sem precisar de login; reinicia a API se ela cair. Executa o uvicorn com `--host 127.0.0.1 --proxy-headers` (o host muda com a variável de sistema `PM25_API_HOST`) |
 | `pm25-dashboard` | Igual, para o Streamlit (pule com `-NoDashboard`) |
 | `pm25-alert` | A cada 5 minutos: alerta do Telegram |
+| `pm25-forecast` | A cada hora, aos 5 minutos: previsão da hora em andamento para cada nó e modelo, gravada em `forecasts` |
 | `pm25-backup` | Todo dia às 03:15: backup do banco |
 
 Ao final ele testa `http://127.0.0.1:8000/health`.
@@ -52,7 +55,7 @@ Stop-ScheduledTask pm25-api        # parar (o laço pode reiniciar o processo fi
 Get-Content ..\..\data\api.log -Tail 20 -Wait
 ```
 
-Logs em `server\data`: `api.log`, `dashboard.log`, `alert.log`, `backup.log`. Eles só crescem; apague ou arquive de tempos em tempos. Depois de editar o `.env`, reinicie a API:
+Logs em `server\data`: `api.log`, `dashboard.log`, `alert.log`, `forecast.log`, `backup.log`. Eles só crescem; apague ou arquive de tempos em tempos. Depois de editar o `.env`, reinicie a API:
 
 ```powershell
 Stop-ScheduledTask pm25-api; Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ? CommandLine -match 'uvicorn' | % { Stop-Process -Id $_.ProcessId -Force }; Start-ScheduledTask pm25-api

@@ -36,64 +36,18 @@ import json
 import os
 import platform
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from importlib import metadata
 
 import numpy as np
 import pandas as pd
 
-from app import analytics, db
+from app import analytics, db, forecasting
 from app.config import get_settings
 
-LAGS = (1, 2, 3, 6, 12, 24)
-FEATURES = ["pm25", *[f"lag_{k}" for k in LAGS], "humidity", "temperature", "hour_sin", "hour_cos"]
-MIN_SAMPLES = analytics.MIN_READINGS_PER_HOUR  # minutos com leitura para uma hora entrar na série
-MIN_TRAIN_ROWS = 100    # abaixo disso o treino não é confiável
-EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 PERSISTENCE = "Persistência"
 GBOOST = "Gradient boosting"
 MLP = "MLP"
-
-
-def hourly_series(conn, device_id: str, min_samples: int = MIN_SAMPLES) -> pd.DataFrame:
-    """Média horária de PM2,5, umidade e temperatura; horas com poucas leituras ficam como NaN."""
-    hourly = analytics.hourly_means(conn, EPOCH, datetime.now(timezone.utc) + timedelta(days=1), [device_id],
-                                    min_readings=min_samples)
-    columns = ["pm25", "humidity", "temperature", "n"]
-    if hourly.empty:
-        return pd.DataFrame(columns=columns)
-    return hourly.set_index("hora").rename_axis("ts")[columns]
-
-
-def make_features(hourly: pd.DataFrame, device_id: str) -> pd.DataFrame:
-    """Uma linha por hora t: variáveis conhecidas até t e alvo y = PM2,5 médio da hora t+1."""
-    f = pd.DataFrame(index=hourly.index)
-    f["pm25"] = hourly["pm25"]
-    for k in LAGS:
-        f[f"lag_{k}"] = hourly["pm25"].shift(k)
-    f["humidity"] = hourly["humidity"]
-    f["temperature"] = hourly["temperature"]
-    hour = hourly.index.hour
-    f["hour_sin"] = np.sin(2 * np.pi * hour / 24)
-    f["hour_cos"] = np.cos(2 * np.pi * hour / 24)
-    f["y"] = hourly["pm25"].shift(-1)
-    f["device_id"] = device_id
-    return f
-
-
-def build_dataset(conn, device_ids: list[str], min_samples: int = MIN_SAMPLES) -> pd.DataFrame:
-    """Linhas completas (sem lacunas nos atrasos nem no alvo) de todos os nós, em ordem cronológica."""
-    frames = []
-    for device in device_ids:
-        hourly = hourly_series(conn, device, min_samples)
-        if hourly.empty:
-            continue
-        f = make_features(hourly, device)
-        core = ["pm25", *[f"lag_{k}" for k in LAGS], "y"]
-        frames.append(f.dropna(subset=core))
-    if not frames:
-        return pd.DataFrame(columns=[*FEATURES, "y", "device_id"])
-    return pd.concat(frames).sort_index(kind="stable")
 
 
 def make_splits(index: pd.DatetimeIndex, test_days: int, min_train_days: int, fold_days: int):
@@ -115,69 +69,26 @@ def train_test(frame: pd.DataFrame, start, end):
     return train, test
 
 
-def _prepare(train: pd.DataFrame, test: pd.DataFrame):
-    """Imputa umidade e temperatura com a mediana do treino; o alvo é a variação em relação à persistência."""
-    med = train[["humidity", "temperature"]].median().fillna(0.0)
-    xtr = train[FEATURES].fillna(med)
-    xte = test[FEATURES].fillna(med)
-    return xtr.to_numpy(float), xte.to_numpy(float), (train["y"] - train["pm25"]).to_numpy(float)
+def _fit_predict(kind: str, train, test, kw: dict) -> np.ndarray:
+    """Treina `kind` com os hiperparâmetros de `kw` que ele tem (os nomes não se repetem entre modelos)."""
+    params = {k: v for k, v in kw.items() if k in forecasting.DEFAULTS[kind]}
+    return forecasting.fit(kind, train, **params).predict(test)
 
 
 def predict_persistence(train, test, **_) -> np.ndarray:
     return test["pm25"].to_numpy(float)
 
 
-def predict_ridge(train, test, alpha: float = 10.0, **_) -> np.ndarray:
-    from sklearn.linear_model import Ridge
-    from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import StandardScaler
-
-    xtr, xte, ytr = _prepare(train, test)
-    model = make_pipeline(StandardScaler(), Ridge(alpha=alpha)).fit(xtr, ytr)
-    return test["pm25"].to_numpy(float) + model.predict(xte)
+def predict_ridge(train, test, **kw) -> np.ndarray:
+    return _fit_predict("ridge", train, test, kw)
 
 
-def predict_gboost(train, test, seed: int = 42, gb_lr: float = 0.1, gb_max_iter: int = 100,
-                   gb_max_leaf_nodes: int = 31, gb_min_samples_leaf: int = 20, **_) -> np.ndarray:
-    from sklearn.ensemble import HistGradientBoostingRegressor
-
-    xtr, xte, ytr = _prepare(train, test)
-    # Sem parada antecipada: o padrão "auto" a liga só acima de 10 000 linhas e valida numa amostra aleatória
-    model = HistGradientBoostingRegressor(learning_rate=gb_lr, max_iter=gb_max_iter, max_leaf_nodes=gb_max_leaf_nodes,
-                                          min_samples_leaf=gb_min_samples_leaf, early_stopping=False,
-                                          random_state=seed).fit(xtr, ytr)
-    return test["pm25"].to_numpy(float) + model.predict(xte)
+def predict_gboost(train, test, **kw) -> np.ndarray:
+    return _fit_predict("gboost", train, test, kw)
 
 
-def predict_mlp(train, test, seed: int = 42, hidden=(32, 16), lr: float = 1e-3, epochs: int = 200,
-                batch_size: int = 32, patience: int = 15, val_fraction: float = 0.15, **_) -> np.ndarray:
-    """MLP treinada época a época (`partial_fit`), com parada antecipada no bloco final do treino.
-
-    O `early_stopping` do próprio MLPRegressor sorteia a validação; aqui ela é o bloco mais recente, em
-    ordem cronológica, e os pesos da melhor época são restaurados ao fim."""
-    from sklearn.neural_network import MLPRegressor
-    from sklearn.preprocessing import StandardScaler
-
-    xtr, xte, ytr = _prepare(train, test)
-    scaler = StandardScaler().fit(xtr)
-    xtr, xte = scaler.transform(xtr), scaler.transform(xte)
-    n_val = max(1, int(len(xtr) * val_fraction))
-    xfit, yfit, xval, yval = xtr[:-n_val], ytr[:-n_val], xtr[-n_val:], ytr[-n_val:]
-    model = MLPRegressor(hidden_layer_sizes=hidden, activation="relu", solver="adam", learning_rate_init=lr,
-                         batch_size=batch_size, alpha=0.0, shuffle=True, random_state=seed)
-    best_loss, best_weights, waited = np.inf, None, 0
-    for _ in range(epochs):
-        model.partial_fit(xfit, yfit)  # uma época, com os lotes embaralhados pela semente
-        val_loss = float(np.mean((model.predict(xval) - yval) ** 2))
-        if val_loss < best_loss:
-            best_loss, waited = val_loss, 0
-            best_weights = ([w.copy() for w in model.coefs_], [b.copy() for b in model.intercepts_])
-        else:
-            waited += 1
-            if waited >= patience:
-                break
-    model.coefs_, model.intercepts_ = best_weights
-    return test["pm25"].to_numpy(float) + model.predict(xte)
+def predict_mlp(train, test, **kw) -> np.ndarray:
+    return _fit_predict("mlp", train, test, kw)
 
 
 metrics = analytics.forecast_scores  # a mesma definição do painel
@@ -193,7 +104,7 @@ def evaluate(frame: pd.DataFrame, models: dict, folds, final, predictions: dict 
     observed, persist = [], []
     for start, end in folds:
         train, test = train_test(frame, start, end)
-        if len(train) < MIN_TRAIN_ROWS or test.empty:
+        if len(train) < forecasting.MIN_TRAIN_ROWS or test.empty:
             continue
         observed.append(test["y"].to_numpy(float))
         persist.append(predict_persistence(train, test))
@@ -204,7 +115,7 @@ def evaluate(frame: pd.DataFrame, models: dict, folds, final, predictions: dict 
         for name in models:
             out[name]["validation"] = metrics(y, np.concatenate(collected[name]), p)
     train, test = train_test(frame, *final)
-    if len(train) >= MIN_TRAIN_ROWS and not test.empty:
+    if len(train) >= forecasting.MIN_TRAIN_ROWS and not test.empty:
         y, p = test["y"].to_numpy(float), predict_persistence(train, test)
         preds = {}
         for name, fn in models.items():
@@ -329,18 +240,20 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--test-days", type=int, default=7)
     p.add_argument("--min-train-days", type=int, default=14)
     p.add_argument("--fold-days", type=int, default=7)
-    p.add_argument("--min-samples", type=int, default=MIN_SAMPLES, help="leituras por hora para a hora valer")
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--ridge-alpha", type=float, default=10.0)
-    p.add_argument("--gb-lr", type=float, default=0.1)
-    p.add_argument("--gb-max-iter", type=int, default=100)
-    p.add_argument("--gb-max-leaf-nodes", type=int, default=31)
-    p.add_argument("--gb-min-samples-leaf", type=int, default=20)
-    p.add_argument("--hidden", type=int, nargs="+", default=[32, 16])
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--epochs", type=int, default=200)
-    p.add_argument("--batch-size", type=int, default=32)
-    p.add_argument("--patience", type=int, default=15)
+    p.add_argument("--min-samples", type=int, default=forecasting.MIN_SAMPLES,
+                   help="leituras por hora para a hora valer")
+    ridge, gb, mlp = (forecasting.DEFAULTS[k] for k in ("ridge", "gboost", "mlp"))
+    p.add_argument("--seed", type=int, default=mlp["seed"])
+    p.add_argument("--ridge-alpha", type=float, default=ridge["alpha"])
+    p.add_argument("--gb-lr", type=float, default=gb["learning_rate"])
+    p.add_argument("--gb-max-iter", type=int, default=gb["max_iter"])
+    p.add_argument("--gb-max-leaf-nodes", type=int, default=gb["max_leaf_nodes"])
+    p.add_argument("--gb-min-samples-leaf", type=int, default=gb["min_samples_leaf"])
+    p.add_argument("--hidden", type=int, nargs="+", default=list(mlp["hidden"]))
+    p.add_argument("--lr", type=float, default=mlp["lr"])
+    p.add_argument("--epochs", type=int, default=mlp["epochs"])
+    p.add_argument("--batch-size", type=int, default=mlp["batch_size"])
+    p.add_argument("--patience", type=int, default=mlp["patience"])
     p.add_argument("--no-mlp", action="store_true", help="não treina a MLP (a etapa mais demorada)")
     p.add_argument("--predictions-csv", default=None, help="grava as previsões do teste final em CSV")
     p.add_argument("--seeds", type=int, default=1, help="sementes da MLP (consecutivas a partir de --seed; padrão 1)")
@@ -361,12 +274,13 @@ def main(argv=None) -> int:
         return 1
     conn = db.connect(path, readonly=True)
     try:
-        devices = [r["device_id"] for r in db.device_overview(conn)]
-        frame = build_dataset(conn, devices, args.min_samples)
+        devices = forecasting.devices(conn)
+        frame = forecasting.dataset(conn, devices, args.min_samples)
     finally:
         conn.close()
-    if len(frame) < MIN_TRAIN_ROWS * 2:
-        print(f"Dados insuficientes: {len(frame)} horas completas (mínimo {MIN_TRAIN_ROWS * 2}).", file=sys.stderr)
+    if len(frame) < forecasting.MIN_TRAIN_ROWS * 2:
+        print(f"Dados insuficientes: {len(frame)} horas completas (mínimo {forecasting.MIN_TRAIN_ROWS * 2}).",
+              file=sys.stderr)
         return 1
 
     folds, final = make_splits(frame.index, args.test_days, args.min_train_days, args.fold_days)
@@ -377,8 +291,8 @@ def main(argv=None) -> int:
         models[MLP] = predict_mlp
         hyper.update(hidden=args.hidden, lr=args.lr, epochs=args.epochs, batch_size=args.batch_size,
                      patience=args.patience, optimizer="Adam", early_stopping=True, seeds=args.seeds)
-    kw = dict(alpha=args.ridge_alpha, seed=args.seed, gb_lr=args.gb_lr, gb_max_iter=args.gb_max_iter,
-              gb_max_leaf_nodes=args.gb_max_leaf_nodes, gb_min_samples_leaf=args.gb_min_samples_leaf,
+    kw = dict(alpha=args.ridge_alpha, seed=args.seed, learning_rate=args.gb_lr, max_iter=args.gb_max_iter,
+              max_leaf_nodes=args.gb_max_leaf_nodes, min_samples_leaf=args.gb_min_samples_leaf,
               hidden=tuple(args.hidden), lr=args.lr, epochs=args.epochs, batch_size=args.batch_size,
               patience=args.patience)
     predictions: dict = {}
@@ -399,7 +313,7 @@ def main(argv=None) -> int:
             print("\nSem teste final avaliável: o CSV de previsões não foi gerado.", file=sys.stderr)
     if args.out:
         report = {"generated_at": db.iso(datetime.now(timezone.utc)), "devices": devices, "rows": len(frame),
-                  "horizon_hours": 1, "features": FEATURES, "folds": len(folds),
+                  "horizon_hours": 1, "features": forecasting.FEATURES, "folds": len(folds),
                   "test_window": [str(final[0]), str(final[1])], "hyperparameters": hyper,
                   "environment": environment_info(), "database": database_info(path), "results": results}
         with open(args.out, "w", encoding="utf-8") as fh:
