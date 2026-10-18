@@ -20,6 +20,7 @@ from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSIS
 from app.config import get_settings  # noqa: E402
 
 LOCAL_TZ = "America/Sao_Paulo"
+MAX_MINUTE_DAYS = 7  # o período padrão da aba Séries (7 dias) ainda cabe em resolução de 1 minuto
 VARIABLES = {
     "pm25": "PM2,5 (µg/m³)",
     "pm10": "PM10 (µg/m³)",
@@ -255,19 +256,26 @@ def series_tab(devices_all: list[str]) -> None:
     tz = ZoneInfo(LOCAL_TZ)
     start = datetime.combine(period[0], time(), tz).astimezone(timezone.utc)
     end = datetime.combine(period[1] + timedelta(days=1), time(), tz).astimezone(timezone.utc)
-    df = load_measurements(start, end, tuple(devices))
-    if not df.empty and only_ok:
-        df = df[df["quality"] == "ok"]
-    if df.empty:
-        st.info("Sem leituras no período escolhido.")
-        return
-
     if resolution == "Média horária":
         data = load_hourly(start, end, tuple(devices), only_ok)
+        if data.empty:
+            st.info(f"Sem horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura no período escolhido.")
+            return
         data["hora_local"] = local_naive(data["hora"])
         st.caption(f"Médias de horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura (75%).")
         max_gap = pd.Timedelta(hours=1)
     else:
+        # Cada minuto vira um ponto no navegador: períodos longos travariam a página.
+        if (period[1] - period[0]).days + 1 > MAX_MINUTE_DAYS:
+            st.info(f"A resolução de 1 minuto mostra até {MAX_MINUTE_DAYS} dias. "
+                    "Escolha um período menor ou use a média horária.")
+            return
+        df = load_measurements(start, end, tuple(devices))
+        if not df.empty and only_ok:
+            df = df[df["quality"] == "ok"]
+        if df.empty:
+            st.info("Sem leituras no período escolhido.")
+            return
         data = df.assign(hora_local=local_naive(df["ts_sensor"]))
         max_gap = pd.Timedelta(minutes=5)
 
