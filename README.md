@@ -239,6 +239,8 @@ crontab -e     # cole o conteúdo de server/deploy/crontab.example
 curl http://127.0.0.1:8000/health   # no próprio servidor; de fora, pelo túnel
 ```
 
+O dashboard também escuta só em `127.0.0.1`, porque não tem login e mostra os mesmos dados que a API só entrega com o token de leitura. Para abri-lo de outro computador, use um túnel SSH: `ssh -L 8501:127.0.0.1:8501 pi@<ip-do-servidor>` e acesse `http://localhost:8501`.
+
 Para a previsão horária, instale também o `requirements-ml.txt` e treine um modelo (seção "Previsão em produção"); sem modelo em `data/models`, a linha do job no crontab só registra o aviso no log.
 
 Aponte `PM25_BACKUP_DIR` para um pendrive ou uma pasta sincronizada com a nuvem: um backup no mesmo cartão SD não protege contra falha do cartão, o risco mais comum em Raspberry Pi ligado por meses.
