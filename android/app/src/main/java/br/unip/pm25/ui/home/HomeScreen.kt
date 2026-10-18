@@ -47,10 +47,12 @@ import br.unip.pm25.domain.currentStatus
 import br.unip.pm25.domain.estimatedServerNow
 import br.unip.pm25.domain.formatAge
 import br.unip.pm25.domain.readingAge
+import br.unip.pm25.ui.AlertsCard
 import br.unip.pm25.ui.ErrorPanel
 import br.unip.pm25.ui.Metric
 import br.unip.pm25.ui.QualityChip
 import br.unip.pm25.ui.StaleBanner
+import br.unip.pm25.ui.rememberAlertsPrompt
 import br.unip.pm25.ui.format
 import br.unip.pm25.ui.formatMoment
 import br.unip.pm25.ui.theme.Pm25Theme
@@ -73,7 +75,9 @@ fun HomeRoute(viewModel: HomeViewModel, onOpenDevice: (DeviceState) -> Unit) {
             }
         }
     }
-    HomeScreen(state, onRefresh = viewModel::refresh, onOpenDevice = onOpenDevice)
+    val alerts = rememberAlertsPrompt()
+    HomeScreen(state, onRefresh = viewModel::refresh, onOpenDevice = onOpenDevice,
+        header = if (alerts.visible) ({ AlertsCard(alerts) }) else null)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -83,6 +87,8 @@ fun HomeScreen(
     onRefresh: () -> Unit,
     onOpenDevice: (DeviceState) -> Unit,
     modifier: Modifier = Modifier,
+    /** Primeiro item da lista, acima dos sensores (o cartão dos alertas, quando eles estão desligados). */
+    header: (@Composable () -> Unit)? = null,
 ) {
     Scaffold(modifier = modifier, topBar = { TopAppBar(title = { Text("Qualidade do ar") }) }) { padding ->
         PullToRefreshBox(
@@ -92,7 +98,7 @@ fun HomeScreen(
         ) {
             val data = state.data
             when {
-                data != null -> DeviceListContent(data, state.error, onOpenDevice)
+                data != null -> DeviceListContent(data, state.error, onOpenDevice, header)
                 state.error != null -> ErrorPanel(state.error, onRefresh)
                 else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             }
@@ -101,7 +107,12 @@ fun HomeScreen(
 }
 
 @Composable
-private fun DeviceListContent(timed: Timed<DeviceList>, error: LoadError?, onOpenDevice: (DeviceState) -> Unit) {
+private fun DeviceListContent(
+    timed: Timed<DeviceList>,
+    error: LoadError?,
+    onOpenDevice: (DeviceState) -> Unit,
+    header: (@Composable () -> Unit)?,
+) {
     val data = timed.value
     // Idades medidas pela hora estimada do servidor agora: um dado salvo ontem não parece recente.
     val serverNow = estimatedServerNow(data.generatedAt, timed.receivedAt, Instant.now())
@@ -110,6 +121,7 @@ private fun DeviceListContent(timed: Timed<DeviceList>, error: LoadError?, onOpe
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (header != null) item { header() }
         if (error != null) {
             item { StaleBanner(error, data.generatedAt) }
         } else {
