@@ -81,6 +81,19 @@ def test_falhas_na_leitura_bloqueiam_o_ip(client):
     assert r.status_code == 429 and int(r.headers["Retry-After"]) > 0
 
 
+@pytest.mark.parametrize("devices, read", [
+    ("no-01:TROQUE-este-token-do-no-01", ""),                 # exemplo do .env.example
+    (f"no-01:{TOKEN_1}", "TROQUE-pelo-token-de-leitura"),    # exemplo do local.properties.example
+])
+def test_tokens_de_exemplo_do_repositorio_sao_recusados(monkeypatch, devices, read):
+    monkeypatch.setenv("PM25_DEVICE_TOKENS", devices)
+    monkeypatch.setenv("PM25_READ_TOKEN", read)
+    get_settings.cache_clear()
+    with pytest.raises(ValueError, match="exemplo do repositório"):
+        get_settings()
+    get_settings.cache_clear()
+
+
 @pytest.mark.parametrize("raw, message", [("curto", "muito curto"), (TOKEN_1, "repetir o token")])
 def test_token_de_leitura_invalido_na_configuracao(monkeypatch, raw, message):
     monkeypatch.setenv("PM25_DEVICE_TOKENS", f"no-01:{TOKEN_1}")
