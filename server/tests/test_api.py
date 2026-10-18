@@ -246,7 +246,7 @@ def test_device_id_incompativel_com_o_token_nao_grava_o_token(client):
 def test_bloqueio_por_ip_apos_n_falhas_nao_afeta_outro_ip(client):
     for _ in range(3):
         assert post(client, [reading(0)], token="token-inexistente-000000").status_code == 401
-    bloqueado = post(client, [reading(0)])  # até o token correto é recusado durante o bloqueio
+    bloqueado = post(client, [reading(0)], token="token-inexistente-000000")
     assert bloqueado.status_code == 429
     assert 0 < int(bloqueado.headers["retry-after"]) <= 300
     assert count(client, "SELECT COUNT(*) FROM measurements") == 0
@@ -256,6 +256,16 @@ def test_bloqueio_por_ip_apos_n_falhas_nao_afeta_outro_ip(client):
     r = outro_ip.post(URL, json={"schema_version": "1", "device_id": "no-01", "readings": [reading(0)]},
                       headers=auth_header(TOKEN_1))
     assert r.status_code == 201
+
+
+@pytest.mark.parametrize("client", [TRES_FALHAS], indirect=True)
+def test_token_correto_passa_com_o_ip_bloqueado(client):
+    """Quem divide o IP com um nó não consegue tirá-lo do ar errando o token de propósito."""
+    for _ in range(3):
+        post(client, [reading(0)], token="token-inexistente-000000")
+    assert post(client, [reading(0)], token="token-inexistente-000000").status_code == 429
+    assert post(client, [reading(0)]).status_code == 201
+    assert count(client, "SELECT COUNT(*) FROM measurements") == 1
 
 
 @pytest.mark.parametrize("client", [TRES_FALHAS], indirect=True)

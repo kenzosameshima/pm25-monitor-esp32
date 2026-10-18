@@ -298,9 +298,9 @@ Nada disto foi executado na implementação: dependem da sua conta e do computad
 | Token ausente ou inválido | 401 com a mesma mensagem nos dois casos | `invalid_messages`, sem o token |
 | Token válido para outro `device_id` | 403 | `invalid_messages` |
 | Rota de leitura sem o token de leitura (inclusive com o token de um nó) | 401 | nenhum (conta para o bloqueio do IP) |
-| `PM25_AUTH_MAX_FAILS` (10) falhas de autenticação seguidas do mesmo IP | 429 com `Retry-After`, por `PM25_AUTH_BLOCK_MIN` (5) minutos, mesmo com token correto | nenhum |
+| `PM25_AUTH_MAX_FAILS` (10) falhas de autenticação seguidas do mesmo IP | 429 com `Retry-After` para novas tentativas inválidas, por `PM25_AUTH_BLOCK_MIN` (5) minutos; o token correto continua aceito | nenhum |
 
-O contador fica só na memória, por IP, e zera com uma autenticação válida (um 403 conta como autenticação válida). Reiniciar a API libera todos os IPs. O firmware trata 401, 403 e 429 como erro a corrigir ou a esperar: o lote continua no buffer e é reenviado com espera crescente.
+O contador fica só na memória, por IP, e zera com uma autenticação válida (um 403 conta como autenticação válida). Reiniciar a API libera todos os IPs. O bloqueio não recusa token correto: se recusasse, qualquer pessoa na mesma rede de um nó (que sai para a internet pelo mesmo IP público) poderia deixá-lo de fora errando o token de propósito. Por isso a proteção contra adivinhar um token é o próprio token, longo e aleatório (gere com `secrets.token_urlsafe(24)`); o bloqueio só corta o ruído de tentativas inválidas. O firmware trata 401, 403 e 429 como erro a corrigir ou a esperar: o lote continua no buffer e é reenviado com espera crescente.
 
 ### Certificado raiz embutido
 

@@ -75,10 +75,12 @@ def test_sem_token_configurado_a_leitura_fica_desligada(client):
 
 @pytest.mark.parametrize("client", [{"PM25_AUTH_MAX_FAILS": "2"}], indirect=True)
 def test_falhas_na_leitura_bloqueiam_o_ip(client):
+    errado = {"Authorization": "Bearer errado-000000000000"}
     for _ in range(2):
-        assert client.get("/v1/devices", headers={"Authorization": "Bearer errado-000000000000"}).status_code == 401
-    r = client.get("/v1/devices", headers=READ)
+        assert client.get("/v1/devices", headers=errado).status_code == 401
+    r = client.get("/v1/devices", headers=errado)
     assert r.status_code == 429 and int(r.headers["Retry-After"]) > 0
+    assert client.get("/v1/devices", headers=READ).status_code == 200  # o token certo passa mesmo assim
 
 
 @pytest.mark.parametrize("devices, read", [

@@ -115,21 +115,24 @@ def require_bearer(request: Request, authorization: str | None, resolve: Callabl
                    on_failure: Callable[[str | None], None] = lambda ip: None) -> T:
     """Valida 'Authorization: Bearer <token>' com `resolve` (token -> identidade, ou None se inválido).
 
-    IP bloqueado recebe 429. Token ausente ou inválido recebe o mesmo 401, chama `on_failure(ip)` e conta
-    para o bloqueio do IP (o `AuthThrottle` em app.state.throttle).
+    Token válido passa mesmo com o IP bloqueado: o bloqueio vale só para tentativas inválidas, senão
+    quem divide o IP público com um nó (a rede de uma escola, por exemplo) poderia deixá-lo de fora.
+    Com o IP bloqueado, token ausente ou inválido recebe 429; sem bloqueio, recebe o mesmo 401, chama
+    `on_failure(ip)` e conta para o bloqueio (o `AuthThrottle` em app.state.throttle). Como uma tentativa
+    certa passa mesmo durante o bloqueio, quem impede adivinhar um token é o tamanho dele, não o bloqueio.
     """
     throttle: AuthThrottle = request.app.state.throttle
     ip = client_ip(request)
+    scheme, _, token = (authorization or "").partition(" ")
+    token = token.strip()
+    principal = resolve(token) if scheme == "Bearer" and token else None
+    if principal is not None:
+        throttle.register_success(ip)
+        return principal
     wait = throttle.retry_after(ip)
     if wait:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Muitas tentativas inválidas",
                             headers={"Retry-After": str(wait)})
-    scheme, _, token = (authorization or "").partition(" ")
-    token = token.strip()
-    principal = resolve(token) if scheme == "Bearer" and token else None
-    if principal is None:
-        throttle.register_failure(ip)
-        on_failure(ip)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Não autorizado", headers={"WWW-Authenticate": "Bearer"})
-    throttle.register_success(ip)
-    return principal
+    throttle.register_failure(ip)
+    on_failure(ip)
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Não autorizado", headers={"WWW-Authenticate": "Bearer"})
