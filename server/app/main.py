@@ -84,20 +84,19 @@ async def record_validation_error(request: Request, exc: RequestValidationError)
     if request.url.path != INGEST_PATH:
         return await request_validation_exception_handler(request, exc)
     try:
-        authenticate(request, request.headers.get("authorization"))
+        # O registro leva o nó dono do token; o device_id do corpo vem do cliente e fica só no raw_payload.
+        device = authenticate(request, request.headers.get("authorization"))
     except HTTPException as denied:
         return await http_exception_handler(request, denied)
-    body = exc.body
-    device_id = body.get("device_id") if isinstance(body, dict) else None
     conn = db.connect(get_settings().db_path)
     try:
         db.record_invalid(
             conn,
             reason=str(exc.errors())[:2000],
-            raw_payload=body,
+            raw_payload=exc.body,
             received_at=datetime.now(timezone.utc),
             remote_addr=client_ip(request),
-            device_id=device_id if isinstance(device_id, str) else None,
+            device_id=device,
         )
     finally:
         conn.close()

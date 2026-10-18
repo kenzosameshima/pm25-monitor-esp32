@@ -102,6 +102,14 @@ def test_payload_fora_do_contrato_retorna_422_e_fica_auditado(client):
     assert count(client, "SELECT device_id FROM invalid_messages") == "no-01"
 
 
+def test_payload_invalido_e_atribuido_ao_dono_do_token_e_nao_ao_device_id_do_corpo(client):
+    sem_pm25 = reading(0)
+    del sem_pm25["pm25"]
+    r = post(client, [sem_pm25], token=TOKEN_1, device="no-02")
+    assert r.status_code == 422
+    assert count(client, "SELECT device_id FROM invalid_messages") == "no-01"
+
+
 def test_json_malformado_sem_token_nao_grava_o_corpo(client):
     r = client.post(URL, content=b"{" + b"x" * 1000, headers={"Content-Type": "application/json"})
     assert r.status_code == 401
