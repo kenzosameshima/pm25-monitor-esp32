@@ -71,9 +71,9 @@ O campo `ts` marca o início da janela de um minuto, sempre em UTC. `pm25` é o 
 |---|---|---|
 | 201 `{"inserted": n, "duplicates": m}` | Gravado no disco | Apaga o lote do buffer |
 | 401 ou 403 | Token ausente ou inválido (401, mesma mensagem nos dois casos) ou de outro nó (403) | Mantém o lote e tenta de novo (erro de configuração) |
-| 413 | Corpo acima do limite em bytes | Descarta o lote (um lote de 60 leituras fica muito abaixo do limite) |
+| 413 | Corpo acima do limite em bytes | Reenvia as leituras uma a uma e descarta só a recusada (um lote de 60 leituras fica muito abaixo do limite) |
 | 429 | IP bloqueado por falhas de autenticação seguidas | Mantém o lote e tenta de novo com espera crescente |
-| 422 | Fora do contrato; cópia guardada em `invalid_messages` | Descarta o lote, para não reenviar o mesmo erro para sempre |
+| 422 | Fora do contrato; cópia guardada em `invalid_messages` (só com token de nó válido) | Reenvia as leituras uma a uma e descarta só a recusada, para não reenviar o mesmo erro para sempre |
 | Falha de rede ou 5xx | Nada foi gravado | Mantém o lote e tenta de novo com espera crescente |
 
 Cada leitura é identificada por `(device_id, boot_id, seq)`. O `boot_id` é um contador gravado na memória não volátil do ESP32 e incrementado a cada inicialização; o `seq` recomeça do zero a cada boot. A API ignora leituras repetidas, então reenviar um lote é sempre seguro, e um reinício nunca faz uma leitura nova colidir com uma antiga. Isso também separa os tipos de falha: um salto de `seq` dentro do mesmo `boot_id` é perda de mensagem, um intervalo de tempo sem salto de `seq` é minuto sem leitura válida do sensor, e um `boot_id` novo é um reinício.
