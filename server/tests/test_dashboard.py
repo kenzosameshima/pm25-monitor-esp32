@@ -66,9 +66,11 @@ def test_dashboard_renderiza_as_tres_abas(app_env):
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     assert [t.label for t in at.tabs] == ["Status", "Séries", "Previsto × observado"]
-    assert len(at.metric) == 8  # 4 indicadores por sensor
+    assert len(at.metric) == 10  # 5 indicadores por sensor
     assert at.metric[0].label == "PM2,5"
     assert at.metric[0].delta in {"Boa", "Moderada", "Ruim", "Muito ruim", "Péssima"}  # faixa da CETESB
+    assert at.metric[1].label == "PM10"
+    assert not any("implausível" in c.value for c in at.caption)
 
     # tabela de saúde da coleta: o nó 2 teve uma hora sem dados e um reinício
     health = at.dataframe[0].value.set_index("Sensor")
@@ -90,9 +92,22 @@ def test_esconde_no_de_teste_e_reserva_card_do_no_cadastrado_sem_dados(app_env, 
     assert not at.exception, at.exception
     assert [h.value for h in at.subheader] == ["no-01", "no-02"]
     assert any("aguardando instalação" in c.value for c in at.caption)
-    assert len(at.metric) == 4  # só o no-01 tem leitura
+    assert len(at.metric) == 5  # só o no-01 tem leitura
     assert list(at.dataframe[0].value["Sensor"]) == ["no-01"]
     assert at.multiselect[0].options == ["no-01"]
+
+
+def test_avisa_quando_a_ultima_leitura_foi_marcada(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    conn = db.connect(str(app_env))  # a tabela é imutável: a leitura marcada entra como a mais recente
+    db.insert_batch(conn, "no-01", [{"device_id": "no-01", "boot_id": 1, "seq": 3 * 60, "ts_sensor": db.iso(now),
+                                     "ts_received": db.iso(now), "uptime_s": 3 * 3600, "schema_version": "1",
+                                     "quality": "umid_fora_faixa", **synthetic(now, {}), "humidity": 120.0}], now)
+    conn.close()
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert any("implausível (umid_fora_faixa)" in c.value for c in at.caption)
 
 
 def test_troca_para_resolucao_de_um_minuto(app_env):

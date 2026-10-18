@@ -203,16 +203,19 @@ def status_tab() -> None:
             if isinstance(dev["location"], str):
                 st.caption(dev["location"])
             st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")
-            # Uma linha de colunas por par: a faixa sob o PM2,5 não desalinha a linha de baixo.
+            # Uma linha de colunas por grupo: a faixa sob o PM2,5 não desalinha a linha de baixo.
             a, b = st.columns(2)
             band, color = air_quality(dev["pm25"]) or (None, "off")
             a.metric("PM2,5", fmt(dev["pm25"], " µg/m³"), delta=band, delta_color=color, delta_arrow="off",
                      help="Faixas da CETESB para a média de 24 horas; aplicadas à leitura de um minuto, "
                           "servem só de referência.")
-            b.metric("Umidade", fmt(dev["humidity"], "%"))
-            a, b = st.columns(2)
+            b.metric("PM10", fmt(dev["pm10"], " µg/m³"))
+            a, b, c = st.columns(3)
             a.metric("Temperatura", fmt(dev["temperature"], " °C"))
-            b.metric("Sinal Wi-Fi", fmt(dev["rssi"], " dBm", 0))
+            b.metric("Umidade", fmt(dev["humidity"], "%"))
+            c.metric("Sinal Wi-Fi", fmt(dev["rssi"], " dBm", 0))
+            if dev["quality"] != "ok":
+                st.caption(f":red[O servidor marcou esta leitura como implausível ({dev['quality']}).]")
 
     window_start = now - timedelta(hours=24)
     health = load_health(window_start, now).rename(columns=HEALTH_LABELS)
