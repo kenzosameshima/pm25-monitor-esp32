@@ -71,7 +71,7 @@ Fluxos:
 | Detecção de falhas | Alerta de nó mudo; estado `online`/`late`/`silent`; saúde da coleta com lacunas, perdas e reinícios |
 | Concorrência e consistência | WAL com dois escritores (a API e o job de previsão, que se revezam na trava) e vários leitores; previsões idempotentes por `UNIQUE (nó, hora-alvo, modelo, versão)`; o app troca histórico e saúde juntos, só quando as duas respostas chegam |
 | Segurança | TLS com raiz embutida no nó, tokens por papel, bloqueio de IP após falhas, limite de corpo, HTTP só no debug para endereços locais |
-| Limites | Servidor e banco únicos (ponto único de falha); o alerta não avisa se o próprio servidor cair |
+| Limites | Servidor e banco únicos (ponto único de falha); o alerta do Telegram não avisa se o próprio servidor cair, e o do app avisa com atraso |
 
 ## 5. Estado por componente
 
@@ -90,7 +90,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | Job horário de previsão (`fit_forecast.py`, `forecast_job.py`) | parcial | Treino e gravação do modelo versionado, job a cada hora (HH:05) na tarefa `pm25-forecast` e no crontab, `ridge v0` provisório | Testes com dados sintéticos; uma execução pelo `run-forecast.cmd` no banco local, vista na série `ridge v0` do previsto × observado | **Treinar o modelo do TCC e instalar a tarefa no servidor** |
 | Métricas do período e comparação CETESB | pronto | `period_metrics.py` (com congelamento do banco) e `compare_cetesb.py` | Testes | Rodar com os dados reais e o CSV do QUALAR |
 | Implantação | parcial | Scripts do Windows (tarefas agendadas), serviços systemd e crontab para Linux, passo a passo do túnel | Scripts escritos, sem registro de instalação verificada neste repositório | **Testar o túnel de verdade**, de outra rede, inclusive os subcaminhos de `/v1/devices` |
-| App Android (`android/`) | pronto para demonstração | Tela inicial, detalhe com 24 h ou 7 dias e saúde da coleta, previsão previsto × observado, cache offline, permissão de rede local | 40 testes de unidade e lint sem problemas; fluxo completo no emulador (API 37) contra a API local, inclusive offline | Notificações; teste num celular real e pelo túnel; build de release assinado |
+| App Android (`android/`) | pronto para demonstração | Tela inicial, detalhe com 24 h ou 7 dias e saúde da coleta, previsão previsto × observado, cache offline, permissão de rede local, alertas em segundo plano (nó sem dados, PM2,5 Ruim, servidor sem resposta) | 59 testes de unidade e lint sem problemas; fluxo completo no emulador (API 37) contra a API local, inclusive offline e os alertas | Teste num celular real e pelo túnel, inclusive o atraso dos alertas; build de release assinado |
 
 ## 6. Testes e verificação
 
@@ -98,7 +98,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 |---|---|---|
 | Servidor | 162 testes passando | API real com o simulador e `curl` nas rotas de leitura |
 | Firmware | Testes no computador (parser, média, JSON) e compilação nas quatro combinações | — |
-| App Android | 40 testes de unidade: contrato JSON com respostas geradas pela própria API, erros, rede local, faixas, idade, hora estimada do servidor, resumo, previsão, cache em arquivo e estado das três telas | Emulador: permissão de rede local, as três telas, troca de janela, banco de 3 dias com lacuna e reinício, modelo de demonstração em `forecasts`, queda da API e reabertura sem servidor |
+| App Android | 59 testes de unidade: contrato JSON com respostas geradas pela própria API, erros, rede local, faixas, idade, hora estimada do servidor, resumo, previsão, cache em arquivo, estado das três telas, regras dos alertas e textos das notificações | Emulador: permissão de rede local, as três telas, troca de janela, banco de 3 dias com lacuna e reinício, modelo de demonstração em `forecasts`, queda da API e reabertura sem servidor; alertas de nó sem dados e de volta, ar Ruim, servidor sem resposta e de volta, sem avisos repetidos |
 
 **Nunca verificado:** o nó com o hardware real; o túnel Funnel; o app num celular de verdade; a tarefa `pm25-forecast` registrada pelo `install.ps1` e o modelo do TCC em produção. Os resultados do emulador usaram dados sintéticos e um modelo de demonstração (`demo v1`), que não é o modelo do TCC.
 
@@ -109,13 +109,13 @@ Em ordem de prioridade:
 1. **Hardware real e coleta contínua.** É a base do TCC. Sem ela, os modelos, a comparação com a CETESB e as métricas do período só rodam com dados sintéticos.
 2. **Túnel em produção.** Seguir o passo a passo do README e testar de outra rede, com `check_https.py` para a ingestão e `curl` para `/v1/devices` e seus subcaminhos.
 3. **Modelo do TCC em produção.** O job horário e o `ridge v0` provisório estão prontos. Falta escolher o modelo na avaliação offline, com as cerca de 5 semanas de coleta, treiná-lo numa versão nova e instalar a tarefa `pm25-forecast` no servidor.
-4. **Notificações no app.** PM2,5 alto e nó mudo, verificados periodicamente em segundo plano (WorkManager, intervalo mínimo de 15 min) com notificação local, sem depender de Firebase.
+4. **Alertas do app num celular de verdade.** Os alertas (nó sem dados, PM2,5 Ruim, servidor sem resposta) estão prontos e verificados no emulador. Falta medir, num celular e pelo túnel, o atraso real do WorkManager em economia de bateria.
 5. **Saúde da coleta com duas definições.** O painel e o `period_metrics` calculam completude e maior lacuna de jeitos diferentes; os números do app (que segue o painel) podem não bater com os do capítulo de resultados. Decidir se unifica.
 6. **Release do app.** Assinar o APK e testar a versão de release, que exige HTTPS.
 
 Riscos já conhecidos:
 
-- **Servidor único.** Se o servidor parar, os nós guardam 5 dias de leituras, mas o alerta não avisa (ele roda no próprio servidor).
+- **Servidor único.** Se o servidor parar, os nós guardam 5 dias de leituras. O alerta do Telegram não avisa, porque roda no próprio servidor; os alertas do app avisam, com 15 minutos ou mais de atraso.
 - **Token de leitura embutido no APK.** Ele pode ser extraído, mas só dá acesso de leitura e pode ser trocado no `.env`.
 - **Umidade alta.** Acima de 75%, o PMS5003 tende a superestimar o PM2,5. O app avisa quantas horas da janela passaram desse limite.
 
@@ -124,7 +124,7 @@ Riscos já conhecidos:
 1. Instalar um nó, validar no monitor serial e no dashboard, e deixar dois nós lado a lado de 3 a 7 dias para medir a concordância.
 2. Publicar o túnel e apontar o app para a URL pública (`pm25.apiUrl` no `local.properties`).
 3. Com algumas semanas de coleta, rodar `train_forecast.py` sobre o banco congelado, escolher o modelo e treiná-lo com `fit_forecast.py` numa versão nova, que o job horário passa a gravar ao lado do `ridge v0`.
-4. Notificações no app.
+4. Testar os alertas do app num celular de verdade, pelo túnel.
 5. Rodar `period_metrics.py` e `compare_cetesb.py` para o capítulo de resultados.
 
 ## 9. Como reproduzir o estado atual
