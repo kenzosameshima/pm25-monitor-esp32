@@ -24,7 +24,6 @@ Um único tema ambiental basta para a atividade; o recorte é a poluição do ar
                                        │        ▼                                 │
                                        │ SQLite (WAL, measurements imutável)      │
                                        │   ├─▶ backup diário (pendrive/nuvem)     │
-                                       │   ├─▶ alerta Telegram (nó mudo 15 min)   │
                                        │   ├─▶ job de previsão (HH:05, forecasts) │
                                        │   ├─▶ dashboard Streamlit (só local) ◀───┼──── navegador no servidor
                                        │   └─▶ scripts de análise (offline)       │
@@ -68,10 +67,10 @@ Fluxos:
 | Tolerância a falhas | Buffer e reenvio no nó; no app, últimos dados mantidos na tela e cache em disco quando a rede ou a API caem |
 | Semântica de entrega e idempotência | Pelo menos uma vez com descarte de duplicatas por `(device_id, boot_id, seq)`; duplicatas contadas em `ingest_batches` e mostradas no app |
 | Relógios | NTP no nó; `generated_at` do servidor; idade e estado calculados no app com diferenças do relógio do celular, nunca com o valor absoluto dele |
-| Detecção de falhas | Alerta de nó mudo; estado `online`/`late`/`silent`; saúde da coleta com lacunas, perdas e reinícios |
+| Detecção de falhas | Alertas do app (nó sem dados, servidor sem resposta); estado `online`/`late`/`silent`; saúde da coleta com lacunas, perdas e reinícios |
 | Concorrência e consistência | WAL com dois escritores (a API e o job de previsão, que se revezam na trava) e vários leitores; previsões idempotentes por `UNIQUE (nó, hora-alvo, modelo, versão)`; o app troca histórico e saúde juntos, só quando as duas respostas chegam |
 | Segurança | TLS com raiz embutida no nó, tokens por papel, bloqueio de IP após falhas, limite de corpo, HTTP só no debug para endereços locais |
-| Limites | Servidor e banco únicos (ponto único de falha); o alerta do Telegram não avisa se o próprio servidor cair, e o do app avisa com atraso |
+| Limites | Servidor e banco únicos (ponto único de falha); se o próprio servidor cair, os alertas do app avisam com 15 minutos ou mais de atraso |
 
 ## 5. Estado por componente
 
@@ -84,7 +83,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | API de ingestão | pronto | Contrato v1, idempotência, auditoria de mensagens inválidas, limite de corpo, bloqueio de IP | Testes da API, inclusive com o JSON do firmware | — |
 | API de leitura | pronto | `/v1/devices`, `/hourly` (`start`/`end` ou `hours`), `/health`, `/forecast`, token de leitura, banco somente leitura | Testes da API e teste de ponta a ponta com o simulador e `curl` | ETag/respostas condicionais (opcional) |
 | Banco | pronto | Esquema com `measurements`, `ingest_batches`, `invalid_messages`, `forecasts` e `devices.location` | Testes | Coordenadas para mapa (exigiria migração) |
-| Backup, alerta, dashboard | pronto | Backup diário com verificação de integridade; alerta Telegram de nó mudo; dashboard local de 3 abas | Dashboard testado com o AppTest do Streamlit; backup e alerta sem testes automáticos | Testes do backup e do alerta; alerta de PM2,5 alto (hoje só de silêncio) |
+| Backup e dashboard | pronto | Backup diário com verificação de integridade; dashboard local de 3 abas | Dashboard testado com o AppTest do Streamlit; backup sem testes automáticos | Testes do backup |
 | Regras de análise (`analytics.py`) | pronto | Hora válida, estado, saúde da coleta, comparação de previsões, métricas | Testes próprios e comparação com a implementação anterior | Unificar a saúde da coleta do painel com a do `period_metrics` (definições diferentes; decisão pendente) |
 | Avaliação de modelos (`train_forecast.py`) | parcial | Persistência, Ridge, gradient boosting e MLP (scikit-learn), validação progressiva, teste final, relatório reproduzível | Testes com dados sintéticos | **Rodar com os dados reais da coleta** |
 | Job horário de previsão (`fit_forecast.py`, `forecast_job.py`) | parcial | Treino e gravação do modelo versionado, job a cada hora (HH:05) na tarefa `pm25-forecast` e no crontab, `ridge v0` provisório | Testes com dados sintéticos; uma execução pelo `run-forecast.cmd` no banco local, vista na série `ridge v0` do previsto × observado | **Treinar o modelo do TCC e instalar a tarefa no servidor** |
@@ -115,7 +114,7 @@ Em ordem de prioridade:
 
 Riscos já conhecidos:
 
-- **Servidor único.** Se o servidor parar, os nós guardam 5 dias de leituras. O alerta do Telegram não avisa, porque roda no próprio servidor; os alertas do app avisam, com 15 minutos ou mais de atraso.
+- **Servidor único.** Se o servidor parar, os nós guardam 5 dias de leituras, e os alertas do app avisam, com 15 minutos ou mais de atraso.
 - **Token de leitura embutido no APK.** Ele pode ser extraído, mas só dá acesso de leitura e pode ser trocado no `.env`.
 - **Umidade alta.** Acima de 75%, o PMS5003 tende a superestimar o PM2,5. O app avisa quantas horas da janela passaram desse limite.
 
