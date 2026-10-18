@@ -68,11 +68,17 @@ class BodySizeLimit:
 @dataclass
 class _Entry:
     fails: int = 0
+    first_fail: float = 0.0  # início da janela em que as falhas estão sendo contadas
     blocked_until: float = 0.0
 
 
 class AuthThrottle:
-    """Bloqueia o IP por `block_s` segundos após `max_fails` falhas de autenticação seguidas. Estado só em memória."""
+    """Bloqueia o IP por `block_s` segundos após `max_fails` falhas de autenticação dentro de `block_s` segundos.
+
+    Uma autenticação válida não zera a contagem: se zerasse, quem tem um token qualquer (o de leitura sai
+    do APK) poderia intercalar acertos e errar à vontade. As falhas expiram sozinhas com a janela.
+    Estado só em memória.
+    """
 
     def __init__(self, max_fails: int, block_s: float, clock: Callable[[], float] = time.monotonic) -> None:
         self.max_fails = max_fails
@@ -94,17 +100,19 @@ class AuthThrottle:
 
     def register_failure(self, ip: str | None) -> None:
         key = ip or ""
+        now = self._clock()
         entry = self._entries.pop(key, None) or _Entry()
+        if entry.fails and now - entry.first_fail > self.block_s:  # falhas antigas expiraram
+            entry.fails = 0
+        if entry.fails == 0:
+            entry.first_fail = now
         entry.fails += 1
         if entry.fails >= self.max_fails:
             entry.fails = 0
-            entry.blocked_until = self._clock() + self.block_s
+            entry.blocked_until = now + self.block_s
         self._entries[key] = entry
         while len(self._entries) > MAX_TRACKED_IPS:
             self._entries.popitem(last=False)
-
-    def register_success(self, ip: str | None) -> None:
-        self._entries.pop(ip or "", None)
 
 
 def client_ip(request: Request) -> str | None:
@@ -127,7 +135,6 @@ def require_bearer(request: Request, authorization: str | None, resolve: Callabl
     token = token.strip()
     principal = resolve(token) if scheme == "Bearer" and token else None
     if principal is not None:
-        throttle.register_success(ip)
         return principal
     wait = throttle.retry_after(ip)
     if wait:

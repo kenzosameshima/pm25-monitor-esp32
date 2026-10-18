@@ -269,13 +269,12 @@ def test_token_correto_passa_com_o_ip_bloqueado(client):
 
 
 @pytest.mark.parametrize("client", [TRES_FALHAS], indirect=True)
-def test_autenticacao_valida_zera_a_contagem_de_falhas(client):
+def test_autenticacao_valida_nao_zera_a_contagem_de_falhas(client):
     for _ in range(2):
         post(client, [reading(0)], token="token-inexistente-000000")
-    assert post(client, [reading(0)]).status_code == 201          # zera
-    for _ in range(2):
-        assert post(client, [reading(1)], token="token-inexistente-000000").status_code == 401
-    assert post(client, [reading(1)]).status_code == 201          # ainda não passou de 3 seguidas
+    assert post(client, [reading(0)]).status_code == 201          # não zera as 2 falhas
+    assert post(client, [reading(1)], token="token-inexistente-000000").status_code == 401  # 3ª falha: bloqueia
+    assert post(client, [reading(1)], token="token-inexistente-000000").status_code == 429
 
 
 @pytest.mark.parametrize("client", [TRES_FALHAS], indirect=True)
@@ -283,6 +282,21 @@ def test_device_id_incompativel_nao_conta_como_falha_de_autenticacao(client):
     for _ in range(5):
         assert post(client, [reading(0)], token=TOKEN_1, device="no-02").status_code == 403
     assert post(client, [reading(0)]).status_code == 201
+
+
+def test_falhas_antigas_expiram_com_a_janela():
+    from app.guard import AuthThrottle
+
+    agora = [1000.0]
+    t = AuthThrottle(max_fails=3, block_s=300, clock=lambda: agora[0])
+    t.register_failure("1.1.1.1")
+    t.register_failure("1.1.1.1")
+    agora[0] += 301                    # as duas falhas saem da janela
+    t.register_failure("1.1.1.1")
+    t.register_failure("1.1.1.1")
+    assert t.retry_after("1.1.1.1") == 0
+    t.register_failure("1.1.1.1")      # 3 falhas dentro da mesma janela
+    assert t.retry_after("1.1.1.1") == 300
 
 
 def test_bloqueio_expira_e_o_contador_recomeca():

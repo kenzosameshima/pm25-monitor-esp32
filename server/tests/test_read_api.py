@@ -83,6 +83,18 @@ def test_falhas_na_leitura_bloqueiam_o_ip(client):
     assert client.get("/v1/devices", headers=READ).status_code == 200  # o token certo passa mesmo assim
 
 
+@pytest.mark.parametrize("client", [{"PM25_AUTH_MAX_FAILS": "3"}], indirect=True)
+def test_token_de_leitura_nao_zera_as_falhas_com_tokens_de_no(client):
+    """O token de leitura sai do APK: acertá-lo entre tentativas não pode liberar a adivinhação dos tokens de nó."""
+    errado = {"Authorization": "Bearer token-de-no-inventado-000"}
+    body = {"schema_version": "1", "device_id": "no-01", "readings": []}
+    for _ in range(2):
+        assert client.post("/v1/measurements", json=body, headers=errado).status_code == 401
+        assert client.get("/v1/devices", headers=READ).status_code == 200
+    assert client.post("/v1/measurements", json=body, headers=errado).status_code == 401  # 3ª falha: bloqueia
+    assert client.post("/v1/measurements", json=body, headers=errado).status_code == 429
+
+
 @pytest.mark.parametrize("devices, read", [
     ("no-01:TROQUE-este-token-do-no-01", ""),                 # exemplo do .env.example
     (f"no-01:{TOKEN_1}", "TROQUE-pelo-token-de-leitura"),    # exemplo do local.properties.example

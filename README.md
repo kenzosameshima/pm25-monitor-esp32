@@ -72,7 +72,7 @@ O campo `ts` marca o início da janela de um minuto, sempre em UTC. `pm25` é o 
 | 201 `{"inserted": n, "duplicates": m}` | Gravado no disco | Apaga o lote do buffer |
 | 401 ou 403 | Token ausente ou inválido (401, mesma mensagem nos dois casos) ou de outro nó (403) | Mantém o lote e tenta de novo (erro de configuração) |
 | 413 | Corpo acima do limite em bytes | Reenvia as leituras uma a uma e descarta só a recusada (um lote de 60 leituras fica muito abaixo do limite) |
-| 429 | IP bloqueado por falhas de autenticação seguidas | Mantém o lote e tenta de novo com espera crescente |
+| 429 | IP bloqueado por falhas de autenticação repetidas | Mantém o lote e tenta de novo com espera crescente |
 | 422 | Fora do contrato; cópia guardada em `invalid_messages` (só com token de nó válido) | Reenvia as leituras uma a uma e descarta só a recusada, para não reenviar o mesmo erro para sempre |
 | Falha de rede ou 5xx | Nada foi gravado | Mantém o lote e tenta de novo com espera crescente |
 
@@ -298,9 +298,9 @@ Nada disto foi executado na implementação: dependem da sua conta e do computad
 | Token ausente ou inválido | 401 com a mesma mensagem nos dois casos | `invalid_messages`, sem o token |
 | Token válido para outro `device_id` | 403 | `invalid_messages` |
 | Rota de leitura sem o token de leitura (inclusive com o token de um nó) | 401 | nenhum (conta para o bloqueio do IP) |
-| `PM25_AUTH_MAX_FAILS` (10) falhas de autenticação seguidas do mesmo IP | 429 com `Retry-After` para novas tentativas inválidas, por `PM25_AUTH_BLOCK_MIN` (5) minutos; o token correto continua aceito | nenhum |
+| `PM25_AUTH_MAX_FAILS` (10) falhas de autenticação do mesmo IP em `PM25_AUTH_BLOCK_MIN` (5) minutos | 429 com `Retry-After` para novas tentativas inválidas, por `PM25_AUTH_BLOCK_MIN` (5) minutos; o token correto continua aceito | nenhum |
 
-O contador fica só na memória, por IP, e zera com uma autenticação válida (um 403 conta como autenticação válida). Reiniciar a API libera todos os IPs. O bloqueio não recusa token correto: se recusasse, qualquer pessoa na mesma rede de um nó (que sai para a internet pelo mesmo IP público) poderia deixá-lo de fora errando o token de propósito. Por isso a proteção contra adivinhar um token é o próprio token, longo e aleatório (gere com `secrets.token_urlsafe(24)`); o bloqueio só corta o ruído de tentativas inválidas. O firmware trata 401, 403 e 429 como erro a corrigir ou a esperar: o lote continua no buffer e é reenviado com espera crescente.
+O contador fica só na memória, por IP; as falhas expiram depois de `PM25_AUTH_BLOCK_MIN` minutos, e uma autenticação válida não as zera (um 403 conta como autenticação válida). Se zerasse, quem tem o token de leitura, que sai do APK, poderia intercalar um acerto a cada nove tentativas e errar sem limite. Reiniciar a API libera todos os IPs. O bloqueio não recusa token correto: se recusasse, qualquer pessoa na mesma rede de um nó (que sai para a internet pelo mesmo IP público) poderia deixá-lo de fora errando o token de propósito. Por isso a proteção contra adivinhar um token é o próprio token, longo e aleatório (gere com `secrets.token_urlsafe(24)`); o bloqueio só corta o ruído de tentativas inválidas. O firmware trata 401, 403 e 429 como erro a corrigir ou a esperar: o lote continua no buffer e é reenviado com espera crescente.
 
 ### Certificado raiz embutido
 
