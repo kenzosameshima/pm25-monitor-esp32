@@ -3,6 +3,8 @@ rem Executa a API de ingestao e a reinicia se ela cair. Chamado pela tarefa agen
 rem Escuta so em 127.0.0.1: o tunel termina o TLS e encaminha. --proxy-headers registra o IP real do cliente
 rem (X-Forwarded-For, aceito so de 127.0.0.1). Para HTTP na rede local: PM25_API_HOST=0.0.0.0 e install.ps1 -OpenApiPort.
 if not defined PM25_API_HOST set PM25_API_HOST=127.0.0.1
+rem Logs em UTF-8 (sem isso a saida redirecionada sai em cp1252, que nao tem emojis).
+set PYTHONUTF8=1
 cd /d "%~dp0..\.."
 if not exist data mkdir data
 :loop
