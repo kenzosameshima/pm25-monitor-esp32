@@ -18,10 +18,6 @@ class Settings:
     read_token: str                # token do app de consulta; vazio desliga as rotas de leitura
     backup_dir: str
     backup_keep: int
-    telegram_token: str
-    telegram_chat_id: str
-    alert_silence_min: int
-    alert_state_path: str
     models_dir: str                # modelos de previsão usados pelo job horário
     max_body_bytes: int
     auth_max_fails: int
@@ -75,10 +71,6 @@ def get_settings() -> Settings:
         read_token=_parse_read_token(env("PM25_READ_TOKEN", ""), device_tokens),
         backup_dir=env("PM25_BACKUP_DIR", "backups"),
         backup_keep=int(env("PM25_BACKUP_KEEP", "14")),
-        telegram_token=env("PM25_TELEGRAM_TOKEN", ""),
-        telegram_chat_id=env("PM25_TELEGRAM_CHAT_ID", ""),
-        alert_silence_min=int(env("PM25_ALERT_SILENCE_MIN", "15")),
-        alert_state_path=env("PM25_ALERT_STATE", "data/alert_state.json"),
         models_dir=env("PM25_MODELS_DIR", "data/models"),
         # 256 KiB: um lote de 500 leituras (o máximo do contrato) ocupa cerca de 125 KiB.
         max_body_bytes=int(env("PM25_MAX_BODY_BYTES", str(256 * 1024))),

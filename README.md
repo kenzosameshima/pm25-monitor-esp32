@@ -1,11 +1,10 @@
 # Sistema de coleta de PM2,5 — TCC (UNIP, 2026)
 
-Este repositório reúne a cadeia de coleta e o painel do projeto: o firmware dos nós sensores (ESP32 + PMS5003 + BME280 ou DHT22), a API de ingestão, o banco SQLite, o backup diário, o alerta no Telegram, o dashboard em Streamlit, as rotas de leitura para o app de consulta, um simulador de sensor e os chips simulados do Wokwi, para testar tudo sem hardware. A avaliação dos modelos de previsão e o job horário que grava as previsões no mesmo banco também estão aqui; o modelo do TCC depende das semanas de coleta real.
+Este repositório reúne a cadeia de coleta e o painel do projeto: o firmware dos nós sensores (ESP32 + PMS5003 + BME280 ou DHT22), a API de ingestão, o banco SQLite, o backup diário, o dashboard em Streamlit, as rotas de leitura para o app de consulta (com alertas no celular), um simulador de sensor e os chips simulados do Wokwi, para testar tudo sem hardware. A avaliação dos modelos de previsão e o job horário que grava as previsões no mesmo banco também estão aqui; o modelo do TCC depende das semanas de coleta real.
 
 ```
 nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──▶ SQLite (WAL) ──▶ backup diário
-   │ buffer em flash se a rede cair                           ├──▶ alerta Telegram (sensor mudo 15 min)
-                                                              ├──▶ dashboard Streamlit (somente leitura)
+   │ buffer em flash se a rede cair                           ├──▶ dashboard Streamlit (somente leitura)
                                                               └──▶ rotas de leitura (GET /v1/devices) ──HTTPS──▶ app de consulta
 ```
 
@@ -14,7 +13,7 @@ nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──
 ```
 firmware/     código do ESP32 (PlatformIO); host_tests/ testa a parte sem hardware no computador
 server/app/   API (main.py), rotas de leitura (read_api.py), contrato de dados (models.py), acesso ao banco (db.py), regras de análise (analytics.py), dados e modelos de previsão (forecasting.py), esquema (schema.sql)
-server/scripts/  backup.py, alert_telegram.py, simulate_sensor.py, set_location.py, check_https.py, train_forecast.py, fit_forecast.py, forecast_job.py, period_metrics.py, compare_cetesb.py
+server/scripts/  backup.py, simulate_sensor.py, set_location.py, check_https.py, train_forecast.py, fit_forecast.py, forecast_job.py, period_metrics.py, compare_cetesb.py
 server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
@@ -120,7 +119,7 @@ Os alertas rodam em segundo plano. Na tela inicial, um cartão explica o que ele
 - **Ar ruim:** a média da última hora completa ficou na faixa Ruim ou pior da CETESB (acima de 50 µg/m³), com as faixas de 24 horas usadas como referência. Avisa de novo a cada piora dentro do episódio; quando a média cai abaixo de Ruim, o episódio acaba e uma nova subida volta a avisar.
 - **Servidor sem resposta:** duas checagens seguidas falharam. A volta do servidor também é avisada. Sem internet validada no celular, a checagem não roda, para não acusar o servidor quando quem está sem rede é o celular; com a API na rede local, basta a conexão.
 
-O que já foi avisado fica em `filesDir/alertas`, que o sistema não limpa. Cada tipo de alerta tem um canal (Sensores, Qualidade do ar, Servidor), que pode ser silenciado nas configurações do Android. Ao contrário do alerta do Telegram, que roda no próprio servidor, este percebe também o servidor fora do ar. Na versão de depuração, `adb shell am broadcast -n br.unip.pm25/.alerts.CheckNowReceiver` roda uma checagem na hora, sem esperar o agendamento; só o `adb` e o sistema conseguem chamá-lo.
+O que já foi avisado fica em `filesDir/alertas`, que o sistema não limpa. Cada tipo de alerta tem um canal (Sensores, Qualidade do ar, Servidor), que pode ser silenciado nas configurações do Android. Como a checagem roda no celular, fora do servidor, ela percebe também o servidor fora do ar. Na versão de depuração, `adb shell am broadcast -n br.unip.pm25/.alerts.CheckNowReceiver` roda uma checagem na hora, sem esperar o agendamento; só o `adb` e o sistema conseguem chamá-lo.
 
 Para rodar no emulador, com a API e o simulador no mesmo computador:
 
@@ -242,7 +241,7 @@ curl http://127.0.0.1:8000/health   # no próprio servidor; de fora, pelo túnel
 
 Para a previsão horária, instale também o `requirements-ml.txt` e treine um modelo (seção "Previsão em produção"); sem modelo em `data/models`, a linha do job no crontab só registra o aviso no log.
 
-Aponte `PM25_BACKUP_DIR` para um pendrive ou uma pasta sincronizada com a nuvem: um backup no mesmo cartão SD não protege contra falha do cartão, o risco mais comum em Raspberry Pi ligado por meses. Para o alerta, crie um bot com o @BotFather no Telegram, mande uma mensagem a ele e descubra o `chat_id` em `https://api.telegram.org/bot<token>/getUpdates`. Sem essas variáveis, `alert_telegram.py` só imprime as mensagens, o que serve para testar.
+Aponte `PM25_BACKUP_DIR` para um pendrive ou uma pasta sincronizada com a nuvem: um backup no mesmo cartão SD não protege contra falha do cartão, o risco mais comum em Raspberry Pi ligado por meses.
 
 Antes de instalar cada nó, meça o RSSI no ponto exato de instalação (o log mostra o valor a cada minuto), confirme que a rede permite NTP (porta UDP 123) e deixe os dois sensores lado a lado nos primeiros 3 a 7 dias, para medir a concordância entre eles.
 
@@ -286,7 +285,7 @@ Nada disto foi executado na implementação: dependem da sua conta e do computad
    python -m scripts.check_https --url https://<URL pública>/v1/measurements --token <token do teste-https>
    ```
 
-   Saída esperada: `OK: HTTP 201 ...`. Em caso de falha o script sai com código diferente de zero e diz o motivo (2 certificado, 3 token recusado, 4 device_id incompatível, 5 IP bloqueado, 6 tempo esgotado, 8 sem conexão). A leitura sintética fica gravada com o `device_id` `teste-https`, pois `measurements` é imutável. Identificadores que começam com `teste` ficam fora do dashboard, das rotas de leitura do app, do alerta no Telegram e das métricas do período. O erro de certificado exige TLS real e não tem teste automático; para vê-lo, aponte o script a um servidor HTTPS com certificado autoassinado.
+   Saída esperada: `OK: HTTP 201 ...`. Em caso de falha o script sai com código diferente de zero e diz o motivo (2 certificado, 3 token recusado, 4 device_id incompatível, 5 IP bloqueado, 6 tempo esgotado, 8 sem conexão). A leitura sintética fica gravada com o `device_id` `teste-https`, pois `measurements` é imutável. Identificadores que começam com `teste` ficam fora do dashboard, das rotas de leitura do app (e, com elas, dos alertas) e das métricas do período. O erro de certificado exige TLS real e não tem teste automático; para vê-lo, aponte o script a um servidor HTTPS com certificado autoassinado.
 9. Em cada nó, copie `firmware/src/config.example.h` para `config.h` e preencha `WIFI_SSID`, `WIFI_PASS`, `API_URL` (a URL pública terminando em `/v1/measurements`), `DEVICE_ID` e `DEVICE_TOKEN` (o token daquele nó). Mantenha `API_ROOT_CA` como está no exemplo e grave o firmware. No monitor serial, a primeira leitura enviada aparece como `[leitura] ... pendentes=0`; um `[tls] erro` indica falha no certificado ou na rede.
 
 ### Proteções da API
@@ -327,7 +326,7 @@ Quando nó e servidor estão na mesma rede, dá para dispensar o túnel. Defina 
 
 ## Limitações conhecidas
 
-Leituras anteriores à primeira sincronização NTP após um boot são descartadas, porque não teriam horário confiável; um módulo de relógio DS3231 resolveria isso, se as redes bloquearem NTP. Entre redes, a comunicação depende do serviço de túnel (conta Tailscale, retransmissão e limite de banda da Tailscale, nome público atrelado à conta): se o serviço cair, os nós guardam até cinco dias de leituras em flash e reenviam depois. Na alternativa HTTP da rede local não há criptografia, só o token. O alerta do Telegram roda no próprio servidor, então não avisa se o servidor inteiro cair. Os alertas do app cobrem esse caso, com o atraso do WorkManager (15 minutos ou mais); um serviço externo de monitoramento de disponibilidade avisaria mais rápido. Dois processos gravam no banco: a API, nas tabelas de ingestão, e o job horário de previsão, só em `forecasts`, numa transação curta por hora. O SQLite em WAL serializa as gravações, e cada conexão espera até 10 s por uma trava; com mais escritores ou gravações longas, a escolha do SQLite teria de ser revista. O alerta, o backup, o dashboard e os scripts de análise só leem.
+Leituras anteriores à primeira sincronização NTP após um boot são descartadas, porque não teriam horário confiável; um módulo de relógio DS3231 resolveria isso, se as redes bloquearem NTP. Entre redes, a comunicação depende do serviço de túnel (conta Tailscale, retransmissão e limite de banda da Tailscale, nome público atrelado à conta): se o serviço cair, os nós guardam até cinco dias de leituras em flash e reenviam depois. Na alternativa HTTP da rede local não há criptografia, só o token. Se o servidor inteiro cair, os alertas do app avisam, com o atraso do WorkManager (15 minutos ou mais); um serviço externo de monitoramento de disponibilidade avisaria mais rápido. Dois processos gravam no banco: a API, nas tabelas de ingestão, e o job horário de previsão, só em `forecasts`, numa transação curta por hora. O SQLite em WAL serializa as gravações, e cada conexão espera até 10 s por uma trava; com mais escritores ou gravações longas, a escolha do SQLite teria de ser revista. O backup, o dashboard e os scripts de análise só leem.
 
 ## Avaliação de modelos de previsão
 

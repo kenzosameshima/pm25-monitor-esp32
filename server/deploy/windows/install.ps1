@@ -12,7 +12,6 @@ O que faz:
   - registra tarefas agendadas que rodam como SYSTEM, sem precisar de login:
       pm25-api        na inicializacao, reinicia se cair
       pm25-dashboard  na inicializacao, reinicia se cair (pule com -NoDashboard)
-      pm25-alert      a cada 5 minutos
       pm25-forecast   a cada hora, aos 5 minutos (previsao de PM2,5)
       pm25-backup     todo dia as 03:15
 
@@ -126,10 +125,6 @@ if (-not $NoDashboard) {
         'PM2.5 - dashboard Streamlit (porta 8501)' -KeepAlive
 }
 
-$every5 = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 5) `
-    -RepetitionDuration (New-TimeSpan -Days 3650)
-Register-Pm25Task 'pm25-alert' 'run-alert.cmd' $every5 'PM2.5 - alerta no Telegram a cada 5 minutos'
-
 $hourly = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddMinutes(5) -RepetitionInterval (New-TimeSpan -Hours 1) `
     -RepetitionDuration (New-TimeSpan -Days 3650)
 Register-Pm25Task 'pm25-forecast' 'run-forecast.cmd' $hourly 'PM2.5 - previsao da hora em andamento, a cada hora (HH:05)'
@@ -164,4 +159,4 @@ if ($OpenApiPort) {
 } else {
     Write-Host 'API em http://127.0.0.1:8000, so nesta maquina. Publique-a pelo tunel HTTPS (secao "Transporte HTTPS entre redes" do README).'
 }
-Write-Host "Logs em $server\data (api.log, dashboard.log, alert.log, forecast.log, backup.log)."
+Write-Host "Logs em $server\data (api.log, dashboard.log, forecast.log, backup.log)."
