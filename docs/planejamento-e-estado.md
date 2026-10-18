@@ -111,8 +111,7 @@ Em ordem de prioridade:
 3. **Modelo do TCC em produção.** O job horário e o `ridge v0` provisório estão prontos. Falta escolher o modelo na avaliação offline, com as cerca de 5 semanas de coleta, treiná-lo numa versão nova e instalar a tarefa `pm25-forecast` no servidor.
 4. **Notificações no app.** PM2,5 alto e nó mudo, verificados periodicamente em segundo plano (WorkManager, intervalo mínimo de 15 min) com notificação local, sem depender de Firebase.
 5. **Saúde da coleta com duas definições.** O painel e o `period_metrics` calculam completude e maior lacuna de jeitos diferentes; os números do app (que segue o painel) podem não bater com os do capítulo de resultados. Decidir se unifica.
-6. **Hooks de commit.** O `core.hooksPath` aponta para `.githooks`, que só existe na branch `chore/commit-hooks`, ainda não integrada; na prática nenhum hook roda nos clones atuais.
-7. **Release do app.** Assinar o APK e testar a versão de release, que exige HTTPS.
+6. **Release do app.** Assinar o APK e testar a versão de release, que exige HTTPS.
 
 Riscos já conhecidos:
 
