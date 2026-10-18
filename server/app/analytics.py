@@ -109,14 +109,17 @@ def device_status(conn: sqlite3.Connection, now: datetime) -> pd.DataFrame:
     return out[STATUS_COLUMNS]
 
 
-def collection_health(conn: sqlite3.Connection, start: datetime, now: datetime) -> pd.DataFrame:
-    """Saúde da coleta de cada nó entre `start` e `now`.
+def collection_health(conn: sqlite3.Connection, start: datetime, now: datetime,
+                      devices: Iterable[str] | None = None) -> pd.DataFrame:
+    """Saúde da coleta de cada nó (ou só dos `devices`) entre `start` e `now`.
 
     A completude conta minutos com leitura sobre os esperados desde `start` (ou desde a primeira
     leitura do nó, se for depois). Mensagens perdidas são lacunas de `seq` dentro de uma mesma
     inicialização; reinícios são as inicializações além da primeira.
     """
     overview = _frame(db.device_overview(conn), ["first_ts"])
+    if devices is not None and not overview.empty:
+        overview = overview[overview["device_id"].isin(list(devices))]
     if overview.empty:
         return pd.DataFrame(columns=HEALTH_COLUMNS)
     df = _measurements(conn, start, now + pd.Timedelta(minutes=1), list(overview["device_id"]))

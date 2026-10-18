@@ -218,8 +218,7 @@ def health(device_id: DeviceId, hours: int = Query(24, ge=1, le=168), conn=Depen
     now = _now()
     _require_device(conn, device_id)
     start = now - timedelta(hours=hours)
-    table = analytics.collection_health(conn, start, now)
-    row = _records(table[table["device_id"] == device_id])[0]
+    row = _records(analytics.collection_health(conn, start, now, [device_id]))[0]
     return {"generated_at": now, "device_id": device_id, "start": start, "end": now,
             "completeness": row["completude"], "largest_gap_min": row["maior_lacuna_min"],
             "lost_messages": row["mensagens_perdidas"], "restarts": row["reinicios"],
