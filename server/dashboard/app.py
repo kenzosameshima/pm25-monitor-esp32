@@ -32,6 +32,8 @@ VARIABLES = {
 st.set_page_config(page_title="PM2,5 — monitoramento", page_icon=str(Path(__file__).with_name("favicon.svg")),
                    layout="wide")
 alt.data_transformers.disable_max_rows()
+# O padrão do Streamlit (6rem em cima, 10rem embaixo) cria scroll em abas que caberiam na tela.
+st.html("<style>[data-testid='stMainBlockContainer'] {padding-top: 3.5rem; padding-bottom: 2rem}</style>")
 
 
 # ---------------------------------------------------------------- dados
@@ -133,6 +135,20 @@ HEALTH_LABELS = {
 SERIES_LABELS = {OBSERVED: "Observado", PERSISTENCE: "Persistência"}
 METRIC_LABELS = {"previsor": "Previsor", "horas": "Horas", "mae": "MAE (µg/m³)", "rmse": "RMSE (µg/m³)",
                  "skill": "Skill score"}
+# Observado em azul e o baseline em cinza; os modelos ficam com cores que não se confundem com nenhum dos dois.
+SERIES_COLORS = {"Observado": "#3b82f6", "Persistência": "#9ca3af"}
+MODEL_COLORS = ["#f97316", "#10b981", "#a855f7", "#ec4899"]
+
+# Faixas de PM2,5 da CETESB (µg/m³), as mesmas do app: o limite pertence à faixa de baixo (25,0 é Boa).
+AIR_QUALITY = [(25.0, "Boa", "green"), (50.0, "Moderada", "yellow"), (75.0, "Ruim", "orange"),
+               (125.0, "Muito ruim", "red"), (float("inf"), "Péssima", "violet")]
+
+
+def air_quality(pm25) -> tuple[str, str] | None:
+    """Nome e cor da faixa de um valor de PM2,5; None sem valor."""
+    if pm25 is None or pd.isna(pm25) or pm25 < 0:
+        return None
+    return next((label, color) for bound, label, color in AIR_QUALITY if pm25 <= bound)
 
 
 def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta) -> pd.DataFrame:
@@ -187,9 +203,14 @@ def status_tab() -> None:
             if isinstance(dev["location"], str):
                 st.caption(dev["location"])
             st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")
+            # Uma linha de colunas por par: a faixa sob o PM2,5 não desalinha a linha de baixo.
             a, b = st.columns(2)
-            a.metric("PM2,5", fmt(dev["pm25"], " µg/m³"))
+            band, color = air_quality(dev["pm25"]) or (None, "off")
+            a.metric("PM2,5", fmt(dev["pm25"], " µg/m³"), delta=band, delta_color=color, delta_arrow="off",
+                     help="Faixas da CETESB para a média de 24 horas; aplicadas à leitura de um minuto, "
+                          "servem só de referência.")
             b.metric("Umidade", fmt(dev["humidity"], "%"))
+            a, b = st.columns(2)
             a.metric("Temperatura", fmt(dev["temperature"], " °C"))
             b.metric("Sinal Wi-Fi", fmt(dev["rssi"], " dBm", 0))
 
@@ -198,7 +219,9 @@ def status_tab() -> None:
     st.markdown("#### Saúde da coleta nas últimas 24 horas")
     st.dataframe(
         health, hide_index=True,
-        column_config={"Completude": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1)},
+        # Azul neutro: na cor primária (vermelha) a barra parece um alerta mesmo com 99% de completude.
+        column_config={"Completude": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1,
+                                                                      color="blue")},
     )
     st.caption("Mensagens perdidas são lacunas de sequência dentro de uma mesma inicialização do nó; "
                "minutos sem leitura e sem lacuna de sequência indicam falha do sensor, não da rede.")
@@ -272,10 +295,13 @@ def forecast_tab(devices_all: list[str]) -> None:
         return
     long["hora_local"] = local_naive(long["hora"])
     long = with_segments(long, "hora_local", "serie", pd.Timedelta(hours=1))
+    models = [c for c in table.columns if c not in SERIES_COLORS]
+    colors = SERIES_COLORS | dict(zip(models, MODEL_COLORS * len(models)))
     chart = alt.Chart(long).mark_line(point=True).encode(
         x=alt.X("hora_local:T", title=None, axis=alt.Axis(format="%d/%m %H:%M")),
         y=alt.Y("pm25:Q", title=VARIABLES["pm25"], scale=alt.Scale(zero=False)),
-        color=alt.Color("serie:N", title=None),
+        color=alt.Color("serie:N", title=None,
+                        scale=alt.Scale(domain=list(colors), range=list(colors.values()))),
         detail="segmento:N",
         strokeDash=alt.condition(alt.datum.serie == "Observado", alt.value([1, 0]), alt.value([5, 4])),
         tooltip=[alt.Tooltip("hora_local:T", title="Hora", format="%d/%m %H:%M"), alt.Tooltip("serie:N", title="Série"),
