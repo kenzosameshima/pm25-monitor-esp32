@@ -34,7 +34,6 @@ A instalação pode ser repetida depois de atualizar o projeto: ela recria as ta
 | Firewall | Nenhuma porta de entrada é aberta: a API (`127.0.0.1:8000`) é publicada pelo túnel. `-OpenApiPort` libera a TCP 8000 nas redes Privada e Domínio (alternativa HTTP na rede local) e `-OpenDashboardPort` a 8501 (dashboard) |
 | `pm25-api` | Tarefa na inicialização, como SYSTEM, sem precisar de login; reinicia a API se ela cair. Executa o uvicorn com `--host 127.0.0.1 --proxy-headers` (o host muda com a variável de sistema `PM25_API_HOST`) |
 | `pm25-dashboard` | Igual, para o Streamlit (pule com `-NoDashboard`) |
-| `pm25-alert` | A cada 5 minutos: alerta do Telegram |
 | `pm25-forecast` | A cada hora, aos 5 minutos: previsão da hora em andamento para cada nó e modelo, gravada em `forecasts` |
 | `pm25-backup` | Todo dia às 03:15: backup do banco |
 
@@ -55,7 +54,7 @@ Stop-ScheduledTask pm25-api        # parar (o laço pode reiniciar o processo fi
 Get-Content ..\..\data\api.log -Tail 20 -Wait -Encoding UTF8
 ```
 
-Logs em `server\data`: `api.log`, `dashboard.log`, `alert.log`, `forecast.log`, `backup.log`. Eles só crescem; apague ou arquive de tempos em tempos. Ficam em UTF-8, com acentos, µg/m³ e os emojis do alerta: os `run-*.cmd` ativam o modo UTF-8 do Python (`PYTHONUTF8=1`), porque sem ele a saída redirecionada para arquivo sai em cp1252, que não tem emojis. O Windows PowerShell 5.1 lê arquivo sem BOM como cp1252, daí o `-Encoding UTF8` acima; o PowerShell 7 e o Bloco de Notas já leem UTF-8. Linhas gravadas antes dessa mudança continuam em cp1252. Depois de editar o `.env`, reinicie a API:
+Logs em `server\data`: `api.log`, `dashboard.log`, `forecast.log`, `backup.log`. Eles só crescem; apague ou arquive de tempos em tempos. Ficam em UTF-8, com acentos e µg/m³: os `run-*.cmd` ativam o modo UTF-8 do Python (`PYTHONUTF8=1`), porque sem ele a saída redirecionada para arquivo sai em cp1252, que não codifica todos os caracteres. O Windows PowerShell 5.1 lê arquivo sem BOM como cp1252, daí o `-Encoding UTF8` acima; o PowerShell 7 e o Bloco de Notas já leem UTF-8. Linhas gravadas antes dessa mudança continuam em cp1252. Depois de editar o `.env`, reinicie a API:
 
 ```powershell
 Stop-ScheduledTask pm25-api; Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ? CommandLine -match 'uvicorn' | % { Stop-Process -Id $_.ProcessId -Force }; Start-ScheduledTask pm25-api

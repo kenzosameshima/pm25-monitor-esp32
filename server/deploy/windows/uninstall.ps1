@@ -5,7 +5,7 @@ Nao mexe no banco, nos backups nem na configuracao de energia.
 #>
 $ErrorActionPreference = 'Continue'
 
-foreach ($name in 'pm25-api', 'pm25-dashboard', 'pm25-alert', 'pm25-forecast', 'pm25-backup') {
+foreach ($name in 'pm25-api', 'pm25-dashboard', 'pm25-forecast', 'pm25-backup') {
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
         Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $name -Confirm:$false
