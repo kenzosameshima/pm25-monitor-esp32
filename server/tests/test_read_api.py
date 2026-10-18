@@ -1,5 +1,6 @@
 """Testes das rotas de leitura do app de consulta e do cadastro de local dos nós."""
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -201,3 +202,10 @@ def test_previsao_com_persistencia_e_modelo(client):
     scores = {s["predictor"]: s for s in body["scores"]}
     assert scores["ridge v1"]["skill"] == pytest.approx(0.8)
     assert scores["persistence"]["mae"] == pytest.approx(5.0)
+
+
+def test_parametro_fora_da_faixa_nao_vai_para_a_auditoria_da_ingestao(client):
+    insert_hours(client, [60])
+    assert client.get("/v1/devices/no-01/hourly", headers=READ, params={"hours": 0}).status_code == 422
+    with sqlite3.connect(client.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM invalid_messages").fetchone()[0] == 0

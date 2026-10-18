@@ -102,6 +102,18 @@ def test_payload_fora_do_contrato_retorna_422_e_fica_auditado(client):
     assert count(client, "SELECT device_id FROM invalid_messages") == "no-01"
 
 
+def test_json_malformado_sem_token_nao_grava_o_corpo(client):
+    r = client.post(URL, content=b"{" + b"x" * 1000, headers={"Content-Type": "application/json"})
+    assert r.status_code == 401
+    assert count(client, "SELECT COUNT(*) FROM invalid_messages WHERE raw_payload != ''") == 0
+
+
+def test_json_malformado_com_token_fica_auditado(client):
+    r = client.post(URL, content=b"{xx", headers={"Content-Type": "application/json", **auth_header(TOKEN_1)})
+    assert r.status_code == 422
+    assert count(client, "SELECT raw_payload FROM invalid_messages") == "{xx"
+
+
 def test_horario_sem_fuso_e_rejeitado(client):
     r = post(client, [reading(0, ts="2026-09-22T12:00:00")])
     assert r.status_code == 422

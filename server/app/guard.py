@@ -1,12 +1,15 @@
-"""Proteções da API exposta na internet: limite de corpo e bloqueio de IP após falhas de autenticação."""
+"""Proteções da API exposta na internet: limite de corpo, token Bearer e bloqueio de IP após falhas de autenticação."""
 
 import math
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, TypeVar
 
+from fastapi import HTTPException, Request, status
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+T = TypeVar("T")
 
 # Teto de memória do controle por IP: acima disso os registros mais antigos são descartados.
 MAX_TRACKED_IPS = 10_000
@@ -102,3 +105,31 @@ class AuthThrottle:
 
     def register_success(self, ip: str | None) -> None:
         self._entries.pop(ip or "", None)
+
+
+def client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def require_bearer(request: Request, authorization: str | None, resolve: Callable[[str], T | None],
+                   on_failure: Callable[[str | None], None] = lambda ip: None) -> T:
+    """Valida 'Authorization: Bearer <token>' com `resolve` (token -> identidade, ou None se inválido).
+
+    IP bloqueado recebe 429. Token ausente ou inválido recebe o mesmo 401, chama `on_failure(ip)` e conta
+    para o bloqueio do IP (o `AuthThrottle` em app.state.throttle).
+    """
+    throttle: AuthThrottle = request.app.state.throttle
+    ip = client_ip(request)
+    wait = throttle.retry_after(ip)
+    if wait:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Muitas tentativas inválidas",
+                            headers={"Retry-After": str(wait)})
+    scheme, _, token = (authorization or "").partition(" ")
+    token = token.strip()
+    principal = resolve(token) if scheme == "Bearer" and token else None
+    if principal is None:
+        throttle.register_failure(ip)
+        on_failure(ip)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Não autorizado", headers={"WWW-Authenticate": "Bearer"})
+    throttle.register_success(ip)
+    return principal
