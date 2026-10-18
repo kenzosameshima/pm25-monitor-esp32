@@ -68,6 +68,7 @@ def test_dashboard_renderiza_as_tres_abas(app_env):
     assert [t.label for t in at.tabs] == ["Status", "Séries", "Previsto × observado"]
     assert len(at.metric) == 8  # 4 indicadores por sensor
     assert at.metric[0].label == "PM2,5"
+    assert at.metric[0].delta in {"Boa", "Moderada", "Ruim", "Muito ruim", "Péssima"}  # faixa da CETESB
 
     # tabela de saúde da coleta: o nó 2 teve uma hora sem dados e um reinício
     health = at.dataframe[0].value.set_index("Sensor")
