@@ -11,7 +11,7 @@ MAX_FUTURE_SKEW = timedelta(minutes=5)
 
 
 class Reading(BaseModel):
-    """Uma leitura = média de 1 minuto do PMS5003 mais temperatura, umidade e diagnóstico."""
+    """Uma leitura = média de 1 minuto do PMS5003 mais temperatura, umidade, pressão e diagnóstico."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -24,6 +24,7 @@ class Reading(BaseModel):
     pm25_cf1: FiniteFloat | None = None
     temperature: FiniteFloat | None = None
     humidity: FiniteFloat | None = None
+    pressure: FiniteFloat | None = None  # hPa; só o BME280 mede
     rssi: int | None = Field(default=None, ge=-127, le=0)
     uptime_s: int | None = Field(default=None, ge=0)
     samples: int | None = Field(default=None, ge=0)
@@ -65,4 +66,6 @@ def quality_flags(r: Reading, now: datetime) -> str:
         flags.append("temp_fora_faixa")
     if r.humidity is not None and not 0 <= r.humidity <= 100:
         flags.append("umid_fora_faixa")
+    if r.pressure is not None and not 300 <= r.pressure <= 1100:
+        flags.append("pressao_fora_faixa")
     return ",".join(flags) if flags else "ok"

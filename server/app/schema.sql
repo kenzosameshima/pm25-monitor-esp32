@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS measurements (
     pm25_cf1        REAL,               -- PM2,5 "standard particle" (CF=1), usado em correções
     temperature     REAL,
     humidity        REAL,
+    pressure        REAL,               -- hPa; coletada, ainda não usada nas análises
     rssi            INTEGER,
     uptime_s        INTEGER,
     samples         INTEGER,            -- quadros do PMS5003 que entraram na média do minuto

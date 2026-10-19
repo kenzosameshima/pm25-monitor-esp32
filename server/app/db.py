@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_RAW_PAYLOAD = 64 * 1024
 
 
@@ -36,8 +36,16 @@ def connect(path: str, readonly: bool = False) -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Acrescenta ao banco já existente as colunas que o esquema ganhou depois (CREATE IF NOT EXISTS não as cria)."""
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(measurements)")}
+    if "pressure" not in columns:
+        conn.execute("ALTER TABLE measurements ADD COLUMN pressure REAL")
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    _migrate(conn)
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     conn.commit()
 
@@ -45,10 +53,10 @@ def init_db(conn: sqlite3.Connection) -> None:
 _INSERT_MEASUREMENT = """
 INSERT OR IGNORE INTO measurements (
     device_id, boot_id, seq, ts_sensor, ts_received, pm1, pm25, pm10, pm25_cf1,
-    temperature, humidity, rssi, uptime_s, samples, schema_version, quality
+    temperature, humidity, pressure, rssi, uptime_s, samples, schema_version, quality
 ) VALUES (
     :device_id, :boot_id, :seq, :ts_sensor, :ts_received, :pm1, :pm25, :pm10, :pm25_cf1,
-    :temperature, :humidity, :rssi, :uptime_s, :samples, :schema_version, :quality
+    :temperature, :humidity, :pressure, :rssi, :uptime_s, :samples, :schema_version, :quality
 )
 """
 
@@ -72,7 +80,8 @@ def insert_batch(
             (device_id, received),
         )
         before = conn.total_changes
-        conn.executemany(_INSERT_MEASUREMENT, rows)
+        # A pressão é opcional: quem monta as linhas (nó sem BME280, scripts) pode omiti-la.
+        conn.executemany(_INSERT_MEASUREMENT, [{"pressure": None, **r} for r in rows])
         inserted = conn.total_changes - before
         duplicates = len(rows) - inserted
         conn.execute(

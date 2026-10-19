@@ -140,6 +140,40 @@ def test_campos_opcionais_podem_ser_nulos(client):
     assert r.status_code == 201
 
 
+def test_pressao_e_gravada_e_e_opcional(client):
+    r = post(client, [reading(0, pressure=931.3), reading(1)])
+    assert r.status_code == 201
+    with sqlite3.connect(client.db_path) as conn:
+        rows = conn.execute("SELECT pressure, quality FROM measurements ORDER BY seq").fetchall()
+    assert rows == [(931.3, "ok"), (None, "ok")]
+
+
+def test_pressao_implausivel_e_marcada(client):
+    post(client, [reading(0, pressure=50.0)])
+    with sqlite3.connect(client.db_path) as conn:
+        assert conn.execute("SELECT quality FROM measurements").fetchone() == ("pressao_fora_faixa",)
+
+
+def test_banco_anterior_ganha_a_coluna_de_pressao(tmp_path):
+    from app import db
+
+    path = tmp_path / "antigo.db"
+    with sqlite3.connect(path) as conn:
+        schema = db.SCHEMA_PATH.read_text(encoding="utf-8")
+        conn.executescript("\n".join(line for line in schema.splitlines() if "pressure" not in line))
+        conn.execute("INSERT INTO devices (device_id, first_seen) VALUES ('no-01', '2026-10-09T00:00:00Z')")
+        conn.execute("INSERT INTO measurements (device_id, boot_id, seq, ts_sensor, ts_received, pm25, schema_version)"
+                     " VALUES ('no-01', 1, 0, '2026-10-09T00:00:00Z', '2026-10-09T00:00:00Z', 12.0, '1')")
+        assert "pressure" not in {r[1] for r in conn.execute("PRAGMA table_info(measurements)")}
+    conn = db.connect(str(path))
+    try:
+        db.init_db(conn)
+        db.init_db(conn)  # rodar de novo não muda nada
+        assert conn.execute("SELECT pm25, pressure FROM measurements").fetchone()[:] == (12.0, None)
+    finally:
+        conn.close()
+
+
 def test_tabela_bruta_e_imutavel(client):
     post(client, [reading(0)])
     with sqlite3.connect(client.db_path) as conn:
@@ -175,8 +209,8 @@ def test_contrato_payload_gerado_pelo_firmware_e_aceito(client):
     assert r.status_code == 201, r.text
     assert r.json() == {"inserted": 2, "duplicates": 0}
     with sqlite3.connect(client.db_path) as conn:
-        row = conn.execute("SELECT temperature, rssi, quality FROM measurements WHERE seq = 1").fetchone()
-    assert row == (None, None, "ok")
+        row = conn.execute("SELECT temperature, pressure, rssi, quality FROM measurements WHERE seq = 1").fetchone()
+    assert row == (None, None, None, "ok")
 
 
 # ---------------- API exposta na internet: corpo, autenticação uniforme e bloqueio por IP ----------------
