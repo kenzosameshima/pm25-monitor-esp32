@@ -16,10 +16,11 @@ struct Reading {
   uint32_t uptime_s;
   float pm1, pm25, pm10, pm25_cf1;
   float temperature, humidity;  // NAN quando indisponível
+  float pressure;               // hPa; NAN quando indisponível (o DHT22 não mede)
   int16_t rssi;                 // RSSI_NONE quando indisponível
   uint16_t samples;             // quadros do PMS5003 na média
 };
-static_assert(sizeof(Reading) == 44, "tamanho do registro mudou: troque o nome do arquivo de pendências");
+static_assert(sizeof(Reading) == 48, "tamanho do registro mudou: troque o nome do arquivo de pendências");
 
 static const int16_t RSSI_NONE = INT16_MIN;
 
@@ -43,7 +44,7 @@ inline void formatIsoUtc(uint32_t epoch, char* out, size_t n) {
 // deviceId deve conter só letras, números, '-' e '_' (a API valida o mesmo padrão).
 inline std::string buildPayload(const char* deviceId, const Reading* rs, size_t count) {
   std::string s;
-  s.reserve(64 + count * 240);
+  s.reserve(64 + count * 260);
   s += "{\"schema_version\":\"1\",\"device_id\":\"";
   s += deviceId;
   s += "\",\"readings\":[";
@@ -67,6 +68,8 @@ inline std::string buildPayload(const char* deviceId, const Reading* rs, size_t 
     appendFloat(s, "temperature", r.temperature);
     s += ',';
     appendFloat(s, "humidity", r.humidity);
+    s += ',';
+    appendFloat(s, "pressure", r.pressure);
     if (r.rssi == RSSI_NONE) {
       s += ",\"rssi\":null}";
     } else {

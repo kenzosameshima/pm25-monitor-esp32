@@ -63,9 +63,9 @@ static const uint32_t WDT_TIMEOUT_S = 90;
 static const uint32_t PMS_STALL_MS = 2000;
 
 // Se a estrutura Reading mudar, troque os nomes (o static_assert em reading.h avisa).
-static const char* PENDING_FILE = "/pending_v1.bin";
-static const char* OFFSET_FILE = "/pending_v1.off";
-static const char* TMP_FILE = "/pending_v1.tmp";
+static const char* PENDING_FILE = "/pending_v2.bin";
+static const char* OFFSET_FILE = "/pending_v2.off";
+static const char* TMP_FILE = "/pending_v2.tmp";
 
 // A API_URL https:// exige a CA raiz (API_ROOT_CA) ou, só em bancada, API_TLS_INSECURE_TEST.
 constexpr bool urlIsHttps(const char* url) {
@@ -132,7 +132,7 @@ static void setupWatchdog() {
   esp_task_wdt_add(NULL);
 }
 
-// ---------------- Temperatura e umidade ----------------
+// ---------------- Temperatura, umidade e pressão ----------------
 static void initTemperatureHumidity() {
 #if defined(TH_SENSOR_BME280)
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
@@ -143,14 +143,16 @@ static void initTemperatureHumidity() {
 #endif
 }
 
-static void readTemperatureHumidity(float& t, float& h) {
+static void readEnvironment(float& t, float& h, float& p) {
 #if defined(TH_SENSOR_BME280)
   if (!bmeOk) bmeOk = bme.begin(BME280_ADDR, &Wire);
   t = bmeOk ? bme.readTemperature() : NAN;
   h = bmeOk ? bme.readHumidity() : NAN;
+  p = bmeOk ? bme.readPressure() / 100.0F : NAN;  // Pa -> hPa
 #else
   t = dht.readTemperature();  // NAN em caso de falha
   h = dht.readHumidity();
+  p = NAN;  // o DHT22 não mede pressão
 #endif
 }
 
@@ -383,7 +385,7 @@ static void closeMinute(int64_t minute) {
   r.pm25 = acc.mean(acc.pm25);
   r.pm10 = acc.mean(acc.pm10);
   r.pm25_cf1 = acc.mean(acc.pm25_cf1);
-  readTemperatureHumidity(r.temperature, r.humidity);
+  readEnvironment(r.temperature, r.humidity, r.pressure);
   r.rssi = WiFi.status() == WL_CONNECTED ? (int16_t)WiFi.RSSI() : RSSI_NONE;
   r.samples = acc.n;
   acc.reset();
@@ -461,6 +463,9 @@ void setup() {
   prefs.end();
 
   if (LittleFS.begin(true)) {
+    LittleFS.remove("/pending_v1.bin");  // formato anterior (sem pressão): o arquivo não é mais lido
+    LittleFS.remove("/pending_v1.off");
+    LittleFS.remove("/pending_v1.tmp");
     loadPending();
   } else {
     Serial.println("[fs] falha ao montar LittleFS: leituras não enviadas serão perdidas");

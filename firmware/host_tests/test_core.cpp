@@ -98,12 +98,14 @@ int main() {
   {
     Reading rs[2];
     memset(rs, 0, sizeof rs);
-    rs[0] = {3, 0, 1790078400u, 120, 8.2f, 12.46f, 15.0f, 13.0f, 23.4f, 61.0f, -63, 58};
-    rs[1] = {3, 1, 1790078460u, 180, 8.0f, 12.0f, 14.9f, 12.8f, NAN, NAN, RSSI_NONE, 57};
+    rs[0] = {3, 0, 1790078400u, 120, 8.2f, 12.46f, 15.0f, 13.0f, 23.4f, 61.0f, 931.27f, -63, 58};
+    rs[1] = {3, 1, 1790078460u, 180, 8.0f, 12.0f, 14.9f, 12.8f, NAN, NAN, NAN, RSSI_NONE, 57};
     std::string json = buildPayload("no-01", rs, 2);
     assert(json.find("\"ts\":\"2026-09-22T12:00:00Z\"") != std::string::npos);
     assert(json.find("\"pm25\":12.5") != std::string::npos);
     assert(json.find("\"temperature\":null") != std::string::npos);
+    assert(json.find("\"pressure\":931.3") != std::string::npos);
+    assert(json.find("\"pressure\":null") != std::string::npos);
     assert(json.find("\"rssi\":null") != std::string::npos);
     assert(json.find("\"boot_id\":3,\"seq\":1") != std::string::npos);
     FILE* f = fopen("payload_exemplo.json", "w");
