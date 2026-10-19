@@ -95,7 +95,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 
 | Parte | Automatizado | Verificado à mão |
 |---|---|---|
-| Servidor | 178 testes passando | API real com o simulador e `curl` nas rotas de leitura |
+| Servidor | 187 testes passando | API real com o simulador e `curl` nas rotas de leitura |
 | Firmware | Testes no computador (parser, média, JSON) e compilação nas quatro combinações | — |
 | App Android | 60 testes de unidade: contrato JSON com respostas geradas pela própria API, erros, rede local, faixas, idade, hora estimada do servidor, resumo, previsão, cache em arquivo, estado das três telas, regras dos alertas e textos das notificações | Emulador: permissão de rede local, as três telas, troca de janela, banco de 3 dias com lacuna e reinício, modelo de demonstração em `forecasts`, queda da API e reabertura sem servidor; alertas de nó sem dados e de volta, ar Ruim, servidor sem resposta e de volta, sem avisos repetidos. Celular (Galaxy S23 Ultra, Android 16, pelo túnel): atualização por cima da versão anterior, dados da produção, permissão pelo cartão e alerta real de PM2,5 Ruim |
 
@@ -116,6 +116,7 @@ Riscos já conhecidos:
 
 - **Servidor único.** Se o servidor parar, os nós guardam 5 dias de leituras, e os alertas do app avisam, com 15 minutos ou mais de atraso.
 - **Tarefas do Windows como SYSTEM.** O `install.ps1` registra as tarefas como SYSTEM sem restringir as permissões da pasta do servidor; quem pode escrever nela (ou em `data\models`, lido com `joblib.load`) executa código como SYSTEM. Mitigação pendente: conta de baixo privilégio e ACLs na pasta.
+- **Previsões recalculadas retroativamente.** Em 19/10/2026 foram recalculadas 5 horas-alvo do `ridge v0` que ficaram sem previsão porque o servidor ficou sem receber dados: 17/10 18:00 UTC (15:00 em Brasília) e 18/10 de 18:00 a 21:00 UTC (15:00 a 18:00 em Brasília). Na segunda, o nó guardou as leituras de 17:09 a 21:50 UTC durante uma queda do túnel e as enviou em bloco às 21:51 UTC (291 leituras, nenhuma perdida). O recálculo (`forecast_job.py --replay-from ... --replay-to ...`) usa o mesmo modelo e só as leituras anteriores à hora-alvo, mas não foi gravado antes do fato: está na versão `v0-retro`, separada das 28 previsões em tempo real (`v0`), e deve ser tratado como previsão retroativa, não prospectiva, no texto do TCC.
 - **Token de leitura embutido no APK.** Ele pode ser extraído, mas só dá acesso de leitura e pode ser trocado no `.env`.
 - **Umidade alta.** Acima de 75%, o PMS5003 tende a superestimar o PM2,5. O app avisa quantas horas da janela passaram desse limite.
 
