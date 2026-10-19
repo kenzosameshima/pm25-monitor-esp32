@@ -95,7 +95,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 
 | Parte | Automatizado | Verificado à mão |
 |---|---|---|
-| Servidor | 175 testes passando | API real com o simulador e `curl` nas rotas de leitura |
+| Servidor | 178 testes passando | API real com o simulador e `curl` nas rotas de leitura |
 | Firmware | Testes no computador (parser, média, JSON) e compilação nas quatro combinações | — |
 | App Android | 60 testes de unidade: contrato JSON com respostas geradas pela própria API, erros, rede local, faixas, idade, hora estimada do servidor, resumo, previsão, cache em arquivo, estado das três telas, regras dos alertas e textos das notificações | Emulador: permissão de rede local, as três telas, troca de janela, banco de 3 dias com lacuna e reinício, modelo de demonstração em `forecasts`, queda da API e reabertura sem servidor; alertas de nó sem dados e de volta, ar Ruim, servidor sem resposta e de volta, sem avisos repetidos. Celular (Galaxy S23 Ultra, Android 16, pelo túnel): atualização por cima da versão anterior, dados da produção, permissão pelo cartão e alerta real de PM2,5 Ruim |
 
@@ -105,9 +105,9 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 
 Em ordem de prioridade:
 
-1. **Coleta contínua.** O nó `no-01` coleta desde 09/10/2026. Faltam semanas de dados para a avaliação dos modelos (hoje cerca de 10 dias, poucas horas para treino, validação e teste), a comparação com a CETESB e as métricas do período.
+1. **Coleta contínua.** O nó `no-01` coleta desde 09/10/2026. A coleta segue até 27 ou 28/10/2026 (cerca de 19 dias), quando o banco é congelado para as métricas do período, a avaliação dos modelos e a comparação com a CETESB. É menos que as cerca de 5 semanas recomendadas no README para a avaliação, então os resultados do TCC serão preliminares e a limitação deve constar no texto.
 2. **Túnel em produção.** Seguir o passo a passo do README e testar de outra rede, com `check_https.py` para a ingestão e `curl` para `/v1/devices` e seus subcaminhos.
-3. **Modelo do TCC em produção.** O job horário e o `ridge v0` provisório estão prontos. Falta escolher o modelo na avaliação offline, com as cerca de 5 semanas de coleta, treiná-lo numa versão nova e instalar a tarefa `pm25-forecast` no servidor.
+3. **Modelo do TCC em produção.** O job horário e o `ridge v0` provisório estão prontos. Falta escolher o modelo na avaliação offline, com os dados coletados até 27 ou 28/10/2026, treiná-lo numa versão nova e instalar a tarefa `pm25-forecast` no servidor.
 4. **Atraso dos alertas no celular.** Os alertas funcionam no emulador e no Galaxy S23 Ultra pelo túnel, inclusive com um alerta real de PM2,5 Ruim. Falta acompanhar a checagem periódica por alguns dias e medir o atraso com a economia de bateria da Samsung.
 5. **Saúde da coleta com duas definições.** O painel e o `period_metrics` calculam completude e maior lacuna de jeitos diferentes; os números do app (que segue o painel) podem não bater com os do capítulo de resultados. Decidir se unifica.
 6. **Release do app.** Assinar o APK e testar a versão de release, que exige HTTPS.
@@ -123,7 +123,7 @@ Riscos já conhecidos:
 
 1. Instalar um segundo nó e deixar os dois lado a lado de 3 a 7 dias para medir a concordância.
 2. Registrar o local do nó com `set_location` e manter o túnel e o app apontados para a URL pública.
-3. Com algumas semanas de coleta, rodar `train_forecast.py` sobre o banco congelado, escolher o modelo e treiná-lo com `fit_forecast.py` numa versão nova, que o job horário passa a gravar ao lado do `ridge v0`.
+3. Em 27 ou 28/10/2026, com a coleta encerrada, rodar `train_forecast.py` sobre o banco congelado, escolher o modelo e treiná-lo com `fit_forecast.py` numa versão nova, que o job horário passa a gravar ao lado do `ridge v0`.
 4. Acompanhar os alertas no celular por alguns dias, com a bateria do app sem restrições.
 5. Rodar `period_metrics.py` e `compare_cetesb.py` para o capítulo de resultados.
 
