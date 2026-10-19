@@ -108,12 +108,11 @@ static bool isSuccess(int code) { return code == 200 || code == 201; }
 // Sem hora válida o handshake falha: o envio por HTTPS só começa depois do NTP.
 static bool clockReadyForSend() { return !API_IS_HTTPS || timeValid(); }
 
-// 4xx que não se resolvem reenviando: o lote é descartado (a API guarda uma cópia para auditoria).
-// 401/403 indicam token ou DEVICE_ID errado: os dados ficam no buffer até a configuração ser corrigida.
-// 429 (IP bloqueado) e falhas de conexão ou de handshake TLS (código negativo) também mantêm o lote no buffer.
-static bool isRejected(int code) {
-  return code >= 400 && code < 500 && code != 401 && code != 403 && code != 408 && code != 429;
-}
+// Respostas que a API dá a um conteúdo inválido e que não se resolvem reenviando: o lote é descartado
+// (a API guarda uma cópia para auditoria). Qualquer outro 4xx mantém o lote no buffer: 401/403 indicam
+// token ou DEVICE_ID errado, 404/405 um caminho ou túnel mal configurado, 429 um IP bloqueado, e todos
+// se corrigem sem perder dados. Falhas de conexão ou de handshake TLS (código negativo) também mantêm.
+static bool isRejected(int code) { return code == 400 || code == 413 || code == 422; }
 
 static void scheduleRetry() {
   backoffMs = backoffMs == 0 ? FIRST_BACKOFF_MS : (backoffMs * 2 > MAX_BACKOFF_MS ? MAX_BACKOFF_MS : backoffMs * 2);
