@@ -60,12 +60,12 @@ Cada leitura é a média de um minuto de relógio. O nó envia `POST /v1/measure
   "readings": [
     {"boot_id": 3, "seq": 0, "ts": "2026-09-22T12:00:00Z", "uptime_s": 120, "samples": 58,
      "pm1": 8.2, "pm25": 12.5, "pm10": 15.0, "pm25_cf1": 13.0,
-     "temperature": 23.4, "humidity": 61.0, "rssi": -63}
+     "temperature": 23.4, "humidity": 61.0, "pressure": 931.3, "rssi": -63}
   ]
 }
 ```
 
-O campo `ts` marca o início da janela de um minuto, sempre em UTC. `pm25` é o valor "atmospheric environment" do PMS5003, usado nas análises; `pm25_cf1` é o valor "standard particle", guardado porque as correções publicadas para sensores Plantower costumam partir dele. `samples` conta quantos quadros do sensor entraram na média, e `rssi` e `uptime_s` explicam lacunas depois. Temperatura, umidade e RSSI podem vir como `null`. Um lote aceita até 500 leituras.
+O campo `ts` marca o início da janela de um minuto, sempre em UTC. `pm25` é o valor "atmospheric environment" do PMS5003, usado nas análises; `pm25_cf1` é o valor "standard particle", guardado porque as correções publicadas para sensores Plantower costumam partir dele. `samples` conta quantos quadros do sensor entraram na média, e `rssi` e `uptime_s` explicam lacunas depois. Temperatura, umidade, pressão e RSSI podem vir como `null`. A pressão (`pressure`, em hPa) só vem do BME280 e é apenas guardada em `measurements.pressure`: nenhuma análise, rota de leitura, painel ou o app a usa por enquanto. Bancos anteriores ganham a coluna sozinhos quando a API sobe, e leituras antigas ficam com `null`; a faixa plausível é 300 a 1100 hPa (fora dela a leitura é marcada `pressao_fora_faixa`). Um lote aceita até 500 leituras.
 
 | Resposta | Significado | O que o nó faz |
 |---|---|---|
@@ -216,7 +216,7 @@ cd firmware/host_tests
 g++ -std=c++17 -Wall -I../src test_core.cpp -o test_core && ./test_core
 ```
 
-O teste gera `payload_exemplo.json`, e o teste da API `test_contrato_payload_gerado_pelo_firmware_e_aceito` confere que a API aceita exatamente esse JSON. Nada disso substitui o teste com o hardware real, que ainda precisa ser feito.
+O teste gera `payload_exemplo.json`, e o teste da API `test_contrato_payload_gerado_pelo_firmware_e_aceito` confere que a API aceita exatamente esse JSON. Nada disso substitui o teste com o hardware real, feito no nó `no-01`, em operação desde 09/10/2026.
 
 ## Simulação no Wokwi
 

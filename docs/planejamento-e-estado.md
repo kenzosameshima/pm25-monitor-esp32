@@ -78,7 +78,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 
 | Componente | Estado | O que existe | Verificação | Falta |
 |---|---|---|---|---|
-| Firmware do nó (`firmware/`) | parcial | Leitura do PMS5003 e do BME280 ou DHT22, média de 1 min, buffer de 5 dias, HTTPS com raiz embutida, watchdog | Compila sem avisos nas quatro combinações (cores 2.0.17 e 3.3.12 × BME280/DHT22); parser, média e JSON testados no computador; o JSON gerado é aceito pela API | **Teste com o hardware real**; medir o pico de memória do handshake TLS |
+| Firmware do nó (`firmware/`) | parcial | Leitura do PMS5003 e do BME280 ou DHT22, média de 1 min, buffer de 5 dias, HTTPS com raiz embutida, watchdog | Compila sem avisos nas quatro combinações (cores 2.0.17 e 3.3.12 × BME280/DHT22); parser, média e JSON testados no computador; o JSON gerado é aceito pela API | Nó `no-01` (PMS5003 + BME280) montado, fixado e em operação em Osasco desde 09/10/2026, enviando pelo túnel; 14 mil leituras em 10 dias, nenhuma marcada nem recusada; medir o pico de memória do handshake TLS; o BME280 também mede pressão, que não é coletada |
 | Simulação no Wokwi (`wokwi/`) | pronto | Chips do PMS5003 e do BME280 corrigidos (campos e compensação) | Erro abaixo de 0,01 nas faixas testadas, quadros aceitos pelo parser | Execução completa do firmware no Wokwi não registrada |
 | API de ingestão | pronto | Contrato v1, idempotência, auditoria de mensagens inválidas, limite de corpo, bloqueio de IP | Testes da API, inclusive com o JSON do firmware | — |
 | API de leitura | pronto | `/v1/devices`, `/hourly` (`start`/`end` ou `hours`), `/health`, `/forecast`, token de leitura, banco somente leitura | Testes da API e teste de ponta a ponta com o simulador e `curl` | ETag/respostas condicionais (opcional) |
@@ -88,7 +88,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | Avaliação de modelos (`train_forecast.py`) | parcial | Persistência, Ridge, gradient boosting e MLP (scikit-learn), validação progressiva, teste final, relatório reproduzível | Testes com dados sintéticos | **Rodar com os dados reais da coleta** |
 | Job horário de previsão (`fit_forecast.py`, `forecast_job.py`) | parcial | Treino e gravação do modelo versionado, job a cada hora (HH:05) na tarefa `pm25-forecast` e no crontab, `ridge v0` provisório | Testes com dados sintéticos; uma execução pelo `run-forecast.cmd` no banco local, vista na série `ridge v0` do previsto × observado | **Treinar o modelo do TCC e instalar a tarefa no servidor** |
 | Métricas do período e comparação CETESB | pronto | `period_metrics.py` (com congelamento do banco) e `compare_cetesb.py` | Testes | Rodar com os dados reais e o CSV do QUALAR |
-| Implantação | parcial | Scripts do Windows (tarefas agendadas), serviços systemd e crontab para Linux, passo a passo do túnel | Scripts escritos, sem registro de instalação verificada neste repositório | **Testar o túnel de verdade**, de outra rede, inclusive os subcaminhos de `/v1/devices` |
+| Implantação | parcial | Scripts do Windows (tarefas agendadas), serviços systemd e crontab para Linux, passo a passo do túnel | Scripts escritos; em uso desde 09/10/2026, com o nó enviando pelo túnel (Tailscale Funnel) e o app lendo pela URL pública | Testar os subcaminhos de `/v1/devices` de outra rede; segundo nó |
 | App Android (`android/`) | pronto para demonstração | Tela inicial, detalhe com 24 h ou 7 dias e saúde da coleta, previsão previsto × observado, cache offline, permissão de rede local, alertas em segundo plano (nó sem dados, PM2,5 Ruim, servidor sem resposta) | 60 testes de unidade e lint sem problemas; fluxo completo no emulador (API 37) contra a API local, inclusive offline e os alertas; no Galaxy S23 Ultra (Android 16) pelo túnel, com os dados da produção e um alerta real de PM2,5 Ruim | Medir o atraso dos alertas no celular ao longo do tempo; build de release assinado |
 
 ## 6. Testes e verificação
@@ -99,13 +99,13 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | Firmware | Testes no computador (parser, média, JSON) e compilação nas quatro combinações | — |
 | App Android | 60 testes de unidade: contrato JSON com respostas geradas pela própria API, erros, rede local, faixas, idade, hora estimada do servidor, resumo, previsão, cache em arquivo, estado das três telas, regras dos alertas e textos das notificações | Emulador: permissão de rede local, as três telas, troca de janela, banco de 3 dias com lacuna e reinício, modelo de demonstração em `forecasts`, queda da API e reabertura sem servidor; alertas de nó sem dados e de volta, ar Ruim, servidor sem resposta e de volta, sem avisos repetidos. Celular (Galaxy S23 Ultra, Android 16, pelo túnel): atualização por cima da versão anterior, dados da produção, permissão pelo cartão e alerta real de PM2,5 Ruim |
 
-**Nunca verificado:** o nó com o hardware real; a ingestão pelo túnel Funnel a partir de um ESP32 (as rotas de leitura pelo túnel foram verificadas pelo celular); o modelo do TCC em produção. Os resultados do emulador usaram dados sintéticos e um modelo de demonstração (`demo v1`), que não é o modelo do TCC; no celular, os dados e o alerta foram os reais da produção.
+**Nunca verificado:** o modelo do TCC em produção; a concordância entre dois nós (há um só); a comparação com a CETESB. O nó `no-01` opera em Osasco desde 09/10/2026 e envia pelo túnel. Os resultados do emulador usaram dados sintéticos e um modelo de demonstração (`demo v1`), que não é o modelo do TCC; no celular, os dados e o alerta foram os reais da produção.
 
 ## 7. Pendências e riscos
 
 Em ordem de prioridade:
 
-1. **Hardware real e coleta contínua.** É a base do TCC. Sem ela, os modelos, a comparação com a CETESB e as métricas do período só rodam com dados sintéticos.
+1. **Coleta contínua.** O nó `no-01` coleta desde 09/10/2026. Faltam semanas de dados para a avaliação dos modelos (hoje cerca de 10 dias, poucas horas para treino, validação e teste), a comparação com a CETESB e as métricas do período.
 2. **Túnel em produção.** Seguir o passo a passo do README e testar de outra rede, com `check_https.py` para a ingestão e `curl` para `/v1/devices` e seus subcaminhos.
 3. **Modelo do TCC em produção.** O job horário e o `ridge v0` provisório estão prontos. Falta escolher o modelo na avaliação offline, com as cerca de 5 semanas de coleta, treiná-lo numa versão nova e instalar a tarefa `pm25-forecast` no servidor.
 4. **Atraso dos alertas no celular.** Os alertas funcionam no emulador e no Galaxy S23 Ultra pelo túnel, inclusive com um alerta real de PM2,5 Ruim. Falta acompanhar a checagem periódica por alguns dias e medir o atraso com a economia de bateria da Samsung.
@@ -121,8 +121,8 @@ Riscos já conhecidos:
 
 ## 8. Próximos passos sugeridos
 
-1. Instalar um nó, validar no monitor serial e no dashboard, e deixar dois nós lado a lado de 3 a 7 dias para medir a concordância.
-2. Publicar o túnel e apontar o app para a URL pública (`pm25.apiUrl` no `local.properties`).
+1. Instalar um segundo nó e deixar os dois lado a lado de 3 a 7 dias para medir a concordância.
+2. Registrar o local do nó com `set_location` e manter o túnel e o app apontados para a URL pública.
 3. Com algumas semanas de coleta, rodar `train_forecast.py` sobre o banco congelado, escolher o modelo e treiná-lo com `fit_forecast.py` numa versão nova, que o job horário passa a gravar ao lado do `ridge v0`.
 4. Acompanhar os alertas no celular por alguns dias, com a bateria do app sem restrições.
 5. Rodar `period_metrics.py` e `compare_cetesb.py` para o capítulo de resultados.
