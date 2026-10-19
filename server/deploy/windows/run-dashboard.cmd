@@ -5,6 +5,6 @@ set PYTHONUTF8=1
 cd /d "%~dp0..\.."
 if not exist data mkdir data
 :loop
-".venv\Scripts\python.exe" -m streamlit run dashboard/app.py --server.headless true --server.port 8501 --browser.gatherUsageStats false >> data\dashboard.log 2>&1
+".venv\Scripts\python.exe" -m streamlit run dashboard/app.py --server.headless true --server.port 8501 --server.address 127.0.0.1 --browser.gatherUsageStats false >> data\dashboard.log 2>&1
 ping -n 6 127.0.0.1 >nul
 goto loop
