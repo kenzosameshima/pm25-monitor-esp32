@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 
-TOKEN_1 = "token-do-no-01-0000000000"
-TOKEN_2 = "token-do-no-02-0000000000"
+TOKEN_1 = "token-do-no-01-aB3xQ9zK7pLm2Wv8Rt"
+TOKEN_2 = "token-do-no-02-aB3xQ9zK7pLm2Wv8Rt"
 URL = "/v1/measurements"
 
 

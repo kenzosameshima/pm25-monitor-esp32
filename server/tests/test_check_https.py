@@ -14,7 +14,7 @@ import pytest
 from app.models import Batch
 from scripts import check_https
 
-TOKEN_OK = "token-de-teste-0000000000"
+TOKEN_OK = "token-de-teste-aB3xQ9zK7pLm2Wv8Rt"
 
 
 class Falso(BaseHTTPRequestHandler):

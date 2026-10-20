@@ -269,7 +269,7 @@ Nada disto foi executado na implementação: dependem da sua conta e do computad
 2. No painel de administração, em DNS, ative o **MagicDNS** e o **HTTPS Certificates** (a Tailscale emite o certificado pela Let's Encrypt).
 3. Ative a exposição pública (o atributo `funnel`). Ao rodar o primeiro `tailscale funnel`, o cliente abre uma página para aprovar. Também dá para editar a política da conta (Access controls) e acrescentar `"nodeAttrs": [{"target": ["autogroup:member"], "attr": ["funnel"]}]`; restrinja `target` ao seu usuário ou à máquina do servidor se a conta tiver outros membros.
 4. Atualize o servidor: reinstale as tarefas com `server\deploy\windows\install.ps1` (a API passa a escutar só em `127.0.0.1` e a regra de firewall da porta 8000 é removida), e reinicie a API.
-5. Cadastre um token para o dispositivo de teste e um para cada nó em `server\.env`, por exemplo `PM25_DEVICE_TOKENS=no-01:<token>,no-02:<token>,teste-https:<token>`. Gere cada token com `python -c "import secrets; print(secrets.token_urlsafe(24))"`. Para o app de consulta, gere mais um e grave em `PM25_READ_TOKEN`.
+5. Cadastre um token para o dispositivo de teste e um para cada nó em `server\.env`, por exemplo `PM25_DEVICE_TOKENS=no-01:<token>,no-02:<token>,teste-https:<token>`. Gere cada token com `python -c "import secrets; print(secrets.token_urlsafe(24))"`. A API só inicia com tokens de pelo menos 32 caracteres e 10 distintos, o que o comando atende; um token mais curto de uma instalação anterior precisa ser trocado no `.env` e no `config.h` do nó. Para o app de consulta, gere mais um e grave em `PM25_READ_TOKEN`.
 6. Publique só os três caminhos, apontando para a API local (PowerShell, no servidor):
 
    ```powershell

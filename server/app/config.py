@@ -13,6 +13,11 @@ load_dotenv(os.environ.get("PM25_ENV_FILE", ".env"))
 # Os tokens de exemplo dos arquivos .example começam com "TROQUE-"; usados de verdade, seriam credenciais públicas.
 PLACEHOLDER = "troque"
 
+# secrets.token_urlsafe(24), que o README manda usar, gera 32 caracteres. O bloqueio por IP não limita quem já envia um
+# token válido, então a força do token é a única defesa contra adivinhação e a configuração a exige.
+MIN_TOKEN_LENGTH = 32
+MIN_TOKEN_DISTINCT = 10
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -43,11 +48,13 @@ class Settings:
 
 
 def _check_token(token: str, name: str) -> None:
-    """Recusa token curto ou o exemplo dos arquivos .example ("TROQUE-..."), que é público no repositório."""
-    if len(token) < 16:
-        raise ValueError(f"{name} muito curto (mínimo 16 caracteres)")
+    """Recusa o exemplo dos arquivos .example ("TROQUE-..."), que é público no repositório, e token fraco."""
     if PLACEHOLDER in token.lower():
         raise ValueError(f"{name} ainda é o exemplo do repositório: gere um com secrets.token_urlsafe(24)")
+    if len(token) < MIN_TOKEN_LENGTH:
+        raise ValueError(f"{name} muito curto (mínimo {MIN_TOKEN_LENGTH} caracteres): gere um com secrets.token_urlsafe(24)")
+    if len(set(token)) < MIN_TOKEN_DISTINCT:
+        raise ValueError(f"{name} com poucos caracteres distintos (mínimo {MIN_TOKEN_DISTINCT}): gere um com secrets.token_urlsafe(24)")
 
 
 def _parse_tokens(raw: str) -> dict[str, str]:

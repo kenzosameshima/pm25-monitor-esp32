@@ -10,8 +10,8 @@ from app import db
 from app.config import get_settings
 from scripts import set_location
 
-TOKEN_1 = "token-do-no-01-0000000000"
-READ_TOKEN = "token-de-leitura-0000000000"
+TOKEN_1 = "token-do-no-01-aB3xQ9zK7pLm2Wv8Rt"
+READ_TOKEN = "token-de-leitura-aB3xQ9zK7pLm2Wv8Rt"
 READ = {"Authorization": f"Bearer {READ_TOKEN}"}
 HOUR = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
@@ -108,13 +108,41 @@ def test_tokens_de_exemplo_do_repositorio_sao_recusados(monkeypatch, devices, re
     get_settings.cache_clear()
 
 
-@pytest.mark.parametrize("raw, message", [("curto", "muito curto"), (TOKEN_1, "repetir o token")])
+@pytest.mark.parametrize("raw, message", [
+    ("curto", "muito curto"),
+    ("a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5", "muito curto"),             # 30 caracteres: abaixo do mínimo de 32
+    ("a" * 40, "poucos caracteres distintos"),                      # comprido, mas sem variedade
+    ("abcdefghi" * 4, "poucos caracteres distintos"),               # 9 caracteres distintos
+    (TOKEN_1, "repetir o token"),
+])
 def test_token_de_leitura_invalido_na_configuracao(monkeypatch, raw, message):
     monkeypatch.setenv("PM25_DEVICE_TOKENS", f"no-01:{TOKEN_1}")
     monkeypatch.setenv("PM25_READ_TOKEN", raw)
     get_settings.cache_clear()
     with pytest.raises(ValueError, match=message):
         get_settings()
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("devices, message", [
+    ("no-01:abcdefghijklmnopqrstuvwxyz12345", "muito curto"),        # 31 caracteres
+    ("no-01:" + "z" * 40, "poucos caracteres distintos"),
+])
+def test_token_fraco_de_no_e_recusado_na_configuracao(monkeypatch, devices, message):
+    monkeypatch.setenv("PM25_DEVICE_TOKENS", devices)
+    monkeypatch.setenv("PM25_READ_TOKEN", "")
+    get_settings.cache_clear()
+    with pytest.raises(ValueError, match=message):
+        get_settings()
+    get_settings.cache_clear()
+
+
+def test_token_gerado_por_secrets_e_aceito(monkeypatch):
+    import secrets
+    monkeypatch.setenv("PM25_DEVICE_TOKENS", f"no-01:{secrets.token_urlsafe(24)}")
+    monkeypatch.setenv("PM25_READ_TOKEN", secrets.token_urlsafe(24))
+    get_settings.cache_clear()
+    assert get_settings().device_ids == ["no-01"]
     get_settings.cache_clear()
 
 
