@@ -34,4 +34,6 @@ fun AirQuality.color(): Color = when (this) {
     AirQuality.PESSIMA -> Color(0xFF6A1B9A)
 }
 
-fun AirQuality.onColor(): Color = if (this == AirQuality.MODERADA) Color.Black else Color.White
+/** Texto sobre a cor da faixa com contraste de pelo menos 4,5:1: branco no laranja da Ruim ficaria em ~3:1. */
+fun AirQuality.onColor(): Color =
+    if (this == AirQuality.MODERADA || this == AirQuality.RUIM) Color.Black else Color.White

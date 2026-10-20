@@ -46,7 +46,8 @@ static const uint32_t PMS_WARMUP_MS = 30000;        // ventoinha estabilizando a
 static const uint16_t MIN_SAMPLES_PER_MINUTE = 10;  // minutos com menos quadros válidos são descartados
 static const time_t MIN_VALID_EPOCH = 1767225600;   // 2026-01-01T00:00:00Z: antes disso, relógio não sincronizado
 static const size_t BATCH_SIZE = 60;                // leituras por requisição ao esvaziar o buffer
-static const int MAX_BATCHES_PER_LOOP = 3;
+// Um envio por volta do loop: cada envio bloqueia a leitura do PMS5003 (até ~43 s com a rede ruim).
+static const int MAX_BATCHES_PER_LOOP = 1;
 static const uint32_t MAX_PENDING_RECORDS = 5UL * 24 * 60;  // 5 dias de leituras em buffer (~317 KB)
 static const uint32_t HTTP_TIMEOUT_MS = 8000;
 // HTTPS: pior caso de uma tentativa = 15 s (conexão) + 20 s (handshake) + 8 s (resposta) = 43 s, abaixo do
@@ -58,11 +59,13 @@ static const uint32_t MAX_BACKOFF_MS = 5UL * 60 * 1000;
 static const uint32_t WIFI_RETRY_MS = 30000;
 static const uint32_t WIFI_REBOOT_AFTER_MS = 15UL * 60 * 1000;  // o buffer em flash sobrevive ao reinício
 static const uint32_t WDT_TIMEOUT_S = 90;
+// Pausa na leitura da UART acima disso, com virada de minuto no meio, mistura quadros de minutos diferentes.
+static const uint32_t PMS_STALL_MS = 2000;
 
 // Se a estrutura Reading mudar, troque os nomes (o static_assert em reading.h avisa).
-static const char* PENDING_FILE = "/pending_v1.bin";
-static const char* OFFSET_FILE = "/pending_v1.off";
-static const char* TMP_FILE = "/pending_v1.tmp";
+static const char* PENDING_FILE = "/pending_v2.bin";
+static const char* OFFSET_FILE = "/pending_v2.off";
+static const char* TMP_FILE = "/pending_v2.tmp";
 
 // A API_URL https:// exige a CA raiz (API_ROOT_CA) ou, só em bancada, API_TLS_INSECURE_TEST.
 constexpr bool urlIsHttps(const char* url) {
@@ -92,6 +95,9 @@ uint32_t wifiDownSince = 0;
 uint32_t lastWifiRetry = 0;
 uint32_t lastNtpWarning = 0;
 uint32_t sentOk = 0, droppedByServer = 0, droppedOverflow = 0;
+uint32_t soloLeft = 0;       // leituras de um lote recusado ainda a reenviar uma a uma
+uint32_t lastPmsRead = 0;    // millis() da última leitura da UART
+int64_t lastPmsMinute = -1;  // minuto de relógio da última leitura da UART (-1 sem hora válida)
 
 // ---------------- Utilidades ----------------
 static bool timeValid() { return time(nullptr) >= MIN_VALID_EPOCH; }
@@ -102,12 +108,11 @@ static bool isSuccess(int code) { return code == 200 || code == 201; }
 // Sem hora válida o handshake falha: o envio por HTTPS só começa depois do NTP.
 static bool clockReadyForSend() { return !API_IS_HTTPS || timeValid(); }
 
-// 4xx que não se resolvem reenviando: o lote é descartado (a API guarda uma cópia para auditoria).
-// 401/403 indicam token ou DEVICE_ID errado: os dados ficam no buffer até a configuração ser corrigida.
-// 429 (IP bloqueado) e falhas de conexão ou de handshake TLS (código negativo) também mantêm o lote no buffer.
-static bool isRejected(int code) {
-  return code >= 400 && code < 500 && code != 401 && code != 403 && code != 408 && code != 429;
-}
+// Respostas que a API dá a um conteúdo inválido e que não se resolvem reenviando: o lote é descartado
+// (a API guarda uma cópia para auditoria). Qualquer outro 4xx mantém o lote no buffer: 401/403 indicam
+// token ou DEVICE_ID errado, 404/405 um caminho ou túnel mal configurado, 429 um IP bloqueado, e todos
+// se corrigem sem perder dados. Falhas de conexão ou de handshake TLS (código negativo) também mantêm.
+static bool isRejected(int code) { return code == 400 || code == 413 || code == 422; }
 
 static void scheduleRetry() {
   backoffMs = backoffMs == 0 ? FIRST_BACKOFF_MS : (backoffMs * 2 > MAX_BACKOFF_MS ? MAX_BACKOFF_MS : backoffMs * 2);
@@ -127,7 +132,7 @@ static void setupWatchdog() {
   esp_task_wdt_add(NULL);
 }
 
-// ---------------- Temperatura e umidade ----------------
+// ---------------- Temperatura, umidade e pressão ----------------
 static void initTemperatureHumidity() {
 #if defined(TH_SENSOR_BME280)
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
@@ -138,14 +143,16 @@ static void initTemperatureHumidity() {
 #endif
 }
 
-static void readTemperatureHumidity(float& t, float& h) {
+static void readEnvironment(float& t, float& h, float& p) {
 #if defined(TH_SENSOR_BME280)
   if (!bmeOk) bmeOk = bme.begin(BME280_ADDR, &Wire);
   t = bmeOk ? bme.readTemperature() : NAN;
   h = bmeOk ? bme.readHumidity() : NAN;
+  p = bmeOk ? bme.readPressure() / 100.0F : NAN;  // Pa -> hPa
 #else
   t = dht.readTemperature();  // NAN em caso de falha
   h = dht.readHumidity();
+  p = NAN;  // o DHT22 não mede pressão
 #endif
 }
 
@@ -319,7 +326,7 @@ static void flushPending() {
   static Reading batch[BATCH_SIZE];
   for (int i = 0; i < MAX_BATCHES_PER_LOOP && pendingRecords() > 0; ++i) {
     esp_task_wdt_reset();
-    size_t n = readPendingBatch(batch, BATCH_SIZE);
+    size_t n = readPendingBatch(batch, soloLeft ? 1 : BATCH_SIZE);
     if (n == 0) {
       Serial.println("[buffer] arquivo ilegível: descartando pendências");
       clearPending();
@@ -330,10 +337,16 @@ static void flushPending() {
       sentOk += n;
       backoffMs = 0;
       confirmPending(n);
+      if (soloLeft) soloLeft--;
       Serial.printf("[buffer] lote de %u enviado; restam %lu\n", (unsigned)n, (unsigned long)pendingRecords());
+    } else if (isRejected(code) && n > 1) {
+      // A API recusa o lote inteiro por uma leitura inválida: reenvia uma a uma para descartar só ela.
+      soloLeft = n;
+      Serial.printf("[buffer] lote de %u recusado: reenviando uma a uma\n", (unsigned)n);
     } else if (isRejected(code)) {
       droppedByServer += n;
       confirmPending(n);
+      if (soloLeft) soloLeft--;
     } else {
       scheduleRetry();
       return;
@@ -343,9 +356,15 @@ static void flushPending() {
 
 // ---------------- Medição ----------------
 static void readPms() {
+  // Depois de um envio demorado, os quadros guardados na UART podem ser de minutos que já viraram: em vez
+  // de somá-los ao minuto ainda aberto, com o horário errado, descarta o que estava na fila.
+  int64_t minute = timeValid() ? (int64_t)time(nullptr) / 60 : -1;
+  bool stale = millis() - lastPmsRead > PMS_STALL_MS && minute != lastPmsMinute;
+  lastPmsRead = millis();
+  lastPmsMinute = minute;
   PmsFrame f;
   while (pmsSerial.available() > 0) {
-    if (parser.feed((uint8_t)pmsSerial.read(), f) && millis() >= PMS_WARMUP_MS && timeValid()) acc.add(f);
+    if (parser.feed((uint8_t)pmsSerial.read(), f) && !stale && millis() >= PMS_WARMUP_MS && timeValid()) acc.add(f);
   }
 }
 
@@ -366,7 +385,7 @@ static void closeMinute(int64_t minute) {
   r.pm25 = acc.mean(acc.pm25);
   r.pm10 = acc.mean(acc.pm10);
   r.pm25_cf1 = acc.mean(acc.pm25_cf1);
-  readTemperatureHumidity(r.temperature, r.humidity);
+  readEnvironment(r.temperature, r.humidity, r.pressure);
   r.rssi = WiFi.status() == WL_CONNECTED ? (int16_t)WiFi.RSSI() : RSSI_NONE;
   r.samples = acc.n;
   acc.reset();
@@ -444,6 +463,9 @@ void setup() {
   prefs.end();
 
   if (LittleFS.begin(true)) {
+    LittleFS.remove("/pending_v1.bin");  // formato anterior (sem pressão): o arquivo não é mais lido
+    LittleFS.remove("/pending_v1.off");
+    LittleFS.remove("/pending_v1.tmp");
     loadPending();
   } else {
     Serial.println("[fs] falha ao montar LittleFS: leituras não enviadas serão perdidas");

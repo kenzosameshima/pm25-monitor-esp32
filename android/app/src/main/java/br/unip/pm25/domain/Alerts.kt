@@ -20,6 +20,12 @@ const val SERVER_FAILURES_TO_ALERT = 2
 /** A partir desta faixa da CETESB, a média da última hora completa vira alerta. */
 val HIGH_AIR = AirQuality.RUIM
 
+/**
+ * O episódio de ar ruim só acaba com a média abaixo disto (µg/m³), 10 abaixo do início da faixa Ruim: uma
+ * média que oscila em torno de um limite de faixa não vira um aviso a cada hora.
+ */
+const val AIR_CLEAR_BELOW = 40.0
+
 /** O que já foi avisado. Salvo entre checagens; começa vazio na primeira. */
 @Serializable
 data class AlertState(
@@ -27,7 +33,7 @@ data class AlertState(
     val serverDown: Boolean = false,
     /** Nós já avisados como sem dados. */
     val silent: Set<String> = emptySet(),
-    /** Faixa de PM2,5 já avisada por nó, só para HIGH_AIR ou pior. */
+    /** Pior faixa de PM2,5 já avisada no episódio em curso de cada nó (HIGH_AIR ou pior). */
     val airBands: Map<String, AirQuality> = emptyMap(),
 )
 
@@ -91,10 +97,11 @@ private fun answered(state: AlertState, check: Check.Answered): Pair<AlertState,
         when {
             hour == null || pm25 == null || band == null -> previous?.let { airBands[id] = it }
             band >= HIGH_AIR -> {
-                airBands[id] = band
+                airBands[id] = if (previous != null && previous > band) previous else band
                 if (previous == null || band > previous) alerts += Alert.AirHigh(id, device.location, band, pm25, hour.hour)
             }
-            // Abaixo de HIGH_AIR, o episódio acabou: uma nova subida volta a avisar.
+            previous != null && pm25 >= AIR_CLEAR_BELOW -> airBands[id] = previous
+            // Abaixo de AIR_CLEAR_BELOW, o episódio acabou: uma nova subida volta a avisar.
         }
     }
     return AlertState(serverFailures = 0, serverDown = false, silent = silent, airBands = airBands) to alerts

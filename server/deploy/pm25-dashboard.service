@@ -7,7 +7,9 @@ After=pm25-api.service
 [Service]
 User=pi
 WorkingDirectory=/home/pi/pm25-iot/server
-ExecStart=/home/pi/pm25-iot/server/.venv/bin/streamlit run dashboard/app.py --server.headless true --server.port 8501
+# Só em 127.0.0.1: o dashboard não tem login. De outro computador, use um túnel SSH:
+#   ssh -L 8501:127.0.0.1:8501 pi@<ip-do-servidor>   e abra http://localhost:8501
+ExecStart=/home/pi/pm25-iot/server/.venv/bin/streamlit run dashboard/app.py --server.headless true --server.port 8501 --server.address 127.0.0.1
 Restart=always
 RestartSec=5
 

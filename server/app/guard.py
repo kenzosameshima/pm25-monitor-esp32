@@ -1,12 +1,15 @@
-"""Proteções da API exposta na internet: limite de corpo e bloqueio de IP após falhas de autenticação."""
+"""Proteções da API exposta na internet: limite de corpo, token Bearer e bloqueio de IP após falhas de autenticação."""
 
 import math
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, TypeVar
 
+from fastapi import HTTPException, Request, status
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+T = TypeVar("T")
 
 # Teto de memória do controle por IP: acima disso os registros mais antigos são descartados.
 MAX_TRACKED_IPS = 10_000
@@ -65,11 +68,17 @@ class BodySizeLimit:
 @dataclass
 class _Entry:
     fails: int = 0
+    first_fail: float = 0.0  # início da janela em que as falhas estão sendo contadas
     blocked_until: float = 0.0
 
 
 class AuthThrottle:
-    """Bloqueia o IP por `block_s` segundos após `max_fails` falhas de autenticação seguidas. Estado só em memória."""
+    """Bloqueia o IP por `block_s` segundos após `max_fails` falhas de autenticação dentro de `block_s` segundos.
+
+    Uma autenticação válida não zera a contagem: se zerasse, quem tem um token qualquer (o de leitura sai
+    do APK) poderia intercalar acertos e errar à vontade. As falhas expiram sozinhas com a janela.
+    Estado só em memória.
+    """
 
     def __init__(self, max_fails: int, block_s: float, clock: Callable[[], float] = time.monotonic) -> None:
         self.max_fails = max_fails
@@ -91,14 +100,46 @@ class AuthThrottle:
 
     def register_failure(self, ip: str | None) -> None:
         key = ip or ""
+        now = self._clock()
         entry = self._entries.pop(key, None) or _Entry()
+        if entry.fails and now - entry.first_fail > self.block_s:  # falhas antigas expiraram
+            entry.fails = 0
+        if entry.fails == 0:
+            entry.first_fail = now
         entry.fails += 1
         if entry.fails >= self.max_fails:
             entry.fails = 0
-            entry.blocked_until = self._clock() + self.block_s
+            entry.blocked_until = now + self.block_s
         self._entries[key] = entry
         while len(self._entries) > MAX_TRACKED_IPS:
             self._entries.popitem(last=False)
 
-    def register_success(self, ip: str | None) -> None:
-        self._entries.pop(ip or "", None)
+
+def client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def require_bearer(request: Request, authorization: str | None, resolve: Callable[[str], T | None],
+                   on_failure: Callable[[str | None], None] = lambda ip: None) -> T:
+    """Valida 'Authorization: Bearer <token>' com `resolve` (token -> identidade, ou None se inválido).
+
+    Token válido passa mesmo com o IP bloqueado: o bloqueio vale só para tentativas inválidas, senão
+    quem divide o IP público com um nó (a rede de uma escola, por exemplo) poderia deixá-lo de fora.
+    Com o IP bloqueado, token ausente ou inválido recebe 429; sem bloqueio, recebe o mesmo 401, chama
+    `on_failure(ip)` e conta para o bloqueio (o `AuthThrottle` em app.state.throttle). Como uma tentativa
+    certa passa mesmo durante o bloqueio, quem impede adivinhar um token é o tamanho dele, não o bloqueio.
+    """
+    throttle: AuthThrottle = request.app.state.throttle
+    ip = client_ip(request)
+    scheme, _, token = (authorization or "").partition(" ")
+    token = token.strip()
+    principal = resolve(token) if scheme == "Bearer" and token else None
+    if principal is not None:
+        return principal
+    wait = throttle.retry_after(ip)
+    if wait:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Muitas tentativas inválidas",
+                            headers={"Retry-After": str(wait)})
+    throttle.register_failure(ip)
+    on_failure(ip)
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Não autorizado", headers={"WWW-Authenticate": "Bearer"})

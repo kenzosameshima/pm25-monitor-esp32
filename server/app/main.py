@@ -10,12 +10,13 @@ from typing import Iterator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from . import db, read_api
 from .config import get_settings
-from .guard import AuthThrottle, BodySizeLimit
+from .guard import AuthThrottle, BodySizeLimit, client_ip, require_bearer
 from .models import Batch, IngestResult, quality_flags
 
 
@@ -46,8 +47,7 @@ def get_conn() -> Iterator:
         conn.close()
 
 
-def _client(request: Request) -> str | None:
-    return request.client.host if request.client else None
+INGEST_PATH = "/v1/measurements"
 
 
 def authenticate(request: Request, authorization: str | None = Header(default=None)) -> str:
@@ -55,17 +55,7 @@ def authenticate(request: Request, authorization: str | None = Header(default=No
 
     Token ausente ou inválido recebe o mesmo 401, é registrado sem o token e conta para o bloqueio do IP.
     """
-    throttle: AuthThrottle = request.app.state.throttle
-    ip = _client(request)
-    wait = throttle.retry_after(ip)
-    if wait:
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Muitas tentativas inválidas",
-                            headers={"Retry-After": str(wait)})
-
-    scheme, _, token = (authorization or "").partition(" ")
-    device = get_settings().device_for_token(token.strip()) if scheme == "Bearer" and token.strip() else None
-    if device is None:
-        throttle.register_failure(ip)
+    def record_failure(ip: str | None) -> None:
         conn = db.connect(get_settings().db_path)
         try:
             db.record_invalid(
@@ -77,9 +67,8 @@ def authenticate(request: Request, authorization: str | None = Header(default=No
             )
         finally:
             conn.close()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Não autorizado", headers={"WWW-Authenticate": "Bearer"})
-    throttle.register_success(ip)
-    return device
+
+    return require_bearer(request, authorization, get_settings().device_for_token, record_failure)
 
 
 @app.exception_handler(RequestValidationError)
@@ -88,25 +77,33 @@ async def record_validation_error(request: Request, exc: RequestValidationError)
 
     O nó descarta lotes recusados com 4xx (exceto 401, 403, 408 e 429) para não ficar preso
     reenviando o mesmo dado inválido; por isso o registro aqui é a única cópia que sobra.
+
+    Só a ingestão é auditada, e só com token de nó válido: o FastAPI lê o JSON antes das dependências,
+    então um corpo malformado chega aqui sem ter passado por `authenticate`.
     """
-    body = exc.body
-    device_id = body.get("device_id") if isinstance(body, dict) else None
+    if request.url.path != INGEST_PATH:
+        return await request_validation_exception_handler(request, exc)
+    try:
+        # O registro leva o nó dono do token; o device_id do corpo vem do cliente e fica só no raw_payload.
+        device = authenticate(request, request.headers.get("authorization"))
+    except HTTPException as denied:
+        return await http_exception_handler(request, denied)
     conn = db.connect(get_settings().db_path)
     try:
         db.record_invalid(
             conn,
             reason=str(exc.errors())[:2000],
-            raw_payload=body,
+            raw_payload=exc.body,
             received_at=datetime.now(timezone.utc),
-            remote_addr=_client(request),
-            device_id=device_id if isinstance(device_id, str) else None,
+            remote_addr=client_ip(request),
+            device_id=device,
         )
     finally:
         conn.close()
     return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
 
-@app.post("/v1/measurements", status_code=status.HTTP_201_CREATED, response_model=IngestResult)
+@app.post(INGEST_PATH, status_code=status.HTTP_201_CREATED, response_model=IngestResult)
 def ingest(batch: Batch, request: Request, device: str = Depends(authenticate), conn=Depends(get_conn)):
     now = datetime.now(timezone.utc)
     if batch.device_id != device:
@@ -115,7 +112,7 @@ def ingest(batch: Batch, request: Request, device: str = Depends(authenticate), 
             reason=f"device_id '{batch.device_id}' não corresponde ao token de '{device}'",
             raw_payload=batch.model_dump(mode="json"),
             received_at=now,
-            remote_addr=_client(request),
+            remote_addr=client_ip(request),
             device_id=device,
         )
         raise HTTPException(status.HTTP_403_FORBIDDEN, "device_id não corresponde ao token")
@@ -134,6 +131,7 @@ def ingest(batch: Batch, request: Request, device: str = Depends(authenticate), 
             "pm25_cf1": r.pm25_cf1,
             "temperature": r.temperature,
             "humidity": r.humidity,
+            "pressure": r.pressure,
             "rssi": r.rssi,
             "uptime_s": r.uptime_s,
             "samples": r.samples,
@@ -142,7 +140,7 @@ def ingest(batch: Batch, request: Request, device: str = Depends(authenticate), 
         }
         for r in batch.readings
     ]
-    inserted, duplicates = db.insert_batch(conn, batch.device_id, rows, now, _client(request))
+    inserted, duplicates = db.insert_batch(conn, batch.device_id, rows, now, client_ip(request))
     return IngestResult(inserted=inserted, duplicates=duplicates)
 
 

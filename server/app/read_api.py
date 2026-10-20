@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from . import analytics, db
 from .config import get_settings
-from .guard import AuthThrottle
+from .guard import require_bearer
 
 MAX_RANGE = timedelta(days=31)
 STATUS = {"em_operacao": "online", "atrasado": "late", "sem_dados": "silent"}
@@ -113,17 +113,7 @@ def authorize_read(request: Request, authorization: str | None = Header(default=
     settings = get_settings()
     if not settings.read_token:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Leitura desligada: defina PM25_READ_TOKEN")
-    throttle: AuthThrottle = request.app.state.throttle
-    ip = request.client.host if request.client else None
-    wait = throttle.retry_after(ip)
-    if wait:
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Muitas tentativas inválidas",
-                            headers={"Retry-After": str(wait)})
-    scheme, _, token = (authorization or "").partition(" ")
-    if scheme != "Bearer" or not settings.is_read_token(token.strip()):
-        throttle.register_failure(ip)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Não autorizado", headers={"WWW-Authenticate": "Bearer"})
-    throttle.register_success(ip)
+    require_bearer(request, authorization, lambda token: settings.is_read_token(token) or None)
 
 
 def get_read_conn() -> Iterator:
@@ -228,8 +218,7 @@ def health(device_id: DeviceId, hours: int = Query(24, ge=1, le=168), conn=Depen
     now = _now()
     _require_device(conn, device_id)
     start = now - timedelta(hours=hours)
-    table = analytics.collection_health(conn, start, now)
-    row = _records(table[table["device_id"] == device_id])[0]
+    row = _records(analytics.collection_health(conn, start, now, [device_id]))[0]
     return {"generated_at": now, "device_id": device_id, "start": start, "end": now,
             "completeness": row["completude"], "largest_gap_min": row["maior_lacuna_min"],
             "lost_messages": row["mensagens_perdidas"], "restarts": row["reinicios"],

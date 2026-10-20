@@ -2,8 +2,11 @@ package br.unip.pm25
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -46,6 +49,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * Saída das telas de detalhe e previsão ao voltar. Pelo botão ou pela seta a volta é `popBackStack`, cujo padrão do
+ * NavHost é fade. O gesto de voltar preditivo usa outra transição (`predictivePopExitTransition`), que encolhe a tela
+ * para 70% no centro e não é configurável por rota; o `BackHandler` das duas rotas tira o gesto desse caminho e o leva
+ * ao mesmo `popBackStack`, de modo que a saída é sempre este fade.
+ */
+private val BackFade = fadeOut(tween(700))
+
 @Composable
 private fun AppNavigation(repository: DeviceRepository) {
     val navController = rememberNavController()
@@ -56,19 +67,21 @@ private fun AppNavigation(repository: DeviceRepository) {
             })
             HomeRoute(viewModel, onOpenDevice = { navController.navigate(Detail(it.deviceId, it.location)) })
         }
-        composable<Detail> { entry ->
+        composable<Detail>(popExitTransition = { BackFade }) { entry ->
             val destination = entry.toRoute<Detail>()
             val viewModel: DetailViewModel = viewModel(factory = viewModelFactory {
                 initializer { DetailViewModel(destination.deviceId, repository) }
             })
+            BackHandler { navController.popBackStack() }
             DetailRoute(viewModel, destination.deviceId, destination.location, onBack = { navController.popBackStack() },
                 onOpenForecast = { navController.navigate(Forecast(destination.deviceId)) })
         }
-        composable<Forecast> { entry ->
+        composable<Forecast>(popExitTransition = { BackFade }) { entry ->
             val destination = entry.toRoute<Forecast>()
             val viewModel: ForecastViewModel = viewModel(factory = viewModelFactory {
                 initializer { ForecastViewModel(destination.deviceId, repository) }
             })
+            BackHandler { navController.popBackStack() }
             ForecastRoute(viewModel, destination.deviceId, onBack = { navController.popBackStack() })
         }
     }

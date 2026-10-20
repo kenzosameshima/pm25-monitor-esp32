@@ -100,22 +100,33 @@ class AlertsTest {
     }
 
     @Test
-    fun `ar avisa ao entrar em Ruim e ao piorar, nao ao melhorar dentro do episodio`() {
+    fun `ar avisa ao entrar em Ruim e ao piorar, nao ao oscilar dentro do episodio`() {
         val (state, alerts) = run(
             answered(device("no-01", 1), hours = mapOf("no-01" to 40.0)),   // Moderada
             answered(device("no-01", 1), hours = mapOf("no-01" to 60.0)),   // Ruim
             answered(device("no-01", 1), hours = mapOf("no-01" to 70.0)),   // ainda Ruim
             answered(device("no-01", 1), hours = mapOf("no-01" to 100.0)),  // Muito ruim
             answered(device("no-01", 1), hours = mapOf("no-01" to 60.0)),   // melhora para Ruim
-            answered(device("no-01", 1), hours = mapOf("no-01" to 80.0)),   // piora de novo
+            answered(device("no-01", 1), hours = mapOf("no-01" to 80.0)),   // volta a Muito ruim: já avisado
         )
         assertEquals(emptyList<Alert>(), alerts[0])
         assertEquals(listOf(Alert.AirHigh("no-01", null, AirQuality.RUIM, 60.0, lastHour)), alerts[1])
         assertEquals(emptyList<Alert>(), alerts[2])
         assertEquals(AirQuality.MUITO_RUIM, (alerts[3].single() as Alert.AirHigh).band)
         assertEquals(emptyList<Alert>(), alerts[4])
-        assertEquals(AirQuality.MUITO_RUIM, (alerts[5].single() as Alert.AirHigh).band)
+        assertEquals(emptyList<Alert>(), alerts[5])
         assertEquals(mapOf("no-01" to AirQuality.MUITO_RUIM), state.airBands)
+    }
+
+    @Test
+    fun `media oscilando no limite de Ruim avisa uma vez so`() {
+        val (state, alerts) = run(
+            answered(device("no-01", 1), hours = mapOf("no-01" to 52.0)),
+            answered(device("no-01", 1), hours = mapOf("no-01" to 48.0)),   // Moderada, mas acima de AIR_CLEAR_BELOW
+            answered(device("no-01", 1), hours = mapOf("no-01" to 53.0)),
+        )
+        assertEquals(listOf(1, 0, 0), alerts.map { it.size })
+        assertEquals(mapOf("no-01" to AirQuality.RUIM), state.airBands)
     }
 
     @Test

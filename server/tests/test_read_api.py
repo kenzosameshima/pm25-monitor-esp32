@@ -1,5 +1,6 @@
 """Testes das rotas de leitura do app de consulta e do cadastro de local dos nós."""
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -9,8 +10,8 @@ from app import db
 from app.config import get_settings
 from scripts import set_location
 
-TOKEN_1 = "token-do-no-01-0000000000"
-READ_TOKEN = "token-de-leitura-0000000000"
+TOKEN_1 = "token-do-no-01-aB3xQ9zK7pLm2Wv8Rt"
+READ_TOKEN = "token-de-leitura-aB3xQ9zK7pLm2Wv8Rt"
 READ = {"Authorization": f"Bearer {READ_TOKEN}"}
 HOUR = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
@@ -74,19 +75,74 @@ def test_sem_token_configurado_a_leitura_fica_desligada(client):
 
 @pytest.mark.parametrize("client", [{"PM25_AUTH_MAX_FAILS": "2"}], indirect=True)
 def test_falhas_na_leitura_bloqueiam_o_ip(client):
+    errado = {"Authorization": "Bearer errado-000000000000"}
     for _ in range(2):
-        assert client.get("/v1/devices", headers={"Authorization": "Bearer errado-000000000000"}).status_code == 401
-    r = client.get("/v1/devices", headers=READ)
+        assert client.get("/v1/devices", headers=errado).status_code == 401
+    r = client.get("/v1/devices", headers=errado)
     assert r.status_code == 429 and int(r.headers["Retry-After"]) > 0
+    assert client.get("/v1/devices", headers=READ).status_code == 200  # o token certo passa mesmo assim
 
 
-@pytest.mark.parametrize("raw, message", [("curto", "muito curto"), (TOKEN_1, "repetir o token")])
+@pytest.mark.parametrize("client", [{"PM25_AUTH_MAX_FAILS": "3"}], indirect=True)
+def test_token_de_leitura_nao_zera_as_falhas_com_tokens_de_no(client):
+    """O token de leitura sai do APK: acertá-lo entre tentativas não pode liberar a adivinhação dos tokens de nó."""
+    errado = {"Authorization": "Bearer token-de-no-inventado-000"}
+    body = {"schema_version": "1", "device_id": "no-01", "readings": []}
+    for _ in range(2):
+        assert client.post("/v1/measurements", json=body, headers=errado).status_code == 401
+        assert client.get("/v1/devices", headers=READ).status_code == 200
+    assert client.post("/v1/measurements", json=body, headers=errado).status_code == 401  # 3ª falha: bloqueia
+    assert client.post("/v1/measurements", json=body, headers=errado).status_code == 429
+
+
+@pytest.mark.parametrize("devices, read", [
+    ("no-01:TROQUE-este-token-do-no-01", ""),                 # exemplo do .env.example
+    (f"no-01:{TOKEN_1}", "TROQUE-pelo-token-de-leitura"),    # exemplo do local.properties.example
+])
+def test_tokens_de_exemplo_do_repositorio_sao_recusados(monkeypatch, devices, read):
+    monkeypatch.setenv("PM25_DEVICE_TOKENS", devices)
+    monkeypatch.setenv("PM25_READ_TOKEN", read)
+    get_settings.cache_clear()
+    with pytest.raises(ValueError, match="exemplo do repositório"):
+        get_settings()
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("raw, message", [
+    ("curto", "muito curto"),
+    ("a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5", "muito curto"),             # 30 caracteres: abaixo do mínimo de 32
+    ("a" * 40, "poucos caracteres distintos"),                      # comprido, mas sem variedade
+    ("abcdefghi" * 4, "poucos caracteres distintos"),               # 9 caracteres distintos
+    (TOKEN_1, "repetir o token"),
+])
 def test_token_de_leitura_invalido_na_configuracao(monkeypatch, raw, message):
     monkeypatch.setenv("PM25_DEVICE_TOKENS", f"no-01:{TOKEN_1}")
     monkeypatch.setenv("PM25_READ_TOKEN", raw)
     get_settings.cache_clear()
     with pytest.raises(ValueError, match=message):
         get_settings()
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("devices, message", [
+    ("no-01:abcdefghijklmnopqrstuvwxyz12345", "muito curto"),        # 31 caracteres
+    ("no-01:" + "z" * 40, "poucos caracteres distintos"),
+])
+def test_token_fraco_de_no_e_recusado_na_configuracao(monkeypatch, devices, message):
+    monkeypatch.setenv("PM25_DEVICE_TOKENS", devices)
+    monkeypatch.setenv("PM25_READ_TOKEN", "")
+    get_settings.cache_clear()
+    with pytest.raises(ValueError, match=message):
+        get_settings()
+    get_settings.cache_clear()
+
+
+def test_token_gerado_por_secrets_e_aceito(monkeypatch):
+    import secrets
+    monkeypatch.setenv("PM25_DEVICE_TOKENS", f"no-01:{secrets.token_urlsafe(24)}")
+    monkeypatch.setenv("PM25_READ_TOKEN", secrets.token_urlsafe(24))
+    get_settings.cache_clear()
+    assert get_settings().device_ids == ["no-01"]
     get_settings.cache_clear()
 
 
@@ -201,3 +257,10 @@ def test_previsao_com_persistencia_e_modelo(client):
     scores = {s["predictor"]: s for s in body["scores"]}
     assert scores["ridge v1"]["skill"] == pytest.approx(0.8)
     assert scores["persistence"]["mae"] == pytest.approx(5.0)
+
+
+def test_parametro_fora_da_faixa_nao_vai_para_a_auditoria_da_ingestao(client):
+    insert_hours(client, [60])
+    assert client.get("/v1/devices/no-01/hourly", headers=READ, params={"hours": 0}).status_code == 422
+    with sqlite3.connect(client.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM invalid_messages").fetchone()[0] == 0

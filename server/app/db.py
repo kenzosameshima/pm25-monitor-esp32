@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_RAW_PAYLOAD = 64 * 1024
 
 
@@ -36,8 +36,16 @@ def connect(path: str, readonly: bool = False) -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Acrescenta ao banco já existente as colunas que o esquema ganhou depois (CREATE IF NOT EXISTS não as cria)."""
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(measurements)")}
+    if "pressure" not in columns:
+        conn.execute("ALTER TABLE measurements ADD COLUMN pressure REAL")
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    _migrate(conn)
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     conn.commit()
 
@@ -45,10 +53,10 @@ def init_db(conn: sqlite3.Connection) -> None:
 _INSERT_MEASUREMENT = """
 INSERT OR IGNORE INTO measurements (
     device_id, boot_id, seq, ts_sensor, ts_received, pm1, pm25, pm10, pm25_cf1,
-    temperature, humidity, rssi, uptime_s, samples, schema_version, quality
+    temperature, humidity, pressure, rssi, uptime_s, samples, schema_version, quality
 ) VALUES (
     :device_id, :boot_id, :seq, :ts_sensor, :ts_received, :pm1, :pm25, :pm10, :pm25_cf1,
-    :temperature, :humidity, :rssi, :uptime_s, :samples, :schema_version, :quality
+    :temperature, :humidity, :pressure, :rssi, :uptime_s, :samples, :schema_version, :quality
 )
 """
 
@@ -72,7 +80,8 @@ def insert_batch(
             (device_id, received),
         )
         before = conn.total_changes
-        conn.executemany(_INSERT_MEASUREMENT, rows)
+        # A pressão é opcional: quem monta as linhas (nó sem BME280, scripts) pode omiti-la.
+        conn.executemany(_INSERT_MEASUREMENT, [{"pressure": None, **r} for r in rows])
         inserted = conn.total_changes - before
         duplicates = len(rows) - inserted
         conn.execute(
@@ -107,10 +116,12 @@ def record_invalid(
 
 def last_seen(conn: sqlite3.Connection, device_ids: Iterable[str] | None = None) -> dict[str, datetime]:
     """Último instante em que o servidor recebeu dados de cada dispositivo."""
+    # Um MAX por nó, resolvido pelo índice (device_id, ts_received), em vez de varrer a tabela inteira.
     rows = conn.execute(
-        "SELECT device_id, MAX(ts_received) AS last FROM measurements GROUP BY device_id"
+        "SELECT d.device_id, (SELECT MAX(m.ts_received) FROM measurements m WHERE m.device_id = d.device_id) AS last"
+        " FROM devices d"
     ).fetchall()
-    result = {r["device_id"]: parse_iso(r["last"]) for r in rows}
+    result = {r["device_id"]: parse_iso(r["last"]) for r in rows if r["last"] is not None}
     if device_ids is not None:
         wanted = set(device_ids)
         result = {k: v for k, v in result.items() if k in wanted}
@@ -182,12 +193,15 @@ def fetch_ingest_batches(conn: sqlite3.Connection, since: datetime) -> list[sqli
 
 
 def device_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Resumo por dispositivo: local, primeira e última leitura, último recebimento e total de inicializações."""
+    """Resumo por dispositivo com leituras: local, primeira e última leitura e último recebimento.
+
+    Cada MIN/MAX é uma subconsulta por nó, resolvida pelos índices de measurements sem varrer a tabela."""
     return conn.execute(
-        "SELECT m.device_id, d.location, MIN(m.ts_sensor) AS first_ts, MAX(m.ts_sensor) AS last_ts,"
-        " MAX(m.ts_received) AS last_received, COUNT(DISTINCT m.boot_id) AS boots, COUNT(*) AS n"
-        " FROM measurements m JOIN devices d ON d.device_id = m.device_id"
-        " GROUP BY m.device_id ORDER BY m.device_id"
+        "SELECT * FROM (SELECT d.device_id, d.location,"
+        " (SELECT MIN(ts_sensor) FROM measurements m WHERE m.device_id = d.device_id) AS first_ts,"
+        " (SELECT MAX(ts_sensor) FROM measurements m WHERE m.device_id = d.device_id) AS last_ts,"
+        " (SELECT MAX(ts_received) FROM measurements m WHERE m.device_id = d.device_id) AS last_received"
+        " FROM devices d) WHERE first_ts IS NOT NULL ORDER BY device_id"
     ).fetchall()
 
 
@@ -200,9 +214,10 @@ def set_location(conn: sqlite3.Connection, device_id: str, location: str | None)
 
 def latest_measurements(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Leitura mais recente (por ts_sensor) de cada dispositivo."""
+    # Parte da tabela devices (poucas linhas), não de measurements: uma busca no índice por nó.
     return conn.execute(
-        f"SELECT {_MEASUREMENT_COLUMNS} FROM measurements m"
-        " WHERE m.id = (SELECT id FROM measurements x WHERE x.device_id = m.device_id"
-        "               ORDER BY x.ts_sensor DESC, x.id DESC LIMIT 1)"
+        f"SELECT {_MEASUREMENT_COLUMNS} FROM measurements"
+        " WHERE id IN (SELECT (SELECT x.id FROM measurements x WHERE x.device_id = d.device_id"
+        "                      ORDER BY x.ts_sensor DESC, x.id DESC LIMIT 1) FROM devices d)"
         " ORDER BY device_id"
     ).fetchall()
