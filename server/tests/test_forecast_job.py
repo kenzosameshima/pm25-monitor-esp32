@@ -159,3 +159,47 @@ def test_recalculo_recusa_argumentos_invalidos(conn, models_dir, args):
         forecast_job.main(["--db", db_path(conn), "--models-dir", str(models_dir), *args], now=NOW)
     assert exit_.value.code == 2
     assert stored(conn) == []
+
+
+# ---------------- preenchimento automático ----------------
+
+def backfill(conn, models_dir, hours, now=NOW):
+    args = ["--db", db_path(conn), "--models-dir", str(models_dir), "--backfill-hours", str(hours)]
+    return forecast_job.main(args, now=now)
+
+
+def test_preenchimento_recalcula_as_horas_sem_previsao_da_janela(conn, models_dir, capsys):
+    assert run(conn, models_dir, now=NOW - timedelta(hours=3)) == 0   # só as horas até TARGET - 3 foram previstas
+    assert backfill(conn, models_dir, 2) == 0
+    retro = [r for r in stored(conn) if r["model_version"] == "v0-retro" and r["device_id"] == "no-01"]
+    assert [r["target_hour"] for r in retro] == [db.iso(TARGET - timedelta(hours=h)) for h in (2, 1)]
+    assert {r["generated_at"] for r in retro} == {db.iso(NOW)}
+    assert (TARGET - timedelta(hours=3)) not in {r["target_hour"] for r in retro}   # fora da janela
+    assert [r for r in stored(conn) if r["model_version"] == "v0" and r["target_hour"] == db.iso(TARGET)]
+
+
+def test_preenchimento_nao_repete_nem_toca_hora_com_previsao(conn, models_dir):
+    assert run(conn, models_dir, now=NOW - timedelta(hours=1)) == 0   # previu a hora TARGET - 1 em tempo real
+    assert backfill(conn, models_dir, 3) == 0
+    first = stored(conn)
+    assert backfill(conn, models_dir, 3, now=NOW + timedelta(minutes=20)) == 0
+    assert stored(conn) == first
+    real = {r["target_hour"] for r in first if r["model_version"] == "v0"}
+    assert db.iso(TARGET - timedelta(hours=1)) in real
+    assert db.iso(TARGET - timedelta(hours=1)) not in {r["target_hour"] for r in first if r["model_version"] == "v0-retro"}
+
+
+def test_preenchimento_desligado_por_padrao(conn, models_dir):
+    assert run(conn, models_dir) == 0
+    assert {r["model_version"] for r in stored(conn)} == {"v0"}
+
+
+@pytest.mark.parametrize("args", [
+    ["--backfill-hours", "-1"],
+    ["--backfill-hours", "1000"],
+    ["--backfill-hours", "2", "--replay-from", "2026-09-05T10:00:00Z", "--replay-to", "2026-09-05T11:00:00Z"],
+])
+def test_preenchimento_recusa_argumentos_invalidos(conn, models_dir, args):
+    with pytest.raises(SystemExit) as exit_:
+        forecast_job.main(["--db", db_path(conn), "--models-dir", str(models_dir), *args], now=NOW)
+    assert exit_.value.code == 2
