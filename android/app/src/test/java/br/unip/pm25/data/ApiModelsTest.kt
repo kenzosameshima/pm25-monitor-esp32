@@ -58,6 +58,17 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `estado novo do servidor nao derruba a lista inteira`() {
+        val list = ApiJson.decodeFromString<DeviceList>(
+            """{"generated_at": "2026-10-14T04:36:18Z", "late_after_min": 3, "silent_after_min": 15, "devices": [
+                {"device_id": "no-01", "status": "paused"},
+                {"device_id": "no-02", "status": "online"}]}"""
+        )
+        assertEquals(listOf("no-01", "no-02"), list.devices.map { it.deviceId })
+        assertEquals(listOf(null, DeviceStatus.ONLINE), list.devices.map { it.status })
+    }
+
+    @Test
     fun `campos nulos e campos desconhecidos nao quebram a leitura`() {
         val silent = ApiJson.decodeFromString<DeviceList>(fixture("devices.json")).devices[1]
         assertEquals(DeviceStatus.SILENT, silent.status)
