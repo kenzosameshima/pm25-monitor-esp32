@@ -147,15 +147,19 @@ def _exceedance(values: pd.Series, limit: float) -> dict:
             "fracao": round(above / len(values), 4) if len(values) else None}
 
 
-def pm25_metrics(conn, device: str, start: datetime, end: datetime):
-    """Estatísticas das médias horárias válidas, perfis e excedências. Retorna (dict, perfil_hora, perfil_dia)."""
-    hourly = hourly_series(conn, device)
+def pm25_metrics(conn, device: str, start: datetime, end: datetime, drop_suspect: bool = True):
+    """Estatísticas das médias horárias válidas, perfis e excedências. Retorna (dict, perfil_hora, perfil_dia).
+
+    Horas suspeitas (sensor sem partículas) ficam de fora e são contadas em `horas_suspeitas`; com
+    `drop_suspect` falso entram nas estatísticas, e `horas_suspeitas` continua contando as que a regra marca."""
+    hourly = hourly_series(conn, device, drop_suspect=drop_suspect)
     if len(hourly):
         hourly = hourly[(hourly.index >= start) & (hourly.index < end)]
     valid = hourly["pm25"].dropna() if len(hourly) else pd.Series(dtype=float)
     expected_hours = int((end - start).total_seconds() // 3600)
 
-    stats = {"horas_validas": int(len(valid)), "horas_esperadas": expected_hours}
+    stats = {"horas_validas": int(len(valid)), "horas_suspeitas": int(hourly["suspeita"].sum()),
+             "horas_esperadas": expected_hours}
     if len(valid):
         stats.update({
             "media": round(float(valid.mean()), 4),
@@ -214,13 +218,18 @@ def _write_csv(path: Path, rows: list[dict], columns: list[str]) -> None:
     pd.DataFrame(rows, columns=columns).to_csv(path, index=False)
 
 
-def run(db_path: str, start: date, end: date, out_dir: Path, devices: list[str] | None, freeze: bool) -> dict:
+def run(db_path: str, start: date, end: date, out_dir: Path, devices: list[str] | None, freeze: bool,
+        include_suspect: bool = False) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     start_utc, end_utc, days = period_bounds(start, end)
     report: dict = {
         "periodo": {"inicio": start.isoformat(), "fim": end.isoformat(), "dias": days,
                     "fuso": "America/Sao_Paulo (UTC-3)", "inicio_utc": db.iso(start_utc), "fim_utc_exclusivo": db.iso(end_utc)},
-        "regras": {"min_leituras_por_hora": MIN_SAMPLES, "min_horas_validas_por_dia": MIN_VALID_HOURS_PER_DAY},
+        "regras": {"min_leituras_por_hora": MIN_SAMPLES, "min_horas_validas_por_dia": MIN_VALID_HOURS_PER_DAY,
+                   "hora_suspeita": {"fracao_de_leituras_abaixo": analytics.SUSPECT_LOW_SHARE,
+                                     "pm25_abaixo_ug_m3": analytics.SUSPECT_LOW_PM25,
+                                     "ou_media_abaixo_ug_m3": analytics.SUSPECT_MEAN_BELOW,
+                                     "incluidas_nas_estatisticas": include_suspect}},
     }
     if freeze:
         frozen, info = freeze_database(db_path, out_dir, start, end)
@@ -234,7 +243,7 @@ def run(db_path: str, start: date, end: date, out_dir: Path, devices: list[str] 
         nodes, daily_rows, hour_rows, weekday_rows = {}, [], [], []
         for device in ids:
             operational, daily = operational_metrics(conn, device, start_utc, end_utc, days)
-            pm25, by_hour, by_day = pm25_metrics(conn, device, start_utc, end_utc)
+            pm25, by_hour, by_day = pm25_metrics(conn, device, start_utc, end_utc, drop_suspect=not include_suspect)
             nodes[device] = {"operacional": operational, "pm25": pm25}
             daily_rows += daily
             hour_rows += by_hour
@@ -263,6 +272,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--devices", default=None, help="nós separados por vírgula (padrão: todos, menos os de teste)")
     ap.add_argument("--freeze", action="store_true",
                     help="copia o banco para --out-dir, registra o hash e calcula as métricas sobre a cópia")
+    ap.add_argument("--include-suspect", action="store_true",
+                    help="análise de sensibilidade: mantém nas estatísticas as horas suspeitas (sensor sem partículas)")
     args = ap.parse_args(argv)
 
     db_path = args.db or get_settings().db_path
@@ -271,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         report = run(db_path, args.start, args.end, Path(args.out_dir),
-                     args.devices.split(",") if args.devices else None, args.freeze)
+                     args.devices.split(",") if args.devices else None, args.freeze, args.include_suspect)
     except (ValueError, RuntimeError) as exc:
         print(f"Erro: {exc}", file=sys.stderr)
         return 2
@@ -280,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         op, pm = node["operacional"], node["pm25"]
         print(f"{device}: completude {op['completude']:.1%}, maior lacuna {op['maior_lacuna_min']} min, "
               f"{op['mensagens_perdidas']} perdidas, {op['reinicios']} reinícios, "
-              f"{pm['horas_validas']}/{pm['horas_esperadas']} horas válidas")
+              f"{pm['horas_validas']}/{pm['horas_esperadas']} horas válidas, {pm['horas_suspeitas']} suspeitas")
     if "congelamento" in report:
         print(f"Banco congelado: {report['congelamento']['arquivo']} (sha256 {report['congelamento']['sha256']})")
     print(f"Saídas em {Path(args.out_dir).resolve()}")
