@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,7 +51,7 @@ private fun needsLocalNetworkPermission(context: Context, apiUrl: String): Boole
 fun LocalNetworkGate(apiUrl: String, content: @Composable () -> Unit) {
     val context = LocalContext.current
     var granted by remember { mutableStateOf(!needsLocalNetworkPermission(context, apiUrl)) }
-    var denied by remember { mutableStateOf(false) }
+    var denied by rememberSaveable { mutableStateOf(false) }  // sobrevive a girar a tela; `granted` é conferida de novo
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         granted = ok
         denied = !ok
