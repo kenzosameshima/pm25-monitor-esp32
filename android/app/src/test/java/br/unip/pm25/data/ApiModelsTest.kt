@@ -19,6 +19,20 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `le a hora suspeita, que nao vale e vem sem medias`() {
+        val hours = ApiJson.decodeFromString<HourlySeries>(fixture("hourly_suspect.json")).hours
+        assertEquals(listOf(false, true, false), hours.map { it.suspect })
+        assertEquals(listOf(true, false, true), hours.map { it.valid })
+        assertNull(hours[1].pm25)
+    }
+
+    @Test
+    fun `resposta de servidor sem o campo suspect nao tem hora suspeita`() {
+        val hours = ApiJson.decodeFromString<HourlySeries>(fixture("hourly.json")).hours
+        assertEquals(List(6) { false }, hours.map { it.suspect })
+    }
+
+    @Test
     fun `le a saude da coleta`() {
         val health = ApiJson.decodeFromString<Health>(fixture("health.json"))
         assertEquals("no-01", health.deviceId)

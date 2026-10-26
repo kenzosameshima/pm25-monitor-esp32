@@ -69,6 +69,8 @@ data class HourlyPoint(
     val pm1: Double? = null,
     val temperature: Double? = null,
     val humidity: Double? = null,
+    /** O sensor quase não viu partículas na hora, então ela não vale; um servidor mais antigo não manda o campo. */
+    val suspect: Boolean = false,
 )
 
 @Serializable
