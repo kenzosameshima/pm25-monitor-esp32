@@ -157,7 +157,6 @@ private fun ComparisonCard(data: ForecastResponse) {
         data.predictors.map { p ->
             ChartSeries(predictorLabel(p), data.hours.map { it.predictions[p] }, colors.getValue(p), dashed = true)
         }
-    val observedHours = data.hours.count { it.observed != null }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Previsto × observado (µg/m³)", style = MaterialTheme.typography.titleMedium)
@@ -165,8 +164,7 @@ private fun ComparisonCard(data: ForecastResponse) {
                 hours = data.hours.map { it.hour },
                 series = series,
                 timeFormat = DAY_CLOCK,  // 48 h cruzam a meia-noite: só a hora seria ambígua
-                description = "PM2,5 observado e previsto por hora nas últimas $FORECAST_HOURS horas, " +
-                    "com $observedHours horas observadas e ${data.predictors.size} previsores.",
+                description = forecastChartDescription(data),
             )
             ChartLegend(series)
             Text(
