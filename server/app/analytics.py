@@ -22,6 +22,11 @@ VARIABLES = ("pm25", "pm10", "pm1", "temperature", "humidity")
 OBSERVED = "observado"
 PERSISTENCE = "persistencia"
 
+# Faixas de PM2,5 da CETESB (µg/m³), as mesmas do app (shared/air-quality-bands.json, conferido por teste).
+# O limite pertence à faixa de baixo: 25,0 é Boa.
+AIR_QUALITY_BANDS = [(25.0, "Boa"), (50.0, "Moderada"), (75.0, "Ruim"), (125.0, "Muito ruim"),
+                     (float("inf"), "Péssima")]
+
 HOURLY_COLUMNS = ["device_id", "hora", "n", *VARIABLES]
 STATUS_COLUMNS = ["device_id", "location", "first_ts", "last_received", "status", "minutes_since",
                   "ts_sensor", *VARIABLES, "rssi", "quality"]
@@ -38,6 +43,13 @@ class ForecastComparison(NamedTuple):
 def is_test_device(device_id: str) -> bool:
     """Dispositivos de teste ficam fora do painel e das métricas do período."""
     return device_id.startswith(TEST_DEVICE_PREFIX)
+
+
+def air_quality(pm25) -> str | None:
+    """Nome da faixa de qualidade do ar de um valor de PM2,5; None sem valor válido."""
+    if pm25 is None or pd.isna(pm25) or pm25 < 0:
+        return None
+    return next(label for bound, label in AIR_QUALITY_BANDS if pm25 <= bound)
 
 
 def production_devices(conn: sqlite3.Connection) -> list[str]:

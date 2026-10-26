@@ -1,6 +1,9 @@
 """Testes das regras de análise compartilhadas pelo dashboard, pelos scripts e pela API de leitura."""
 
+import json
+import math
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -125,6 +128,27 @@ def test_saude_deixa_de_fora_nos_de_teste_salvo_se_pedidos(conn):
     start = NOW - timedelta(hours=1)
     assert list(analytics.collection_health(conn, start, NOW)["device_id"]) == ["no-01"]
     assert list(analytics.collection_health(conn, start, NOW, ["teste-https"])["device_id"]) == ["teste-https"]
+
+
+# ---------------------------------------------------------------- faixas de qualidade do ar
+
+@pytest.mark.parametrize("pm25, band", [
+    (0.0, "Boa"), (25.0, "Boa"), (25.1, "Moderada"), (75.0, "Ruim"), (125.0, "Muito ruim"), (125.1, "Péssima"),
+])
+def test_cada_limite_pertence_a_faixa_de_baixo(pm25, band):
+    assert analytics.air_quality(pm25) == band
+
+
+@pytest.mark.parametrize("pm25", [None, float("nan"), -1.0])
+def test_sem_valor_valido_nao_ha_faixa(pm25):
+    assert analytics.air_quality(pm25) is None
+
+
+def test_faixas_sao_as_mesmas_do_app():
+    """O app Android confere o mesmo arquivo, então as duas pontas não se afastam sem um teste falhar."""
+    shared = json.loads((Path(__file__).parents[2] / "shared" / "air-quality-bands.json").read_text(encoding="utf-8"))
+    assert [(b["label"], b["upper_bound"]) for b in shared] == [
+        (label, None if math.isinf(bound) else bound) for bound, label in analytics.AIR_QUALITY_BANDS]
 
 
 # ---------------------------------------------------------------- nós em produção

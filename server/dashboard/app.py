@@ -134,16 +134,13 @@ METRIC_LABELS = {"previsor": "Previsor", "horas": "Horas", "mae": "MAE (µg/m³)
 SERIES_COLORS = {"Observado": "#3b82f6", "Persistência": "#9ca3af"}
 MODEL_COLORS = ["#f97316", "#10b981", "#a855f7", "#ec4899"]
 
-# Faixas de PM2,5 da CETESB (µg/m³), as mesmas do app: o limite pertence à faixa de baixo (25,0 é Boa).
-AIR_QUALITY = [(25.0, "Boa", "green"), (50.0, "Moderada", "yellow"), (75.0, "Ruim", "orange"),
-               (125.0, "Muito ruim", "red"), (float("inf"), "Péssima", "violet")]
+BAND_COLORS = {"Boa": "green", "Moderada": "yellow", "Ruim": "orange", "Muito ruim": "red", "Péssima": "violet"}
 
 
 def air_quality(pm25) -> tuple[str, str] | None:
-    """Nome e cor da faixa de um valor de PM2,5; None sem valor."""
-    if pm25 is None or pd.isna(pm25) or pm25 < 0:
-        return None
-    return next((label, color) for bound, label, color in AIR_QUALITY if pm25 <= bound)
+    """Nome e cor da faixa de qualidade do ar de um valor de PM2,5; None sem valor."""
+    band = analytics.air_quality(pm25)
+    return None if band is None else (band, BAND_COLORS[band])
 
 
 def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta) -> pd.DataFrame:
