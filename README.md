@@ -19,7 +19,7 @@ server/dashboard/  dashboard em Streamlit (status, séries, previsto × observad
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
 android/      app de consulta em Kotlin (Jetpack Compose), alimentado pelas rotas de leitura da API
 docs/         planejamento do sistema e estado atual de cada parte (planejamento-e-estado.md)
-wokwi/        circuito (diagram.json), chips simulados do PMS5003 e do BME280, config.h e bibliotecas para rodar o firmware no Wokwi
+wokwi/        circuito (diagram.json), chips simulados do PMS5003 e do BME280, config.h, bibliotecas e tabela de partições para rodar o firmware no Wokwi
 .githooks/    hook commit-msg e a checagem de commits usada também no CI (ver "Padrão de commits")
 ```
 
@@ -34,7 +34,7 @@ source .venv/bin/activate            # no Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
 cp .env.example .env                 # troque os tokens (ver comentário no arquivo)
 pytest                               # testes da API, do dashboard e dos scripts
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 Em outro terminal, simule seis horas de dados de um nó e depois uma leitura por minuto:
@@ -57,23 +57,27 @@ Cada leitura é a média de um minuto de relógio. O nó envia `POST /v1/measure
 {
   "schema_version": "1",
   "device_id": "no-01",
+  "firmware": "build Oct 26 2026 12:00:00",
   "readings": [
     {"boot_id": 3, "seq": 0, "ts": "2026-09-22T12:00:00Z", "uptime_s": 120, "samples": 58,
      "pm1": 8.2, "pm25": 12.5, "pm10": 15.0, "pm25_cf1": 13.0,
-     "temperature": 23.4, "humidity": 61.0, "rssi": -63}
+     "temperature": 23.4, "humidity": 61.0, "pressure": 931.3, "rssi": -63}
   ]
 }
 ```
 
-O campo `ts` marca o início da janela de um minuto, sempre em UTC. `pm25` é o valor "atmospheric environment" do PMS5003, usado nas análises; `pm25_cf1` é o valor "standard particle", guardado porque as correções publicadas para sensores Plantower costumam partir dele. `samples` conta quantos quadros do sensor entraram na média, e `rssi` e `uptime_s` explicam lacunas depois. Temperatura, umidade e RSSI podem vir como `null`. Um lote aceita até 500 leituras.
+O campo `ts` marca o início da janela de um minuto, sempre em UTC. `pm25` é o valor "atmospheric environment" do PMS5003, usado nas análises; `pm25_cf1` é o valor "standard particle", guardado porque as correções publicadas para sensores Plantower costumam partir dele. `samples` conta quantos quadros do sensor entraram na média, e `rssi` e `uptime_s` explicam lacunas depois. Temperatura, umidade, pressão e RSSI podem vir como `null`. A pressão (`pressure`, em hPa) só vem do BME280 e é apenas guardada em `measurements.pressure`: nenhuma análise, rota de leitura, painel ou o app a usa por enquanto. Bancos anteriores ganham a coluna sozinhos quando a API sobe, e leituras antigas ficam com `null`; a faixa plausível é 300 a 1100 hPa (fora dela a leitura é marcada `pressao_fora_faixa`). Um lote aceita até 500 leituras.
+
+O campo `firmware` é opcional e só diagnóstico: identifica a compilação gravada no nó. Por padrão o firmware envia `build <data> <hora>` da compilação; para usar um nome seu (por exemplo o hash do commit), defina `FW_VERSION` em `config.h`. O servidor guarda a versão de cada lote em `ingest_batches.firmware` e o painel mostra a última informada em cada nó. Um valor que não é texto, ou que é vazio, é ignorado; caracteres de controle são removidos e o texto é cortado em 64 caracteres, sem nunca recusar o lote, porque o nó descarta o que a API recusa com 4xx. Nó com firmware anterior a esse campo simplesmente não aparece com versão. Ao subir uma versão nova da API, reinicie a API antes do painel: é ela que acrescenta a coluna ao banco.
 
 | Resposta | Significado | O que o nó faz |
 |---|---|---|
 | 201 `{"inserted": n, "duplicates": m}` | Gravado no disco | Apaga o lote do buffer |
 | 401 ou 403 | Token ausente ou inválido (401, mesma mensagem nos dois casos) ou de outro nó (403) | Mantém o lote e tenta de novo (erro de configuração) |
-| 413 | Corpo acima do limite em bytes | Descarta o lote (um lote de 60 leituras fica muito abaixo do limite) |
-| 429 | IP bloqueado por falhas de autenticação seguidas | Mantém o lote e tenta de novo com espera crescente |
-| 422 | Fora do contrato; cópia guardada em `invalid_messages` | Descarta o lote, para não reenviar o mesmo erro para sempre |
+| 413 | Corpo acima do limite em bytes | Reenvia as leituras uma a uma e descarta só a recusada (um lote de 60 leituras fica muito abaixo do limite) |
+| 429 | IP bloqueado por falhas de autenticação repetidas | Mantém o lote e tenta de novo com espera crescente |
+| 422 | Fora do contrato; cópia guardada em `invalid_messages` (só com token de nó válido) | Reenvia as leituras uma a uma e descarta só a recusada, para não reenviar o mesmo erro para sempre |
+| Outro 4xx (404, 405...) | Caminho ou túnel mal configurado; nada foi gravado | Mantém o lote e tenta de novo com espera crescente |
 | Falha de rede ou 5xx | Nada foi gravado | Mantém o lote e tenta de novo com espera crescente |
 
 Cada leitura é identificada por `(device_id, boot_id, seq)`. O `boot_id` é um contador gravado na memória não volátil do ESP32 e incrementado a cada inicialização; o `seq` recomeça do zero a cada boot. A API ignora leituras repetidas, então reenviar um lote é sempre seguro, e um reinício nunca faz uma leitura nova colidir com uma antiga. Isso também separa os tipos de falha: um salto de `seq` dentro do mesmo `boot_id` é perda de mensagem, um intervalo de tempo sem salto de `seq` é minuto sem leitura válida do sensor, e um `boot_id` novo é um reinício.
@@ -173,7 +177,7 @@ FROM ingest_batches GROUP BY device_id;
 
 ## Dashboard
 
-O dashboard lê o banco em modo somente leitura e tem três abas. Status mostra, para cada nó, a última leitura, há quanto tempo chegou o último envio e uma tabela de saúde da coleta nas últimas 24 horas: completude, maior lacuna, mensagens perdidas, reinícios, duplicatas descartadas e leituras marcadas; a aba se atualiza sozinha a cada minuto. Dispositivos de teste (identificadores que começam com `teste`, como o `teste-https`) não aparecem no painel, e um nó cadastrado em `PM25_DEVICE_TOKENS` que ainda não enviou leituras aparece com um card reservado, "aguardando instalação". Séries mostra PM2,5, PM10, PM1,0, temperatura e umidade por período, em médias horárias (só horas com pelo menos 45 minutos de leitura) ou minuto a minuto, com a linha de 75% de umidade e a parcela de registros acima dela, e exporta os dados em CSV. Previsto × observado compara as últimas 48 horas com a previsão de persistência, calculada na hora, e com as previsões que o job horário gravar na tabela `forecasts`, com MAE, RMSE e skill score. Cada previsor é medido só nas horas que têm observação, persistência e previsão dele, para o skill score comparar o modelo e a persistência nas mesmas horas, como em `train_forecast.py`. As linhas são interrompidas onde faltam dados, em vez de ligar pontos distantes. Os horários aparecem no fuso de Brasília; no banco, tudo continua em UTC.
+O dashboard lê o banco em modo somente leitura e tem três abas. Status mostra, para cada nó, a última leitura, há quanto tempo chegou o último envio e uma tabela de saúde da coleta nas últimas 24 horas: completude, maior lacuna, mensagens perdidas, reinícios, duplicatas descartadas e leituras marcadas; a aba se atualiza sozinha a cada minuto. Dispositivos de teste (identificadores que começam com `teste`, como o `teste-https`) não aparecem no painel, e um nó cadastrado em `PM25_DEVICE_TOKENS` que ainda não enviou leituras aparece com um card reservado, "aguardando instalação". Séries mostra PM2,5, PM10, PM1,0, temperatura e umidade por período, em médias horárias (só horas com pelo menos 45 minutos de leitura) ou minuto a minuto (períodos de até 7 dias), com a linha de 75% de umidade e a parcela de registros acima dela, e exporta os dados em CSV. Previsto × observado compara as últimas 48 horas com a previsão de persistência, calculada na hora, e com as previsões que o job horário gravar na tabela `forecasts`, com MAE, RMSE e skill score. Cada previsor é medido só nas horas que têm observação, persistência e previsão dele, para o skill score comparar o modelo e a persistência nas mesmas horas, como em `train_forecast.py`. As linhas são interrompidas onde faltam dados, em vez de ligar pontos distantes. Os horários aparecem no fuso de Brasília; no banco, tudo continua em UTC.
 
 ## Firmware
 
@@ -215,13 +219,13 @@ cd firmware/host_tests
 g++ -std=c++17 -Wall -I../src test_core.cpp -o test_core && ./test_core
 ```
 
-O teste gera `payload_exemplo.json`, e o teste da API `test_contrato_payload_gerado_pelo_firmware_e_aceito` confere que a API aceita exatamente esse JSON. Nada disso substitui o teste com o hardware real, que ainda precisa ser feito.
+O teste gera `payload_exemplo.json`, e o teste da API `test_contrato_payload_gerado_pelo_firmware_e_aceito` confere que a API aceita exatamente esse JSON. Nada disso substitui o teste com o hardware real, feito no nó `no-01`, em operação desde 09/10/2026.
 
 ## Simulação no Wokwi
 
 A pasta `wokwi/` traz o projeto completo do simulador, exceto o código do firmware: o circuito (`diagram.json`), os dois chips simulados (`.chip.c` com o comportamento e `.chip.json` com os pinos e os controles: pm1, pm25 e pm10 no PMS5003; temp, press e hum no BME280), o `config.wokwi.h` e a lista de bibliotecas. Os chips substituem os do primeiro esboço do projeto no Wokwi, cujas versões tinham dois problemas. O chip do PMS5003 só preenchia os campos CF=1 do quadro e deixava zerados os campos "atmospheric environment", que o firmware usa como PM2,5; com ele, o firmware novo leria sempre zero. O chip do BME280 convertia para os registradores com aproximações lineares: a temperatura saía certa, mas a pressão errava dezenas de hPa e a umidade só batia perto de 50% (20% virava 0% e 80% virava 100%), justamente a faixa que importa para a análise de umidade alta. O chip novo aplica as fórmulas de compensação da biblioteca Adafruit e procura o valor de registrador que reproduz cada controle. Testado fora do Wokwi, com um stub da API, o erro ficou abaixo de 0,01 °C, 0,01 hPa e 0,01% de umidade entre −10 e 45 °C, 900 e 1050 hPa e 0 e 100%, e os quadros do PMS5003 simulado passam no parser do firmware sem erro de checksum.
 
-Para montar o projeto em wokwi.com, crie um projeto ESP32 e coloque nele os arquivos de `wokwi/`: `diagram.json`, `libraries.txt`, os quatro arquivos dos chips e `config.wokwi.h` renomeado para `config.h`. Some a eles `main.cpp`, `pms5003.h` e `reading.h` de `firmware/src/` e deixe o `sketch.ino` vazio, porque o firmware está todo no `main.cpp`. O circuito liga o PMS5003 na UART2 (GPIO16 e 17) e o BME280 em 0x76 (GPIO21 e 22), como no `config.wokwi.h`. No Wokwi for VS Code os chips precisam ser compilados para `.wasm` e declarados num `wokwi.toml`, que ainda não estão no repositório. A rede simulada é sempre `Wokwi-GUEST`, sem senha, no canal 6. Para o ESP32 simulado alcançar a API no seu computador é preciso o gateway privado do Wokwi (incluído no Wokwi for VS Code; no navegador, exige a assinatura Wokwi Club), e a URL passa a ser `http://host.wokwi.internal:8000/v1/measurements`. Sem o gateway, o simulador só alcança a internet: exponha a API local por um túnel (ngrok ou cloudflared), use a URL `https` gerada e ative `API_TLS_INSECURE_TEST` no `config.h` (o simulador não valida o certificado; esse modo é só para testes).
+Para montar o projeto em wokwi.com, crie um projeto ESP32 e coloque nele os arquivos de `wokwi/`: `diagram.json`, `libraries.txt`, `partitions.csv`, os quatro arquivos dos chips e `config.wokwi.h` renomeado para `config.h`. Sem o `partitions.csv` o Wokwi não cria a partição do LittleFS, e as leituras que a API não confirmar se perdem em vez de ir para o buffer; com ele, o primeiro boot formata a partição e a simulação fica lenta por alguns segundos. Some a eles `main.cpp`, `pms5003.h` e `reading.h` de `firmware/src/` e deixe o `sketch.ino` vazio, porque o firmware está todo no `main.cpp`. O circuito liga o PMS5003 na UART2 (GPIO16 e 17) e o BME280 em 0x76 (GPIO21 e 22), como no `config.wokwi.h`. No Wokwi for VS Code os chips precisam ser compilados para `.wasm` e declarados num `wokwi.toml`, que ainda não estão no repositório. A rede simulada é sempre `Wokwi-GUEST`, sem senha, no canal 6. Para o ESP32 simulado alcançar a API no seu computador é preciso o gateway privado do Wokwi (incluído no Wokwi for VS Code; no navegador, exige a assinatura Wokwi Club), e a URL passa a ser `http://host.wokwi.internal:8000/v1/measurements`. Sem o gateway, o simulador só alcança a internet: exponha a API local por um túnel (ngrok ou cloudflared), use a URL `https` gerada e ative `API_TLS_INSECURE_TEST` no `config.h` (o simulador não valida o certificado; esse modo é só para testes).
 
 Dá para exercitar no simulador os cenários que importam no campo. Suba a umidade acima de 75% e veja a marcação no dashboard. Pare a API por alguns minutos e religue: o nó guarda as leituras em flash e as reenvia num lote, e a tabela de saúde não deve registrar perdas. Reinicie o ESP32 simulado: o `boot_id` muda e as leituras seguem sem colisão.
 
@@ -238,6 +242,8 @@ sudo systemctl daemon-reload && sudo systemctl enable --now pm25-api pm25-dashbo
 crontab -e     # cole o conteúdo de server/deploy/crontab.example
 curl http://127.0.0.1:8000/health   # no próprio servidor; de fora, pelo túnel
 ```
+
+O dashboard também escuta só em `127.0.0.1`, porque não tem login e mostra os mesmos dados que a API só entrega com o token de leitura. Para abri-lo de outro computador, use um túnel SSH: `ssh -L 8501:127.0.0.1:8501 pi@<ip-do-servidor>` e acesse `http://localhost:8501`.
 
 Para a previsão horária, instale também o `requirements-ml.txt` e treine um modelo (seção "Previsão em produção"); sem modelo em `data/models`, a linha do job no crontab só registra o aviso no log.
 
@@ -266,7 +272,7 @@ Nada disto foi executado na implementação: dependem da sua conta e do computad
 2. No painel de administração, em DNS, ative o **MagicDNS** e o **HTTPS Certificates** (a Tailscale emite o certificado pela Let's Encrypt).
 3. Ative a exposição pública (o atributo `funnel`). Ao rodar o primeiro `tailscale funnel`, o cliente abre uma página para aprovar. Também dá para editar a política da conta (Access controls) e acrescentar `"nodeAttrs": [{"target": ["autogroup:member"], "attr": ["funnel"]}]`; restrinja `target` ao seu usuário ou à máquina do servidor se a conta tiver outros membros.
 4. Atualize o servidor: reinstale as tarefas com `server\deploy\windows\install.ps1` (a API passa a escutar só em `127.0.0.1` e a regra de firewall da porta 8000 é removida), e reinicie a API.
-5. Cadastre um token para o dispositivo de teste e um para cada nó em `server\.env`, por exemplo `PM25_DEVICE_TOKENS=no-01:<token>,no-02:<token>,teste-https:<token>`. Gere cada token com `python -c "import secrets; print(secrets.token_urlsafe(24))"`. Para o app de consulta, gere mais um e grave em `PM25_READ_TOKEN`.
+5. Cadastre um token para o dispositivo de teste e um para cada nó em `server\.env`, por exemplo `PM25_DEVICE_TOKENS=no-01:<token>,no-02:<token>,teste-https:<token>`. Gere cada token com `python -c "import secrets; print(secrets.token_urlsafe(24))"`. A API só inicia com tokens de pelo menos 32 caracteres e 10 distintos, o que o comando atende; um token mais curto de uma instalação anterior precisa ser trocado no `.env` e no `config.h` do nó. Para o app de consulta, gere mais um e grave em `PM25_READ_TOKEN`.
 6. Publique só os três caminhos, apontando para a API local (PowerShell, no servidor):
 
    ```powershell
@@ -296,9 +302,9 @@ Nada disto foi executado na implementação: dependem da sua conta e do computad
 | Token ausente ou inválido | 401 com a mesma mensagem nos dois casos | `invalid_messages`, sem o token |
 | Token válido para outro `device_id` | 403 | `invalid_messages` |
 | Rota de leitura sem o token de leitura (inclusive com o token de um nó) | 401 | nenhum (conta para o bloqueio do IP) |
-| `PM25_AUTH_MAX_FAILS` (10) falhas de autenticação seguidas do mesmo IP | 429 com `Retry-After`, por `PM25_AUTH_BLOCK_MIN` (5) minutos, mesmo com token correto | nenhum |
+| `PM25_AUTH_MAX_FAILS` (10) falhas de autenticação do mesmo IP em `PM25_AUTH_BLOCK_MIN` (5) minutos | 429 com `Retry-After` para novas tentativas inválidas, por `PM25_AUTH_BLOCK_MIN` (5) minutos; o token correto continua aceito | nenhum |
 
-O contador fica só na memória, por IP, e zera com uma autenticação válida (um 403 conta como autenticação válida). Reiniciar a API libera todos os IPs. O firmware trata 401, 403 e 429 como erro a corrigir ou a esperar: o lote continua no buffer e é reenviado com espera crescente.
+O contador fica só na memória, por IP; as falhas expiram depois de `PM25_AUTH_BLOCK_MIN` minutos, e uma autenticação válida não as zera (um 403 conta como autenticação válida). Se zerasse, quem tem o token de leitura, que sai do APK, poderia intercalar um acerto a cada nove tentativas e errar sem limite. Reiniciar a API libera todos os IPs. O bloqueio não recusa token correto: se recusasse, qualquer pessoa na mesma rede de um nó (que sai para a internet pelo mesmo IP público) poderia deixá-lo de fora errando o token de propósito. Por isso a proteção contra adivinhar um token é o próprio token, longo e aleatório (gere com `secrets.token_urlsafe(24)`); o bloqueio só corta o ruído de tentativas inválidas. O firmware trata 401, 403 e 429 como erro a corrigir ou a esperar: o lote continua no buffer e é reenviado com espera crescente.
 
 ### Certificado raiz embutido
 
@@ -363,11 +369,11 @@ A avaliação offline escolhe o modelo; dois scripts o colocam no ar. Os três p
 pip install -r server/requirements-ml.txt
 cd server
 python -m scripts.fit_forecast --model ridge --version v0   # grava data/models/ridge-v0.joblib
-python -m scripts.forecast_job                              # o que a tarefa horária executa
+python -m scripts.forecast_job --backfill-hours 24          # o que a tarefa horária executa
 ```
 
 - **`fit_forecast.py`** treina o modelo (`ridge`, `gboost` ou `mlp`) com todas as horas completas do banco, sem os nós de teste, e grava `<modelo>-<versão>.joblib` em `PM25_MODELS_DIR` (padrão `data/models`). Exige pelo menos 100 horas completas. Uma versão nunca é sobrescrita: um modelo novo, ou o mesmo modelo treinado com mais dados, ganha outra versão, para que cada linha de `forecasts` aponte para um único modelo. O arquivo registra a versão do scikit-learn do treino e só carrega com ela; depois de atualizar o scikit-learn, treine uma versão nova. O arquivo é um pickle: só carregue modelos gerados no próprio servidor.
-- **`forecast_job.py`** roda a cada hora, aos 5 minutos, para dar tempo de chegarem as últimas leituras da hora: tarefa `pm25-forecast` no Windows, linha do `crontab.example` no Linux, log em `data/forecast.log`. Para cada nó e cada modelo da pasta, usa as médias até a última hora completa e grava em `forecasts` a previsão da hora em andamento. Como a hora-alvo ainda não terminou, toda previsão antecede o valor observado (validação prospectiva). Um nó sem média válida na última hora, ou sem algum dos atrasos, fica sem previsão nessa hora, e uma hora perdida com o servidor desligado não é preenchida depois. Rodar de novo na mesma hora não duplica nada. O job termina com código 1 se nenhum modelo carregar ou se algum arquivo falhar (os outros modelos rodam assim mesmo), o que aparece no `LastTaskResult` da tarefa.
+- **`forecast_job.py`** roda a cada hora, aos 5 minutos, para dar tempo de chegarem as últimas leituras da hora: tarefa `pm25-forecast` no Windows, linha do `crontab.example` no Linux, log em `data/forecast.log`. Para cada nó e cada modelo da pasta, usa as médias até a última hora completa e grava em `forecasts` a previsão da hora em andamento. Como a hora-alvo ainda não terminou, toda previsão antecede o valor observado (validação prospectiva). Um nó sem média válida na última hora, ou sem algum dos atrasos, fica sem previsão nessa hora, e uma hora perdida com o servidor desligado só é preenchida com `--backfill-hours` (veja adiante). Quando o nó guarda as leituras numa queda de conexão e as envia depois, dá para recalcular a previsão das horas que ficaram sem ela com `python -m scripts.forecast_job --replay-from 2026-10-18T18:00:00Z --replay-to 2026-10-18T21:00:00Z` (horas-alvo em UTC, inclusive, até 7 dias). O recálculo usa o mesmo modelo e só as leituras com horário de sensor anterior à hora-alvo, mas, como não foi gravado antes do fato, entra na versão `<versão>-retro` (por exemplo, `ridge v0-retro`), uma série à parte no painel, na rota `/forecast` e no app, com `generated_at` no momento real do recálculo. Horas que já têm a previsão em tempo real do modelo não são tocadas. As tarefas agendadas (`run-forecast.cmd` e `crontab.example`) já rodam com `--backfill-hours 24`: a cada execução o job também recalcula, nessa versão `-retro`, as horas encerradas das últimas 24 que ficaram sem previsão, então uma queda curta é coberta sozinha quando os dados voltam (até `--backfill-hours 168`; sem a opção, nada é recalculado sozinho). Uma lacuna mais antiga que a janela ainda pede o `--replay-from` manual. As métricas da versão `-retro` não são validação prospectiva e devem ser apresentadas separadas. Rodar de novo na mesma hora não duplica nada. O job termina com código 1 se nenhum modelo carregar ou se algum arquivo falhar (os outros modelos rodam assim mesmo), o que aparece no `LastTaskResult` da tarefa.
 - **Onde aparece:** cada modelo vira uma série "<modelo> <versão>" (por exemplo, `ridge v0`) na aba Previsto × observado do dashboard, na rota `/forecast` e na tela de previsão do app, ao lado da persistência, com MAE, RMSE e skill score medidos nas horas já observadas. Nenhum dos três precisou mudar.
 - **Trocar ou aposentar um modelo:** treine a versão nova e deixe as duas na pasta enquanto quiser compará-las lado a lado; para aposentar uma, tire o arquivo de `data/models`. As previsões já gravadas continuam no banco.
 

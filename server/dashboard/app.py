@@ -20,6 +20,7 @@ from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSIS
 from app.config import get_settings  # noqa: E402
 
 LOCAL_TZ = "America/Sao_Paulo"
+MAX_MINUTE_DAYS = 7  # o período padrão da aba Séries (7 dias) ainda cabe em resolução de 1 minuto
 VARIABLES = {
     "pm25": "PM2,5 (µg/m³)",
     "pm10": "PM10 (µg/m³)",
@@ -54,20 +55,14 @@ def _read(fn, *args, missing, **kwargs):
         conn.close()
 
 
-def without_test_devices(df: pd.DataFrame) -> pd.DataFrame:
-    return df[~df["device_id"].map(analytics.is_test_device).astype(bool)]
-
-
 @st.cache_data(ttl=30)
 def load_status(now: datetime) -> pd.DataFrame:
-    return without_test_devices(
-        _read(analytics.device_status, now, missing=pd.DataFrame(columns=analytics.STATUS_COLUMNS)))
+    return _read(analytics.device_status, now, missing=pd.DataFrame(columns=analytics.STATUS_COLUMNS))
 
 
 @st.cache_data(ttl=30)
 def load_health(start: datetime, now: datetime) -> pd.DataFrame:
-    return without_test_devices(
-        _read(analytics.collection_health, start, now, missing=pd.DataFrame(columns=analytics.HEALTH_COLUMNS)))
+    return _read(analytics.collection_health, start, now, missing=pd.DataFrame(columns=analytics.HEALTH_COLUMNS))
 
 
 def expected_devices(status: pd.DataFrame) -> list[str]:
@@ -139,16 +134,13 @@ METRIC_LABELS = {"previsor": "Previsor", "horas": "Horas", "mae": "MAE (µg/m³)
 SERIES_COLORS = {"Observado": "#3b82f6", "Persistência": "#9ca3af"}
 MODEL_COLORS = ["#f97316", "#10b981", "#a855f7", "#ec4899"]
 
-# Faixas de PM2,5 da CETESB (µg/m³), as mesmas do app: o limite pertence à faixa de baixo (25,0 é Boa).
-AIR_QUALITY = [(25.0, "Boa", "green"), (50.0, "Moderada", "yellow"), (75.0, "Ruim", "orange"),
-               (125.0, "Muito ruim", "red"), (float("inf"), "Péssima", "violet")]
+BAND_COLORS = {"Boa": "green", "Moderada": "yellow", "Ruim": "orange", "Muito ruim": "red", "Péssima": "violet"}
 
 
 def air_quality(pm25) -> tuple[str, str] | None:
-    """Nome e cor da faixa de um valor de PM2,5; None sem valor."""
-    if pm25 is None or pd.isna(pm25) or pm25 < 0:
-        return None
-    return next((label, color) for bound, label, color in AIR_QUALITY if pm25 <= bound)
+    """Nome e cor da faixa de qualidade do ar de um valor de PM2,5; None sem valor."""
+    band = analytics.air_quality(pm25)
+    return None if band is None else (band, BAND_COLORS[band])
 
 
 def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta) -> pd.DataFrame:
@@ -203,6 +195,8 @@ def status_tab() -> None:
             if isinstance(dev["location"], str):
                 st.caption(dev["location"])
             st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")
+            if isinstance(dev["firmware"], str):
+                st.caption(f"Firmware: {dev['firmware']}")
             # Uma linha de colunas por grupo: a faixa sob o PM2,5 não desalinha a linha de baixo.
             a, b = st.columns(2)
             band, color = air_quality(dev["pm25"]) or (None, "off")
@@ -255,19 +249,26 @@ def series_tab(devices_all: list[str]) -> None:
     tz = ZoneInfo(LOCAL_TZ)
     start = datetime.combine(period[0], time(), tz).astimezone(timezone.utc)
     end = datetime.combine(period[1] + timedelta(days=1), time(), tz).astimezone(timezone.utc)
-    df = load_measurements(start, end, tuple(devices))
-    if not df.empty and only_ok:
-        df = df[df["quality"] == "ok"]
-    if df.empty:
-        st.info("Sem leituras no período escolhido.")
-        return
-
     if resolution == "Média horária":
         data = load_hourly(start, end, tuple(devices), only_ok)
+        if data.empty:
+            st.info(f"Sem horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura no período escolhido.")
+            return
         data["hora_local"] = local_naive(data["hora"])
         st.caption(f"Médias de horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura (75%).")
         max_gap = pd.Timedelta(hours=1)
     else:
+        # Cada minuto vira um ponto no navegador: períodos longos travariam a página.
+        if (period[1] - period[0]).days + 1 > MAX_MINUTE_DAYS:
+            st.info(f"A resolução de 1 minuto mostra até {MAX_MINUTE_DAYS} dias. "
+                    "Escolha um período menor ou use a média horária.")
+            return
+        df = load_measurements(start, end, tuple(devices))
+        if not df.empty and only_ok:
+            df = df[df["quality"] == "ok"]
+        if df.empty:
+            st.info("Sem leituras no período escolhido.")
+            return
         data = df.assign(hora_local=local_naive(df["ts_sensor"]))
         max_gap = pd.Timedelta(minutes=5)
 

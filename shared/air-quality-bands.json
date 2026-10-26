@@ -1,0 +1,7 @@
+[
+  {"label": "Boa", "upper_bound": 25.0},
+  {"label": "Moderada", "upper_bound": 50.0},
+  {"label": "Ruim", "upper_bound": 75.0},
+  {"label": "Muito ruim", "upper_bound": 125.0},
+  {"label": "Péssima", "upper_bound": null}
+]

@@ -37,6 +37,7 @@ def synthetic(ts: datetime, state: dict) -> dict:
         "pm25_cf1": round(pm25 * 1.05, 1),
         "temperature": round(temperature, 1),
         "humidity": round(humidity, 1),
+        "pressure": round(930 + 3 * math.sin(2 * math.pi * local_hour / 12) + random.gauss(0, 0.2), 1),
         "rssi": random.randint(-75, -55),
         "samples": random.randint(55, 60),
     }

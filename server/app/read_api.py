@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from . import analytics, db
 from .config import get_settings
-from .guard import AuthThrottle
+from .guard import require_bearer
 
 MAX_RANGE = timedelta(days=31)
 STATUS = {"em_operacao": "online", "atrasado": "late", "sem_dados": "silent"}
@@ -113,17 +113,7 @@ def authorize_read(request: Request, authorization: str | None = Header(default=
     settings = get_settings()
     if not settings.read_token:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Leitura desligada: defina PM25_READ_TOKEN")
-    throttle: AuthThrottle = request.app.state.throttle
-    ip = request.client.host if request.client else None
-    wait = throttle.retry_after(ip)
-    if wait:
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Muitas tentativas inválidas",
-                            headers={"Retry-After": str(wait)})
-    scheme, _, token = (authorization or "").partition(" ")
-    if scheme != "Bearer" or not settings.is_read_token(token.strip()):
-        throttle.register_failure(ip)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Não autorizado", headers={"WWW-Authenticate": "Bearer"})
-    throttle.register_success(ip)
+    require_bearer(request, authorization, lambda token: settings.is_read_token(token) or None)
 
 
 def get_read_conn() -> Iterator:
@@ -143,7 +133,7 @@ def _now() -> datetime:
 
 
 def _require_device(conn, device_id: str) -> None:
-    if analytics.is_test_device(device_id) or device_id not in db.last_seen(conn, [device_id]):
+    if analytics.is_test_device(device_id) or not db.has_readings(conn, device_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Nó sem leituras")
 
 
@@ -172,9 +162,8 @@ def _aware(value: datetime, name: str) -> datetime:
 def list_devices(conn=Depends(get_read_conn)):
     """Estado de cada nó e a leitura mais recente; dispositivos de teste ficam de fora."""
     now = _now()
-    status = analytics.device_status(conn, now)
     devices = []
-    for r in _records(status[~status["device_id"].map(analytics.is_test_device).astype(bool)]):
+    for r in _records(analytics.device_status(conn, now)):
         latest = None
         if r["ts_sensor"] is not None:
             latest = {"ts": r["ts_sensor"], **{k: r[k] for k in (*analytics.VARIABLES, "rssi", "quality")}}
@@ -212,12 +201,12 @@ def hourly(device_id: DeviceId,
         raise HTTPException(422, "Intervalo inválido: start < end, até 31 dias")
     _require_device(conn, device_id)
 
-    hours = pd.date_range(start, end, freq="h", inclusive="left")
-    h = analytics.hourly_means(conn, start, end, [device_id]).set_index("hora").reindex(hours)
+    slots = pd.date_range(start, end, freq="h", inclusive="left")
+    h = analytics.hourly_means(conn, start, end, [device_id]).set_index("hora").reindex(slots)
     h["n"] = h["n"].fillna(0).astype(int)
     points = [{"hour": hour, "readings": int(n), "valid": bool(n >= analytics.MIN_READINGS_PER_HOUR),
                **{k: row[k] for k in analytics.VARIABLES}}
-              for hour, n, row in zip(hours, h["n"], _records(h))]
+              for hour, n, row in zip(slots, h["n"], _records(h))]
     return {"generated_at": now, "device_id": device_id, "start": start, "end": end,
             "min_readings": analytics.MIN_READINGS_PER_HOUR, "hours": points}
 
@@ -228,8 +217,7 @@ def health(device_id: DeviceId, hours: int = Query(24, ge=1, le=168), conn=Depen
     now = _now()
     _require_device(conn, device_id)
     start = now - timedelta(hours=hours)
-    table = analytics.collection_health(conn, start, now)
-    row = _records(table[table["device_id"] == device_id])[0]
+    row = _records(analytics.collection_health(conn, start, now, [device_id]))[0]
     return {"generated_at": now, "device_id": device_id, "start": start, "end": now,
             "completeness": row["completude"], "largest_gap_min": row["maior_lacuna_min"],
             "lost_messages": row["mensagens_perdidas"], "restarts": row["reinicios"],

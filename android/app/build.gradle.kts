@@ -41,6 +41,10 @@ android {
         compose = true
         buildConfig = true
     }
+    sourceSets {
+        // Arquivos que o servidor e o app conferem nos testes (shared/air-quality-bands.json).
+        getByName("test").resources.directories.add("../../shared")
+    }
 }
 
 dependencies {

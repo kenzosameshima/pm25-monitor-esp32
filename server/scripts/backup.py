@@ -8,7 +8,6 @@ Aponte PM25_BACKUP_DIR para um pendrive ou pasta sincronizada: um backup no mesm
 do Raspberry Pi não protege contra falha do cartão.
 """
 
-import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,24 +26,12 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%MZ")
     final = out_dir / f"pm25-{stamp}.db"
-    partial = final.with_name(final.name + ".part")
-
-    src = db.connect(settings.db_path, readonly=True)
-    dst = sqlite3.connect(partial)
     try:
-        src.backup(dst)
-        check = dst.execute("PRAGMA integrity_check").fetchone()[0]
-        rows = dst.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
-    finally:
-        dst.close()
-        src.close()
-
-    if check != "ok":
-        partial.unlink(missing_ok=True)
-        print(f"Backup descartado: integrity_check retornou {check!r}", file=sys.stderr)
+        rows = db.snapshot(settings.db_path, final)
+    except db.SnapshotError as exc:
+        print(f"Backup descartado: {exc}", file=sys.stderr)
         return 2
 
-    partial.rename(final)
     backups = sorted(out_dir.glob("pm25-*.db"))
     for old in backups[: max(0, len(backups) - settings.backup_keep)]:
         old.unlink()

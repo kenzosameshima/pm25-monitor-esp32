@@ -3,6 +3,12 @@ package br.unip.pm25.domain
 import br.unip.pm25.data.DeviceList
 import br.unip.pm25.data.DeviceState
 import br.unip.pm25.data.DeviceStatus
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -25,6 +31,20 @@ class AirQualityTest {
         assertNull(AirQuality.of(null))
         assertNull(AirQuality.of(Double.NaN))
         assertNull(AirQuality.of(-1.0))
+    }
+
+    @Test
+    fun `as faixas sao as mesmas do servidor`() {
+        // shared/air-quality-bands.json, o mesmo arquivo que o teste do servidor confere.
+        val text = requireNotNull(AirQualityTest::class.java.classLoader?.getResource("air-quality-bands.json")) {
+            "air-quality-bands.json ausente dos recursos de teste"
+        }.readText()
+        val shared = Json.parseToJsonElement(text).jsonArray.map {
+            val bound = it.jsonObject.getValue("upper_bound").jsonPrimitive
+            it.jsonObject.getValue("label").jsonPrimitive.content to
+                if (bound is JsonNull) Double.POSITIVE_INFINITY else bound.double
+        }
+        assertEquals(shared, AirQuality.entries.map { it.label to it.upperBound })
     }
 }
 

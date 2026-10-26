@@ -1,6 +1,9 @@
 """Testes das regras de análise compartilhadas pelo dashboard, pelos scripts e pela API de leitura."""
 
+import json
+import math
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -88,6 +91,19 @@ def test_estado_traz_a_leitura_mais_recente(conn):
     assert status.loc["no-01", "ts_sensor"] == pd.Timestamp(NOW - timedelta(minutes=1))
 
 
+def test_estado_traz_a_ultima_versao_do_firmware(conn):
+    db.insert_batch(conn, "no-01", [reading("no-01", -2)], NOW, firmware="v1")
+    db.insert_batch(conn, "no-01", [reading("no-01", -1)], NOW + timedelta(minutes=1), firmware="v2")
+    db.insert_batch(conn, "no-02", [reading("no-02", -1)], NOW)
+    status = analytics.device_status(conn, NOW).set_index("device_id")
+    assert status.loc["no-01", "firmware"] == "v2" and pd.isna(status.loc["no-02", "firmware"])
+
+
+def test_estado_deixa_de_fora_nos_de_teste(conn):
+    insert(conn, [reading("no-01", -1), reading("teste-https", -1)])
+    assert list(analytics.device_status(conn, NOW)["device_id"]) == ["no-01"]
+
+
 def test_estado_sem_nos(conn):
     status = analytics.device_status(conn, NOW)
     assert status.empty and list(status.columns) == analytics.STATUS_COLUMNS
@@ -113,6 +129,43 @@ def test_saude_conta_lacuna_final_e_leituras_marcadas(conn):
     health = analytics.collection_health(conn, NOW - timedelta(hours=1), NOW).iloc[0]
     assert health["maior_lacuna_min"] == 20                 # nada desde o minuto -21
     assert health["leituras_marcadas"] == 5
+
+
+def test_saude_deixa_de_fora_nos_de_teste_salvo_se_pedidos(conn):
+    insert(conn, [reading("no-01", -1), reading("teste-https", -1)])
+    start = NOW - timedelta(hours=1)
+    assert list(analytics.collection_health(conn, start, NOW)["device_id"]) == ["no-01"]
+    assert list(analytics.collection_health(conn, start, NOW, ["teste-https"])["device_id"]) == ["teste-https"]
+
+
+# ---------------------------------------------------------------- faixas de qualidade do ar
+
+@pytest.mark.parametrize("pm25, band", [
+    (0.0, "Boa"), (25.0, "Boa"), (25.1, "Moderada"), (75.0, "Ruim"), (125.0, "Muito ruim"), (125.1, "Péssima"),
+])
+def test_cada_limite_pertence_a_faixa_de_baixo(pm25, band):
+    assert analytics.air_quality(pm25) == band
+
+
+@pytest.mark.parametrize("pm25", [None, float("nan"), -1.0])
+def test_sem_valor_valido_nao_ha_faixa(pm25):
+    assert analytics.air_quality(pm25) is None
+
+
+def test_faixas_sao_as_mesmas_do_app():
+    """O app Android confere o mesmo arquivo, então as duas pontas não se afastam sem um teste falhar."""
+    shared = json.loads((Path(__file__).parents[2] / "shared" / "air-quality-bands.json").read_text(encoding="utf-8"))
+    assert [(b["label"], b["upper_bound"]) for b in shared] == [
+        (label, None if math.isinf(bound) else bound) for bound, label in analytics.AIR_QUALITY_BANDS]
+
+
+# ---------------------------------------------------------------- nós em produção
+
+def test_nos_em_producao_tem_leituras_e_nao_sao_de_teste(conn):
+    insert(conn, [reading("no-02", -1), reading("no-01", -1), reading("teste-https", -1)])
+    with conn:
+        conn.execute("INSERT INTO devices (device_id, first_seen) VALUES ('no-03', ?)", (db.iso(NOW),))
+    assert analytics.production_devices(conn) == ["no-01", "no-02"]
 
 
 # ---------------------------------------------------------------- previsto × observado

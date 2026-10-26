@@ -260,9 +260,10 @@ void chip_init(void)
             &timer_config
         );
 
+    // timer_start conta em microssegundos: sem o * 1000 o chip mandaria um quadro por milissegundo.
     timer_start(
         timer,
-        PMS5003_INTERVAL_MS,
+        PMS5003_INTERVAL_MS * 1000,
         true
     );
 

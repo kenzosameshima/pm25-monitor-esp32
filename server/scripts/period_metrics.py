@@ -13,7 +13,6 @@ import argparse
 import hashlib
 import json
 import math
-import sqlite3
 import sys
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
@@ -22,8 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from app import db
-from app.analytics import is_test_device
+from app import analytics, db
 from app.config import get_settings
 from app.forecasting import MIN_SAMPLES, hourly_series
 
@@ -115,10 +113,7 @@ def operational_metrics(conn, device: str, start: datetime, end: datetime, days:
     else:
         largest = edges = expected
 
-    batches = conn.execute(
-        "SELECT COALESCE(SUM(n_duplicates), 0) FROM ingest_batches WHERE device_id = ? AND received_at >= ? AND received_at < ?",
-        (device, db.iso(start), db.iso(end)),
-    ).fetchone()[0]
+    duplicates = db.duplicates_discarded(conn, device, start, end)
     rssi = [r["rssi"] for r in rows if r["rssi"] is not None]
 
     per_day = Counter((m - start_min) // MINUTES_PER_DAY for m in minutes)
@@ -137,7 +132,7 @@ def operational_metrics(conn, device: str, start: datetime, end: datetime, days:
         "maior_lacuna_min": largest,
         "mensagens_perdidas": lost,
         "reinicios": restarts,
-        "duplicatas_descartadas": int(batches),
+        "duplicatas_descartadas": int(duplicates),
         "rssi_medio_dbm": round(sum(rssi) / len(rssi), 2) if rssi else None,
         "lacunas_min": {**gaps, "bordas": edges, "total": sum(gaps.values()) + edges},
     }
@@ -201,23 +196,8 @@ def pm25_metrics(conn, device: str, start: datetime, end: datetime):
 def freeze_database(source_path: str, out_dir: Path, start: date, end: date) -> tuple[Path, dict]:
     """Copia o banco pela API de backup do SQLite (íntegra mesmo com a API gravando) e calcula o hash."""
     final = out_dir / f"pm25-congelado-{start.isoformat()}_{end.isoformat()}.db"
-    partial = final.with_name(final.name + ".part")
-    partial.unlink(missing_ok=True)
-    src = db.connect(source_path, readonly=True)
-    dst = sqlite3.connect(partial)
-    try:
-        src.backup(dst)
-        # Arquivo único e estável: sem -wal/-shm, para que o hash identifique o conjunto de dados.
-        dst.execute("PRAGMA journal_mode=DELETE")
-        check = dst.execute("PRAGMA integrity_check").fetchone()[0]
-        rows = dst.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
-    finally:
-        dst.close()
-        src.close()
-    if check != "ok":
-        partial.unlink(missing_ok=True)
-        raise RuntimeError(f"Cópia descartada: integrity_check retornou {check!r}")
-    partial.replace(final)
+    # Arquivo único e estável: sem -wal/-shm, para que o hash identifique o conjunto de dados.
+    rows = db.snapshot(source_path, final, single_file=True)
     digest = hashlib.sha256(final.read_bytes()).hexdigest()
     return final, {
         "arquivo": final.name,
@@ -250,9 +230,7 @@ def run(db_path: str, start: date, end: date, out_dir: Path, devices: list[str] 
 
     conn = db.connect(db_path, readonly=True)
     try:
-        ids = devices if devices is not None else [
-            r[0] for r in conn.execute("SELECT device_id FROM devices ORDER BY device_id")
-            if not is_test_device(r[0])]
+        ids = devices if devices is not None else analytics.production_devices(conn)
         nodes, daily_rows, hour_rows, weekday_rows = {}, [], [], []
         for device in ids:
             operational, daily = operational_metrics(conn, device, start_utc, end_utc, days)

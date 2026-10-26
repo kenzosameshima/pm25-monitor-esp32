@@ -11,7 +11,7 @@ MAX_FUTURE_SKEW = timedelta(minutes=5)
 
 
 class Reading(BaseModel):
-    """Uma leitura = média de 1 minuto do PMS5003 mais temperatura, umidade e diagnóstico."""
+    """Uma leitura = média de 1 minuto do PMS5003 mais temperatura, umidade, pressão e diagnóstico."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -24,6 +24,7 @@ class Reading(BaseModel):
     pm25_cf1: FiniteFloat | None = None
     temperature: FiniteFloat | None = None
     humidity: FiniteFloat | None = None
+    pressure: FiniteFloat | None = None  # hPa; só o BME280 mede
     rssi: int | None = Field(default=None, ge=-127, le=0)
     uptime_s: int | None = Field(default=None, ge=0)
     samples: int | None = Field(default=None, ge=0)
@@ -36,12 +37,25 @@ class Reading(BaseModel):
         return v.astimezone(timezone.utc)
 
 
+MAX_FIRMWARE_LEN = 64
+
+
 class Batch(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     schema_version: Literal["1"]
     device_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    # Identifica a compilação gravada no nó. Só diagnóstico: o nó descarta o lote recusado com 4xx, então
+    # um valor estranho é limpo ou ignorado, nunca motivo para recusar as leituras.
+    firmware: str | None = None
     readings: list[Reading] = Field(min_length=1, max_length=MAX_BATCH)
+
+    @field_validator("firmware", mode="before")
+    @classmethod
+    def _tidy_firmware(cls, v):
+        if not isinstance(v, str):
+            return None
+        return "".join(c for c in v if c.isprintable()).strip()[:MAX_FIRMWARE_LEN].strip() or None
 
 
 class IngestResult(BaseModel):
@@ -65,4 +79,6 @@ def quality_flags(r: Reading, now: datetime) -> str:
         flags.append("temp_fora_faixa")
     if r.humidity is not None and not 0 <= r.humidity <= 100:
         flags.append("umid_fora_faixa")
+    if r.pressure is not None and not 300 <= r.pressure <= 1100:
+        flags.append("pressao_fora_faixa")
     return ",".join(flags) if flags else "ok"

@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 
-TOKEN_1 = "token-do-no-01-0000000000"
-TOKEN_2 = "token-do-no-02-0000000000"
+TOKEN_1 = "token-do-no-01-aB3xQ9zK7pLm2Wv8Rt"
+TOKEN_2 = "token-do-no-02-aB3xQ9zK7pLm2Wv8Rt"
 URL = "/v1/measurements"
 
 
@@ -102,6 +102,26 @@ def test_payload_fora_do_contrato_retorna_422_e_fica_auditado(client):
     assert count(client, "SELECT device_id FROM invalid_messages") == "no-01"
 
 
+def test_payload_invalido_e_atribuido_ao_dono_do_token_e_nao_ao_device_id_do_corpo(client):
+    sem_pm25 = reading(0)
+    del sem_pm25["pm25"]
+    r = post(client, [sem_pm25], token=TOKEN_1, device="no-02")
+    assert r.status_code == 422
+    assert count(client, "SELECT device_id FROM invalid_messages") == "no-01"
+
+
+def test_json_malformado_sem_token_nao_grava_o_corpo(client):
+    r = client.post(URL, content=b"{" + b"x" * 1000, headers={"Content-Type": "application/json"})
+    assert r.status_code == 401
+    assert count(client, "SELECT COUNT(*) FROM invalid_messages WHERE raw_payload != ''") == 0
+
+
+def test_json_malformado_com_token_fica_auditado(client):
+    r = client.post(URL, content=b"{xx", headers={"Content-Type": "application/json", **auth_header(TOKEN_1)})
+    assert r.status_code == 422
+    assert count(client, "SELECT raw_payload FROM invalid_messages") == "{xx"
+
+
 def test_horario_sem_fuso_e_rejeitado(client):
     r = post(client, [reading(0, ts="2026-09-22T12:00:00")])
     assert r.status_code == 422
@@ -118,6 +138,40 @@ def test_valores_implausiveis_sao_gravados_com_marcacao(client):
 def test_campos_opcionais_podem_ser_nulos(client):
     r = post(client, [reading(0, temperature=None, humidity=None, rssi=None, pm1=None)])
     assert r.status_code == 201
+
+
+def test_pressao_e_gravada_e_e_opcional(client):
+    r = post(client, [reading(0, pressure=931.3), reading(1)])
+    assert r.status_code == 201
+    with sqlite3.connect(client.db_path) as conn:
+        rows = conn.execute("SELECT pressure, quality FROM measurements ORDER BY seq").fetchall()
+    assert rows == [(931.3, "ok"), (None, "ok")]
+
+
+def test_pressao_implausivel_e_marcada(client):
+    post(client, [reading(0, pressure=50.0)])
+    with sqlite3.connect(client.db_path) as conn:
+        assert conn.execute("SELECT quality FROM measurements").fetchone() == ("pressao_fora_faixa",)
+
+
+def test_banco_anterior_ganha_a_coluna_de_pressao(tmp_path):
+    from app import db
+
+    path = tmp_path / "antigo.db"
+    with sqlite3.connect(path) as conn:
+        schema = db.SCHEMA_PATH.read_text(encoding="utf-8")
+        conn.executescript("\n".join(line for line in schema.splitlines() if "pressure" not in line))
+        conn.execute("INSERT INTO devices (device_id, first_seen) VALUES ('no-01', '2026-10-09T00:00:00Z')")
+        conn.execute("INSERT INTO measurements (device_id, boot_id, seq, ts_sensor, ts_received, pm25, schema_version)"
+                     " VALUES ('no-01', 1, 0, '2026-10-09T00:00:00Z', '2026-10-09T00:00:00Z', 12.0, '1')")
+        assert "pressure" not in {r[1] for r in conn.execute("PRAGMA table_info(measurements)")}
+    conn = db.connect(str(path))
+    try:
+        db.init_db(conn)
+        db.init_db(conn)  # rodar de novo não muda nada
+        assert conn.execute("SELECT pm25, pressure FROM measurements").fetchone()[:] == (12.0, None)
+    finally:
+        conn.close()
 
 
 def test_tabela_bruta_e_imutavel(client):
@@ -155,8 +209,43 @@ def test_contrato_payload_gerado_pelo_firmware_e_aceito(client):
     assert r.status_code == 201, r.text
     assert r.json() == {"inserted": 2, "duplicates": 0}
     with sqlite3.connect(client.db_path) as conn:
-        row = conn.execute("SELECT temperature, rssi, quality FROM measurements WHERE seq = 1").fetchone()
-    assert row == (None, None, "ok")
+        row = conn.execute("SELECT temperature, pressure, rssi, quality FROM measurements WHERE seq = 1").fetchone()
+    assert row == (None, None, None, "ok")
+    assert stored_firmware(client) == ["build Oct 26 2026 12:00:00"]
+
+
+# ---------------- versão do firmware: campo opcional que nunca pode custar leituras ----------------
+
+def post_with_firmware(client, firmware):
+    body = {"schema_version": "1", "device_id": "no-01", "readings": [reading(0)], "firmware": firmware}
+    return client.post(URL, json=body, headers={"Authorization": f"Bearer {TOKEN_1}"})
+
+
+def stored_firmware(client):
+    with sqlite3.connect(client.db_path) as conn:
+        return [r[0] for r in conn.execute("SELECT firmware FROM ingest_batches ORDER BY id")]
+
+
+def test_lote_guarda_a_versao_do_firmware(client):
+    assert post_with_firmware(client, "build Oct 26 2026 12:00:00").status_code == 201
+    assert stored_firmware(client) == ["build Oct 26 2026 12:00:00"]
+
+
+def test_lote_sem_versao_do_firmware_continua_valido(client):
+    assert post(client, [reading(0)]).status_code == 201
+    assert stored_firmware(client) == [None]
+
+
+@pytest.mark.parametrize("sent, kept", [
+    (123, None), ("", None), ("   ", None), (["x"], None),       # não é um texto útil: ignorado
+    ("x" * 500, "x" * 64),                                         # comprido demais: cortado
+    ("a\x00b\nc", "abc"),                                          # caracteres de controle: removidos
+])
+def test_versao_do_firmware_invalida_nao_derruba_o_lote(client, sent, kept):
+    """O nó descarta lote recusado com 4xx; um campo só de diagnóstico não pode causar isso."""
+    assert post_with_firmware(client, sent).status_code == 201
+    assert count(client, "SELECT COUNT(*) FROM measurements") == 1
+    assert stored_firmware(client) == [kept]
 
 
 # ---------------- API exposta na internet: corpo, autenticação uniforme e bloqueio por IP ----------------
@@ -226,7 +315,7 @@ def test_device_id_incompativel_com_o_token_nao_grava_o_token(client):
 def test_bloqueio_por_ip_apos_n_falhas_nao_afeta_outro_ip(client):
     for _ in range(3):
         assert post(client, [reading(0)], token="token-inexistente-000000").status_code == 401
-    bloqueado = post(client, [reading(0)])  # até o token correto é recusado durante o bloqueio
+    bloqueado = post(client, [reading(0)], token="token-inexistente-000000")
     assert bloqueado.status_code == 429
     assert 0 < int(bloqueado.headers["retry-after"]) <= 300
     assert count(client, "SELECT COUNT(*) FROM measurements") == 0
@@ -239,13 +328,22 @@ def test_bloqueio_por_ip_apos_n_falhas_nao_afeta_outro_ip(client):
 
 
 @pytest.mark.parametrize("client", [TRES_FALHAS], indirect=True)
-def test_autenticacao_valida_zera_a_contagem_de_falhas(client):
+def test_token_correto_passa_com_o_ip_bloqueado(client):
+    """Quem divide o IP com um nó não consegue tirá-lo do ar errando o token de propósito."""
+    for _ in range(3):
+        post(client, [reading(0)], token="token-inexistente-000000")
+    assert post(client, [reading(0)], token="token-inexistente-000000").status_code == 429
+    assert post(client, [reading(0)]).status_code == 201
+    assert count(client, "SELECT COUNT(*) FROM measurements") == 1
+
+
+@pytest.mark.parametrize("client", [TRES_FALHAS], indirect=True)
+def test_autenticacao_valida_nao_zera_a_contagem_de_falhas(client):
     for _ in range(2):
         post(client, [reading(0)], token="token-inexistente-000000")
-    assert post(client, [reading(0)]).status_code == 201          # zera
-    for _ in range(2):
-        assert post(client, [reading(1)], token="token-inexistente-000000").status_code == 401
-    assert post(client, [reading(1)]).status_code == 201          # ainda não passou de 3 seguidas
+    assert post(client, [reading(0)]).status_code == 201          # não zera as 2 falhas
+    assert post(client, [reading(1)], token="token-inexistente-000000").status_code == 401  # 3ª falha: bloqueia
+    assert post(client, [reading(1)], token="token-inexistente-000000").status_code == 429
 
 
 @pytest.mark.parametrize("client", [TRES_FALHAS], indirect=True)
@@ -253,6 +351,21 @@ def test_device_id_incompativel_nao_conta_como_falha_de_autenticacao(client):
     for _ in range(5):
         assert post(client, [reading(0)], token=TOKEN_1, device="no-02").status_code == 403
     assert post(client, [reading(0)]).status_code == 201
+
+
+def test_falhas_antigas_expiram_com_a_janela():
+    from app.guard import AuthThrottle
+
+    agora = [1000.0]
+    t = AuthThrottle(max_fails=3, block_s=300, clock=lambda: agora[0])
+    t.register_failure("1.1.1.1")
+    t.register_failure("1.1.1.1")
+    agora[0] += 301                    # as duas falhas saem da janela
+    t.register_failure("1.1.1.1")
+    t.register_failure("1.1.1.1")
+    assert t.retry_after("1.1.1.1") == 0
+    t.register_failure("1.1.1.1")      # 3 falhas dentro da mesma janela
+    assert t.retry_after("1.1.1.1") == 300
 
 
 def test_bloqueio_expira_e_o_contador_recomeca():

@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS measurements (
     pm25_cf1        REAL,               -- PM2,5 "standard particle" (CF=1), usado em correções
     temperature     REAL,
     humidity        REAL,
+    pressure        REAL,               -- hPa; coletada, ainda não usada nas análises
     rssi            INTEGER,
     uptime_s        INTEGER,
     samples         INTEGER,            -- quadros do PMS5003 que entraram na média do minuto
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS ingest_batches (
     n_readings    INTEGER NOT NULL,
     n_inserted    INTEGER NOT NULL,
     n_duplicates  INTEGER NOT NULL,
-    remote_addr   TEXT
+    remote_addr   TEXT,
+    firmware      TEXT                  -- versão informada pelo nó neste lote (campo opcional do contrato)
 );
 
 -- Requisições rejeitadas, guardadas para auditoria.

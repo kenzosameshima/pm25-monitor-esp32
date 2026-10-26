@@ -10,6 +10,14 @@ from dotenv import load_dotenv
 # Carrega o .env do diretório atual sem sobrescrever variáveis já definidas.
 load_dotenv(os.environ.get("PM25_ENV_FILE", ".env"))
 
+# Os tokens de exemplo dos arquivos .example começam com "TROQUE-"; usados de verdade, seriam credenciais públicas.
+PLACEHOLDER = "troque"
+
+# secrets.token_urlsafe(24), que o README manda usar, gera 32 caracteres. O bloqueio por IP não limita quem já envia um
+# token válido, então a força do token é a única defesa contra adivinhação e a configuração a exige.
+MIN_TOKEN_LENGTH = 32
+MIN_TOKEN_DISTINCT = 10
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -39,6 +47,16 @@ class Settings:
         return found
 
 
+def _check_token(token: str, name: str) -> None:
+    """Recusa o exemplo dos arquivos .example ("TROQUE-..."), que é público no repositório, e token fraco."""
+    if PLACEHOLDER in token.lower():
+        raise ValueError(f"{name} ainda é o exemplo do repositório: gere um com secrets.token_urlsafe(24)")
+    if len(token) < MIN_TOKEN_LENGTH:
+        raise ValueError(f"{name} muito curto (mínimo {MIN_TOKEN_LENGTH} caracteres): gere um com secrets.token_urlsafe(24)")
+    if len(set(token)) < MIN_TOKEN_DISTINCT:
+        raise ValueError(f"{name} com poucos caracteres distintos (mínimo {MIN_TOKEN_DISTINCT}): gere um com secrets.token_urlsafe(24)")
+
+
 def _parse_tokens(raw: str) -> dict[str, str]:
     """Converte 'no-01:tokenA,no-02:tokenB' em {tokenA: 'no-01', tokenB: 'no-02'}."""
     tokens: dict[str, str] = {}
@@ -46,16 +64,15 @@ def _parse_tokens(raw: str) -> dict[str, str]:
         device, sep, token = item.partition(":")
         if not sep or not device or not token:
             raise ValueError(f"Entrada inválida em PM25_DEVICE_TOKENS: {item!r}")
-        if len(token) < 16:
-            raise ValueError(f"Token de {device} muito curto (mínimo 16 caracteres)")
+        _check_token(token, f"Token de {device}")
         tokens[token] = device
     return tokens
 
 
 def _parse_read_token(raw: str, device_tokens: dict[str, str]) -> str:
     token = raw.strip()
-    if token and len(token) < 16:
-        raise ValueError("PM25_READ_TOKEN muito curto (mínimo 16 caracteres)")
+    if token:
+        _check_token(token, "PM25_READ_TOKEN")
     if token in device_tokens:
         raise ValueError("PM25_READ_TOKEN não pode repetir o token de um nó")
     return token

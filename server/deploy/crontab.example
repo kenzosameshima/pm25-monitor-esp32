@@ -1,5 +1,5 @@
 # Instale com: crontab -e  (ajuste os caminhos)
 # Previsão da hora em andamento, a cada hora aos 5 minutos (requer requirements-ml.txt e um modelo em data/models)
-5 * * * * cd /home/pi/pm25-iot/server && .venv/bin/python -m scripts.forecast_job >> data/forecast.log 2>&1
+5 * * * * cd /home/pi/pm25-iot/server && .venv/bin/python -m scripts.forecast_job --backfill-hours 24 >> data/forecast.log 2>&1
 # Backup diário às 03:15
 15 3 * * * cd /home/pi/pm25-iot/server && .venv/bin/python -m scripts.backup >> data/backup.log 2>&1

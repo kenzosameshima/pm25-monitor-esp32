@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_RAW_PAYLOAD = 64 * 1024
 
 
@@ -36,8 +36,58 @@ def connect(path: str, readonly: bool = False) -> sqlite3.Connection:
     return conn
 
 
+class SnapshotError(RuntimeError):
+    """A cópia do banco não passou na verificação de integridade e foi descartada."""
+
+
+def snapshot(source_path: str, dest: Path, *, single_file: bool = False) -> int:
+    """Copia o banco pela API de backup do SQLite, íntegra mesmo com a API gravando, e devolve quantas leituras tem.
+
+    A cópia é feita num arquivo `.part` e só vira `dest` depois de passar no `integrity_check`; uma cópia
+    ruim, ou qualquer erro no caminho, não deixa arquivo nenhum. Um `dest` que já existe é substituído.
+    Com `single_file`, a cópia sai sem WAL (arquivo único e estável, para o hash identificar os dados)."""
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    partial = dest.with_name(dest.name + ".part")
+    partial.unlink(missing_ok=True)
+    src = connect(source_path, readonly=True)
+    dst = sqlite3.connect(partial)
+    try:
+        src.backup(dst)
+        if single_file:
+            dst.execute("PRAGMA journal_mode=DELETE")
+        check = dst.execute("PRAGMA integrity_check").fetchone()[0]
+        rows = dst.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
+    except BaseException:
+        dst.close()
+        src.close()
+        partial.unlink(missing_ok=True)
+        raise
+    dst.close()
+    src.close()
+    if check != "ok":
+        partial.unlink(missing_ok=True)
+        raise SnapshotError(f"integrity_check retornou {check!r}")
+    partial.replace(dest)
+    return rows
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Acrescenta ao banco já existente as colunas que o esquema ganhou depois (CREATE IF NOT EXISTS não as cria)."""
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(measurements)")}
+    if "pressure" not in columns:
+        conn.execute("ALTER TABLE measurements ADD COLUMN pressure REAL")
+    batch_columns = {r["name"] for r in conn.execute("PRAGMA table_info(ingest_batches)")}
+    if "firmware" not in batch_columns:
+        conn.execute("ALTER TABLE ingest_batches ADD COLUMN firmware TEXT")
+    # Aqui e não no schema.sql: num banco antigo a coluna só existe depois do ALTER acima.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_batches_firmware ON ingest_batches (device_id, received_at)"
+                 " WHERE firmware IS NOT NULL")
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    _migrate(conn)
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     conn.commit()
 
@@ -45,10 +95,10 @@ def init_db(conn: sqlite3.Connection) -> None:
 _INSERT_MEASUREMENT = """
 INSERT OR IGNORE INTO measurements (
     device_id, boot_id, seq, ts_sensor, ts_received, pm1, pm25, pm10, pm25_cf1,
-    temperature, humidity, rssi, uptime_s, samples, schema_version, quality
+    temperature, humidity, pressure, rssi, uptime_s, samples, schema_version, quality
 ) VALUES (
     :device_id, :boot_id, :seq, :ts_sensor, :ts_received, :pm1, :pm25, :pm10, :pm25_cf1,
-    :temperature, :humidity, :rssi, :uptime_s, :samples, :schema_version, :quality
+    :temperature, :humidity, :pressure, :rssi, :uptime_s, :samples, :schema_version, :quality
 )
 """
 
@@ -59,11 +109,13 @@ def insert_batch(
     rows: list[dict[str, Any]],
     received_at: datetime,
     remote_addr: str | None = None,
+    firmware: str | None = None,
 ) -> tuple[int, int]:
     """Grava um lote de leituras numa única transação. Retorna (inseridas, duplicadas).
 
     Leituras repetidas (mesmo device_id, boot_id e seq) são ignoradas, o que torna os
     reenvios do nó seguros: ele pode mandar o mesmo lote várias vezes sem duplicar dados.
+    `firmware` é a versão informada pelo nó neste lote, se informou.
     """
     received = iso(received_at)
     with conn:
@@ -72,13 +124,14 @@ def insert_batch(
             (device_id, received),
         )
         before = conn.total_changes
-        conn.executemany(_INSERT_MEASUREMENT, rows)
+        # A pressão é opcional: quem monta as linhas (nó sem BME280, scripts) pode omiti-la.
+        conn.executemany(_INSERT_MEASUREMENT, [{"pressure": None, **r} for r in rows])
         inserted = conn.total_changes - before
         duplicates = len(rows) - inserted
         conn.execute(
-            "INSERT INTO ingest_batches (received_at, device_id, n_readings, n_inserted, n_duplicates, remote_addr)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (received, device_id, len(rows), inserted, duplicates, remote_addr),
+            "INSERT INTO ingest_batches (received_at, device_id, n_readings, n_inserted, n_duplicates, remote_addr,"
+            " firmware) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (received, device_id, len(rows), inserted, duplicates, remote_addr, firmware),
         )
     return inserted, duplicates
 
@@ -105,16 +158,9 @@ def record_invalid(
         )
 
 
-def last_seen(conn: sqlite3.Connection, device_ids: Iterable[str] | None = None) -> dict[str, datetime]:
-    """Último instante em que o servidor recebeu dados de cada dispositivo."""
-    rows = conn.execute(
-        "SELECT device_id, MAX(ts_received) AS last FROM measurements GROUP BY device_id"
-    ).fetchall()
-    result = {r["device_id"]: parse_iso(r["last"]) for r in rows}
-    if device_ids is not None:
-        wanted = set(device_ids)
-        result = {k: v for k, v in result.items() if k in wanted}
-    return result
+def has_readings(conn: sqlite3.Connection, device_id: str) -> bool:
+    """Se o servidor já guardou alguma leitura do nó. Um nó cadastrado que nunca enviou dados não tem."""
+    return conn.execute("SELECT 1 FROM measurements WHERE device_id = ? LIMIT 1", (device_id,)).fetchone() is not None
 
 
 def ping(conn: sqlite3.Connection) -> None:
@@ -181,14 +227,39 @@ def fetch_ingest_batches(conn: sqlite3.Connection, since: datetime) -> list[sqli
     ).fetchall()
 
 
-def device_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Resumo por dispositivo: local, primeira e última leitura, último recebimento e total de inicializações."""
+def duplicates_discarded(conn: sqlite3.Connection, device_id: str, start: datetime, end: datetime) -> int:
+    """Leituras repetidas que o servidor descartou nos lotes do nó recebidos em [start, end)."""
     return conn.execute(
-        "SELECT m.device_id, d.location, MIN(m.ts_sensor) AS first_ts, MAX(m.ts_sensor) AS last_ts,"
-        " MAX(m.ts_received) AS last_received, COUNT(DISTINCT m.boot_id) AS boots, COUNT(*) AS n"
-        " FROM measurements m JOIN devices d ON d.device_id = m.device_id"
-        " GROUP BY m.device_id ORDER BY m.device_id"
+        "SELECT COALESCE(SUM(n_duplicates), 0) FROM ingest_batches"
+        " WHERE device_id = ? AND received_at >= ? AND received_at < ?",
+        (device_id, iso(start), iso(end)),
+    ).fetchone()[0]
+
+
+def device_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Resumo por dispositivo com leituras: local, primeira e última leitura e último recebimento.
+
+    Cada MIN/MAX é uma subconsulta por nó, resolvida pelos índices de measurements sem varrer a tabela."""
+    return conn.execute(
+        "SELECT * FROM (SELECT d.device_id, d.location,"
+        " (SELECT MIN(ts_sensor) FROM measurements m WHERE m.device_id = d.device_id) AS first_ts,"
+        " (SELECT MAX(ts_sensor) FROM measurements m WHERE m.device_id = d.device_id) AS last_ts,"
+        " (SELECT MAX(ts_received) FROM measurements m WHERE m.device_id = d.device_id) AS last_received"
+        " FROM devices d) WHERE first_ts IS NOT NULL ORDER BY device_id"
     ).fetchall()
+
+
+def latest_firmware(conn: sqlite3.Connection) -> dict[str, str]:
+    """Versão do firmware de cada nó: a do lote mais recente em que ele informou uma. Nó que nunca informou fica de fora.
+
+    Um banco que a API ainda não migrou não tem a coluna; os leitores não migram, então ele responde vazio."""
+    if "firmware" not in {r["name"] for r in conn.execute("PRAGMA table_info(ingest_batches)")}:
+        return {}
+    rows = conn.execute(
+        "SELECT d.device_id, (SELECT b.firmware FROM ingest_batches b WHERE b.device_id = d.device_id"
+        " AND b.firmware IS NOT NULL ORDER BY b.received_at DESC LIMIT 1) AS firmware FROM devices d"
+    ).fetchall()
+    return {r["device_id"]: r["firmware"] for r in rows if r["firmware"] is not None}
 
 
 def set_location(conn: sqlite3.Connection, device_id: str, location: str | None) -> bool:
@@ -200,9 +271,10 @@ def set_location(conn: sqlite3.Connection, device_id: str, location: str | None)
 
 def latest_measurements(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Leitura mais recente (por ts_sensor) de cada dispositivo."""
+    # Parte da tabela devices (poucas linhas), não de measurements: uma busca no índice por nó.
     return conn.execute(
-        f"SELECT {_MEASUREMENT_COLUMNS} FROM measurements m"
-        " WHERE m.id = (SELECT id FROM measurements x WHERE x.device_id = m.device_id"
-        "               ORDER BY x.ts_sensor DESC, x.id DESC LIMIT 1)"
+        f"SELECT {_MEASUREMENT_COLUMNS} FROM measurements"
+        " WHERE id IN (SELECT (SELECT x.id FROM measurements x WHERE x.device_id = d.device_id"
+        "                      ORDER BY x.ts_sensor DESC, x.id DESC LIMIT 1) FROM devices d)"
         " ORDER BY device_id"
     ).fetchall()
