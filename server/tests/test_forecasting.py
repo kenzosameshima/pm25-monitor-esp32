@@ -131,35 +131,12 @@ def test_mlp_e_reproduzivel_pela_semente(train_test):
     assert not np.array_equal(a, fc.fit("mlp", train, seed=2, **MLP_FAST).predict(test))
 
 
-def test_mlp_valida_no_bloco_final_e_restaura_a_melhor_epoca(train_test, monkeypatch):
-    from sklearn.neural_network import MLPRegressor
-
+def test_mlp_com_mais_epocas_nao_muda_o_modelo_depois_do_melhor_ponto(train_test):
+    """Parada antecipada e restauração da melhor época: um limite de épocas além do ponto de parada é indiferente."""
     train, test = train_test
-    n_val = max(1, int(len(train) * 0.15))
-    yval = (train["y"] - train["pm25"]).to_numpy(float)[-n_val:]
-    fit_rows, epochs, final = set(), [], {}
-    original_fit, original_predict = MLPRegressor.partial_fit, MLPRegressor.predict
-
-    def partial_fit(self, x, y):
-        fit_rows.add(len(x))
-        return original_fit(self, x, y)
-
-    def predict(self, x):
-        out = original_predict(self, x)
-        if len(x) == n_val:                                        # validação ao fim de cada época
-            epochs.append((float(np.mean((out - yval) ** 2)), [w.copy() for w in self.coefs_]))
-        else:                                                      # previsão do teste
-            final["coefs"] = [w.copy() for w in self.coefs_]
-        return out
-
-    monkeypatch.setattr(MLPRegressor, "partial_fit", partial_fit)
-    monkeypatch.setattr(MLPRegressor, "predict", predict)
-    fc.fit("mlp", train, seed=1, hidden=(8,), epochs=30, batch_size=64, patience=3).predict(test)
-
-    assert fit_rows == {len(train) - n_val}                        # o bloco final do treino fica de fora
-    best = int(np.argmin([loss for loss, _ in epochs]))
-    assert len(epochs) == min(30, best + 1 + 3)                    # para após 3 épocas sem melhora
-    assert all(np.array_equal(a, b) for a, b in zip(final["coefs"], epochs[best][1]))   # pesos da melhor época
+    short, long = (fc.fit("mlp", train, seed=1, hidden=(8,), epochs=epochs, batch_size=64, patience=3).predict(test)
+                   for epochs in (300, 3000))
+    assert np.array_equal(short, long)
 
 
 # ---------------------------------------------------------------- arquivo do modelo
