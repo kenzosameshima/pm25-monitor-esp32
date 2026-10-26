@@ -40,6 +40,11 @@ def is_test_device(device_id: str) -> bool:
     return device_id.startswith(TEST_DEVICE_PREFIX)
 
 
+def production_devices(conn: sqlite3.Connection) -> list[str]:
+    """Nós com leituras, sem os de teste, em ordem de nome."""
+    return [r["device_id"] for r in db.device_overview(conn) if not is_test_device(r["device_id"])]
+
+
 def _frame(rows, time_cols) -> pd.DataFrame:
     df = pd.DataFrame([dict(r) for r in rows])
     for col in time_cols:
@@ -93,12 +98,14 @@ def _status(last_received, now: datetime) -> tuple[str, float]:
 
 
 def device_status(conn: sqlite3.Connection, now: datetime) -> pd.DataFrame:
-    """Uma linha por nó: local, estado da coleta, minutos desde o último envio e a leitura mais recente.
+    """Uma linha por nó em produção: local, estado da coleta, minutos desde o último envio e a leitura mais recente.
 
     `status` é 'em_operacao' (envio há menos de LATE_AFTER_MIN), 'atrasado' (menos de
     SILENT_AFTER_MIN) ou 'sem_dados'. `ts_sensor` e as variáveis são da leitura mais recente.
     """
     overview = _frame(db.device_overview(conn), ["first_ts", "last_received"])
+    if not overview.empty:
+        overview = overview[~overview["device_id"].map(is_test_device).astype(bool)]
     if overview.empty:
         return pd.DataFrame(columns=STATUS_COLUMNS)
     latest = _frame(db.latest_measurements(conn), ["ts_sensor"])
@@ -111,15 +118,18 @@ def device_status(conn: sqlite3.Connection, now: datetime) -> pd.DataFrame:
 
 def collection_health(conn: sqlite3.Connection, start: datetime, now: datetime,
                       devices: Iterable[str] | None = None) -> pd.DataFrame:
-    """Saúde da coleta de cada nó (ou só dos `devices`) entre `start` e `now`.
+    """Saúde da coleta de cada nó em produção (ou só dos `devices` pedidos, de teste ou não) entre `start` e `now`.
 
     A completude conta minutos com leitura sobre os esperados desde `start` (ou desde a primeira
     leitura do nó, se for depois). Mensagens perdidas são lacunas de `seq` dentro de uma mesma
     inicialização; reinícios são as inicializações além da primeira.
     """
     overview = _frame(db.device_overview(conn), ["first_ts"])
-    if devices is not None and not overview.empty:
-        overview = overview[overview["device_id"].isin(list(devices))]
+    if not overview.empty:
+        if devices is None:
+            overview = overview[~overview["device_id"].map(is_test_device).astype(bool)]
+        else:
+            overview = overview[overview["device_id"].isin(list(devices))]
     if overview.empty:
         return pd.DataFrame(columns=HEALTH_COLUMNS)
     df = _measurements(conn, start, now + pd.Timedelta(minutes=1), list(overview["device_id"]))

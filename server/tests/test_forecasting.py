@@ -47,7 +47,6 @@ def test_features_alvo_e_atrasos_sem_vazamento(conn):
 def test_dataset_sem_lista_deixa_de_fora_os_nos_de_teste(conn):
     insert_hours(conn, "no-01", series(30))
     insert_hours(conn, "teste-https", series(30))
-    assert fc.devices(conn) == ["no-01"]
     assert set(fc.dataset(conn, min_samples=1)["device_id"]) == {"no-01"}
 
 

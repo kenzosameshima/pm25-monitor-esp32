@@ -274,7 +274,7 @@ def main(argv=None) -> int:
         return 1
     conn = db.connect(path, readonly=True)
     try:
-        devices = forecasting.devices(conn)
+        devices = analytics.production_devices(conn)
         frame = forecasting.dataset(conn, devices, args.min_samples)
     finally:
         conn.close()

@@ -22,8 +22,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from app import db
-from app.analytics import is_test_device
+from app import analytics, db
 from app.config import get_settings
 from app.forecasting import MIN_SAMPLES, hourly_series
 
@@ -250,9 +249,7 @@ def run(db_path: str, start: date, end: date, out_dir: Path, devices: list[str] 
 
     conn = db.connect(db_path, readonly=True)
     try:
-        ids = devices if devices is not None else [
-            r[0] for r in conn.execute("SELECT device_id FROM devices ORDER BY device_id")
-            if not is_test_device(r[0])]
+        ids = devices if devices is not None else analytics.production_devices(conn)
         nodes, daily_rows, hour_rows, weekday_rows = {}, [], [], []
         for device in ids:
             operational, daily = operational_metrics(conn, device, start_utc, end_utc, days)

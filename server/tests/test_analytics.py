@@ -88,6 +88,11 @@ def test_estado_traz_a_leitura_mais_recente(conn):
     assert status.loc["no-01", "ts_sensor"] == pd.Timestamp(NOW - timedelta(minutes=1))
 
 
+def test_estado_deixa_de_fora_nos_de_teste(conn):
+    insert(conn, [reading("no-01", -1), reading("teste-https", -1)])
+    assert list(analytics.device_status(conn, NOW)["device_id"]) == ["no-01"]
+
+
 def test_estado_sem_nos(conn):
     status = analytics.device_status(conn, NOW)
     assert status.empty and list(status.columns) == analytics.STATUS_COLUMNS
@@ -113,6 +118,22 @@ def test_saude_conta_lacuna_final_e_leituras_marcadas(conn):
     health = analytics.collection_health(conn, NOW - timedelta(hours=1), NOW).iloc[0]
     assert health["maior_lacuna_min"] == 20                 # nada desde o minuto -21
     assert health["leituras_marcadas"] == 5
+
+
+def test_saude_deixa_de_fora_nos_de_teste_salvo_se_pedidos(conn):
+    insert(conn, [reading("no-01", -1), reading("teste-https", -1)])
+    start = NOW - timedelta(hours=1)
+    assert list(analytics.collection_health(conn, start, NOW)["device_id"]) == ["no-01"]
+    assert list(analytics.collection_health(conn, start, NOW, ["teste-https"])["device_id"]) == ["teste-https"]
+
+
+# ---------------------------------------------------------------- nós em produção
+
+def test_nos_em_producao_tem_leituras_e_nao_sao_de_teste(conn):
+    insert(conn, [reading("no-02", -1), reading("no-01", -1), reading("teste-https", -1)])
+    with conn:
+        conn.execute("INSERT INTO devices (device_id, first_seen) VALUES ('no-03', ?)", (db.iso(NOW),))
+    assert analytics.production_devices(conn) == ["no-01", "no-02"]
 
 
 # ---------------------------------------------------------------- previsto × observado

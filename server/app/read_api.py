@@ -162,9 +162,8 @@ def _aware(value: datetime, name: str) -> datetime:
 def list_devices(conn=Depends(get_read_conn)):
     """Estado de cada nó e a leitura mais recente; dispositivos de teste ficam de fora."""
     now = _now()
-    status = analytics.device_status(conn, now)
     devices = []
-    for r in _records(status[~status["device_id"].map(analytics.is_test_device).astype(bool)]):
+    for r in _records(analytics.device_status(conn, now)):
         latest = None
         if r["ts_sensor"] is not None:
             latest = {"ts": r["ts_sensor"], **{k: r[k] for k in (*analytics.VARIABLES, "rssi", "quality")}}

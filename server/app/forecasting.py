@@ -41,11 +41,6 @@ DEFAULTS = {
 
 # ---------------------------------------------------------------- dados
 
-def devices(conn) -> list[str]:
-    """Nós com leituras, sem os de teste."""
-    return [r["device_id"] for r in db.device_overview(conn) if not analytics.is_test_device(r["device_id"])]
-
-
 def hourly_series(conn, device: str, min_samples: int = MIN_SAMPLES, start: datetime = _EPOCH,
                   end: datetime | None = None) -> pd.DataFrame:
     """Médias horárias de PM2,5, umidade e temperatura do nó, com `n` leituras por hora.
@@ -82,8 +77,8 @@ def dataset(conn, device_ids: list[str] | None = None, min_samples: int = MIN_SA
     """Linhas de treino e avaliação de todos os nós: FEATURES, o alvo `y` e `device_id`.
 
     O índice é a hora t (UTC), em ordem cronológica. Só entram horas com média válida (pelo menos
-    `min_samples` leituras), com todos os atrasos e com o alvo. Sem `device_ids`, usa `devices(conn)`."""
-    ids = devices(conn) if device_ids is None else device_ids
+    `min_samples` leituras), com todos os atrasos e com o alvo. Sem `device_ids`, usa `analytics.production_devices(conn)`."""
+    ids = analytics.production_devices(conn) if device_ids is None else device_ids
     frames = [_features(hourly_series(conn, d, min_samples), d).dropna(subset=[*_REQUIRED, "y"]) for d in ids]
     frames = [f for f in frames if not f.empty]
     if not frames:

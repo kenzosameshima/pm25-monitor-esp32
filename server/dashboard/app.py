@@ -55,20 +55,14 @@ def _read(fn, *args, missing, **kwargs):
         conn.close()
 
 
-def without_test_devices(df: pd.DataFrame) -> pd.DataFrame:
-    return df[~df["device_id"].map(analytics.is_test_device).astype(bool)]
-
-
 @st.cache_data(ttl=30)
 def load_status(now: datetime) -> pd.DataFrame:
-    return without_test_devices(
-        _read(analytics.device_status, now, missing=pd.DataFrame(columns=analytics.STATUS_COLUMNS)))
+    return _read(analytics.device_status, now, missing=pd.DataFrame(columns=analytics.STATUS_COLUMNS))
 
 
 @st.cache_data(ttl=30)
 def load_health(start: datetime, now: datetime) -> pd.DataFrame:
-    return without_test_devices(
-        _read(analytics.collection_health, start, now, missing=pd.DataFrame(columns=analytics.HEALTH_COLUMNS)))
+    return _read(analytics.collection_health, start, now, missing=pd.DataFrame(columns=analytics.HEALTH_COLUMNS))
 
 
 def expected_devices(status: pd.DataFrame) -> list[str]:

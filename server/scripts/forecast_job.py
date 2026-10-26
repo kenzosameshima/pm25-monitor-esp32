@@ -37,14 +37,14 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from app import db, forecasting
+from app import analytics, db, forecasting
 from app.config import get_settings
 
 
 def forecasts_for(conn, models: list[forecasting.Forecaster], now: datetime) -> tuple[list[dict], list[str]]:
     """Linhas para `forecasts` (uma por nó e modelo) e os nós sem dados suficientes. Não grava nada."""
     rows, skipped = [], []
-    for device in forecasting.devices(conn):
+    for device in analytics.production_devices(conn):
         row = forecasting.latest_row(conn, device, now)
         if row.empty:
             skipped.append(device)
@@ -68,7 +68,7 @@ def replay_rows(conn, models: list[forecasting.Forecaster], targets: list[dateti
     Cada hora é calculada como o job a calcularia às HH:05, só com as leituras de sensor anteriores à hora-alvo.
     Pula as horas que já têm a previsão em tempo real do modelo; as sem dados suficientes voltam em `skipped`."""
     rows, skipped = [], []
-    for device in forecasting.devices(conn):
+    for device in analytics.production_devices(conn):
         for target in targets:
             real = {(m, v) for m, v in conn.execute(
                 "SELECT model_name, model_version FROM forecasts WHERE device_id = ? AND target_hour = ?",
