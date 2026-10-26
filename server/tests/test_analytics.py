@@ -74,6 +74,79 @@ def test_sem_leituras_devolve_colunas_esperadas(conn):
     assert h.empty and list(h.columns) == analytics.HOURLY_COLUMNS
 
 
+# ---------------------------------------------------------------- horas suspeitas (sensor sem partículas)
+
+def hour_with(values: list[float], start: int = -120, **extra) -> list[dict]:
+    """Uma leitura por minuto, a partir do minuto `start`, com o PM2,5 de cada posição de `values`."""
+    return [reading("no-01", start + m, pm25=v, **extra) for m, v in enumerate(values)]
+
+
+@pytest.mark.parametrize("lows, suspect", [(14, False), (15, True), (60, True)])
+def test_hora_com_um_quarto_das_leituras_abaixo_de_meio_e_suspeita(conn, lows, suspect):
+    insert(conn, hour_with([0.0] * lows + [40.0] * (60 - lows)))
+    h = analytics.hourly_means(conn, NOW - timedelta(hours=3), NOW, ["no-01"])
+    assert h["n"].iloc[0] == 60                              # as leituras continuam contadas
+    assert bool(h["suspeita"].iloc[0]) is suspect
+    assert bool(pd.isna(h["pm25"].iloc[0])) is suspect       # hora suspeita não tem média
+    if not suspect:
+        assert h["pm25"].iloc[0] == pytest.approx(40.0 * (60 - lows) / 60)   # as zeradas entram na média
+
+
+@pytest.mark.parametrize("value, suspect", [(0.9, True), (1.0, False)])
+def test_hora_com_media_abaixo_de_um_e_suspeita(conn, value, suspect):
+    insert(conn, hour_with([value] * 60))                    # nenhuma leitura abaixo de 0,5: vale só a média
+    h = analytics.hourly_means(conn, NOW - timedelta(hours=3), NOW, ["no-01"])
+    assert bool(h["suspeita"].iloc[0]) is suspect
+
+
+def test_hora_suspeita_perde_todas_as_medias(conn):
+    insert(conn, hour_with([0.0] * 60))
+    h = analytics.hourly_means(conn, NOW - timedelta(hours=3), NOW, ["no-01"])
+    assert h[list(analytics.VARIABLES)].iloc[0].isna().all()
+
+
+def test_hora_suspeita_nao_atrapalha_as_vizinhas(conn):
+    insert(conn, hour_with([10.0] * 60, start=-180) + hour_with([0.0] * 60, start=-120) + hour_with([10.0] * 60, start=-60))
+    h = analytics.hourly_means(conn, NOW - timedelta(hours=3), NOW, ["no-01"])
+    assert list(h["n"]) == [60, 60, 60]
+    assert list(h["suspeita"]) == [False, True, False]
+    assert h["pm25"].iloc[0] == 10.0 and pd.isna(h["pm25"].iloc[1]) and h["pm25"].iloc[2] == 10.0
+
+
+def test_hora_comum_nao_e_suspeita(conn):
+    insert(conn, hour_with([12.0] * 60))
+    h = analytics.hourly_means(conn, NOW - timedelta(hours=3), NOW, ["no-01"])
+    assert not h["suspeita"].iloc[0] and h["pm25"].iloc[0] == 12.0
+
+
+def test_so_leituras_ok_contam_para_a_regra(conn):
+    """50 leituras ok com 40 µg/m³ e 10 marcadas em zero: as marcadas não entram na conta nem derrubam a hora."""
+    insert(conn, hour_with([40.0] * 50) + hour_with([0.0] * 10, start=-70, quality="umid_fora_faixa"))
+    h = analytics.hourly_means(conn, NOW - timedelta(hours=3), NOW, ["no-01"])
+    assert h["n"].iloc[0] == 50 and not h["suspeita"].iloc[0] and h["pm25"].iloc[0] == 40.0
+
+
+def test_sem_o_filtro_de_qualidade_nenhuma_hora_e_suspeita(conn):
+    insert(conn, hour_with([0.0] * 60))
+    h = analytics.hourly_means(conn, NOW - timedelta(hours=3), NOW, ["no-01"], only_ok=False)
+    assert not h["suspeita"].iloc[0] and h["pm25"].iloc[0] == 0.0
+
+
+def test_sem_descartar_a_hora_suspeita_ela_so_continua_marcada(conn):
+    insert(conn, hour_with([0.0] * 60))
+    h = analytics.hourly_means(conn, NOW - timedelta(hours=3), NOW, ["no-01"], drop_suspect=False)
+    assert h["suspeita"].iloc[0] and h["pm25"].iloc[0] == 0.0 and h["n"].iloc[0] == 60
+
+
+def test_comparacao_nao_traz_o_observado_de_hora_suspeita(conn):
+    insert(conn, hour_with([10.0] * 60, start=-180) + hour_with([0.0] * 60, start=-120) + hour_with([20.0] * 60, start=-60))
+    comp = analytics.forecast_comparison(conn, "no-01", NOW + timedelta(minutes=30))
+    observed = comp.series[analytics.OBSERVED]
+    assert observed[pd.Timestamp(NOW - timedelta(hours=3))] == 10.0
+    assert pd.isna(observed[pd.Timestamp(NOW - timedelta(hours=2))])
+    assert observed[pd.Timestamp(NOW - timedelta(hours=1))] == 20.0
+
+
 # ---------------------------------------------------------------- estado dos nós
 
 @pytest.mark.parametrize("minutes_after, expected", [(2, "em_operacao"), (10, "atrasado"), (20, "sem_dados")])

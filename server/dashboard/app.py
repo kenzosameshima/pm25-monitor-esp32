@@ -81,10 +81,20 @@ def load_measurements(start: datetime, end: datetime, devices: tuple) -> pd.Data
 
 @st.cache_data(ttl=30)
 def load_hourly(start: datetime, end: datetime, devices: tuple, only_ok: bool) -> pd.DataFrame:
-    """Só as horas válidas, com `n` renomeado para minutos (como sai no CSV)."""
+    """Todas as horas do período, com `n` renomeado para minutos (como sai no CSV); as sem média são as inválidas."""
     hourly = _read(analytics.hourly_means, start, end, list(devices), only_ok=only_ok,
                    missing=pd.DataFrame(columns=analytics.HOURLY_COLUMNS))
-    return hourly.dropna(subset=["pm25"]).rename(columns={"n": "minutos"})
+    return hourly.rename(columns={"n": "minutos"})
+
+
+def suspect_note(hours: int) -> str:
+    """Aviso de quantas horas a regra de sensor sem partículas deixou de fora da série horária."""
+    verb = "hora suspeita ficou" if hours == 1 else "horas suspeitas ficaram"
+    low = f"{analytics.SUSPECT_LOW_PM25:.1f}".replace(".", ",")
+    mean = f"{analytics.SUSPECT_MEAN_BELOW:.1f}".replace(".", ",")
+    return (f"{hours} {verb} de fora: pelo menos {analytics.SUSPECT_LOW_SHARE:.0%} dos minutos com PM2,5 abaixo de "
+            f"{low} µg/m³, ou média abaixo de {mean} µg/m³. O sensor quase não viu partículas, o que o ar não faz "
+            "por horas.")
 
 
 @st.cache_data(ttl=60)
@@ -250,12 +260,18 @@ def series_tab(devices_all: list[str]) -> None:
     start = datetime.combine(period[0], time(), tz).astimezone(timezone.utc)
     end = datetime.combine(period[1] + timedelta(days=1), time(), tz).astimezone(timezone.utc)
     if resolution == "Média horária":
-        data = load_hourly(start, end, tuple(devices), only_ok)
+        hourly = load_hourly(start, end, tuple(devices), only_ok)
+        data = hourly.dropna(subset=["pm25"]).drop(columns=["suspeita"])
+        suspect = int(hourly["suspeita"].sum())
         if data.empty:
             st.info(f"Sem horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura no período escolhido.")
+            if suspect:
+                st.caption(suspect_note(suspect))
             return
         data["hora_local"] = local_naive(data["hora"])
         st.caption(f"Médias de horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura (75%).")
+        if suspect:
+            st.caption(suspect_note(suspect))
         max_gap = pd.Timedelta(hours=1)
     else:
         # Cada minuto vira um ponto no navegador: períodos longos travariam a página.

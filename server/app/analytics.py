@@ -27,7 +27,14 @@ PERSISTENCE = "persistencia"
 AIR_QUALITY_BANDS = [(25.0, "Boa"), (50.0, "Moderada"), (75.0, "Ruim"), (125.0, "Muito ruim"),
                      (float("inf"), "Péssima")]
 
-HOURLY_COLUMNS = ["device_id", "hora", "n", *VARIABLES]
+# Hora suspeita: o sensor respondeu, mas quase não viu partículas (leituras de PM2,5 em zero ou perto disso por
+# horas, o que o ar de uma cidade não faz). A regra foi fixada olhando a distribuição das médias horárias de
+# 09 a 26/10/2026: fora desses episódios, a menor média horária foi 1,36 µg/m³.
+SUSPECT_LOW_PM25 = 0.5      # µg/m³: uma leitura abaixo disso conta como "sem partículas"
+SUSPECT_LOW_SHARE = 0.25    # a hora é suspeita se pelo menos esta fração das leituras está nesse caso...
+SUSPECT_MEAN_BELOW = 1.0    # ...ou se a média do PM2,5 da hora fica abaixo disto (µg/m³)
+
+HOURLY_COLUMNS = ["device_id", "hora", "n", *VARIABLES, "suspeita"]
 STATUS_COLUMNS = ["device_id", "location", "first_ts", "last_received", "status", "minutes_since",
                   "ts_sensor", *VARIABLES, "rssi", "quality", "firmware"]
 HEALTH_COLUMNS = ["device_id", "completude", "maior_lacuna_min", "mensagens_perdidas", "reinicios",
@@ -76,12 +83,19 @@ def _measurements(conn: sqlite3.Connection, start: datetime, end: datetime,
 
 def hourly_means(conn: sqlite3.Connection, start: datetime, end: datetime,
                  devices: Iterable[str] | None = None, *,
-                 min_readings: int = MIN_READINGS_PER_HOUR, only_ok: bool = True) -> pd.DataFrame:
+                 min_readings: int = MIN_READINGS_PER_HOUR, only_ok: bool = True,
+                 drop_suspect: bool = True) -> pd.DataFrame:
     """Médias horárias por nó, com leituras de ts_sensor em [start, end).
 
     Uma linha por nó e hora, sem saltos, da primeira à última hora com leitura do nó; `n` conta as
     leituras usadas. Horas com menos de `min_readings` leituras ficam com as médias em NaN.
     Com `only_ok`, só entram leituras de qualidade 'ok'.
+
+    `suspeita` marca a hora válida em que o sensor quase não viu partículas: pelo menos SUSPECT_LOW_SHARE das
+    leituras abaixo de SUSPECT_LOW_PM25, ou média do PM2,5 abaixo de SUSPECT_MEAN_BELOW. Vale só com `only_ok`
+    (o filtro de qualidade ligado). Uma hora suspeita fica com as médias em NaN, como a de poucas leituras,
+    a menos que `drop_suspect` seja falso: então a marca continua e as médias ficam, para análises de
+    sensibilidade e para conferir a regra contra uma estação de referência.
     """
     df = _measurements(conn, start, end, devices)
     if only_ok and not df.empty:
@@ -90,10 +104,18 @@ def hourly_means(conn: sqlite3.Connection, start: datetime, end: datetime,
         return pd.DataFrame(columns=HOURLY_COLUMNS)
     parts = []
     for device, d in df.groupby("device_id"):
+        d = d.assign(_low=(d["pm25"] < SUSPECT_LOW_PM25).astype(int))
         grouped = d.set_index("ts_sensor").sort_index().resample("1h")
         h = grouped[list(VARIABLES)].mean()
         h["n"] = grouped["pm25"].count()
+        h["suspeita"] = False
+        if only_ok:
+            lows = grouped["_low"].sum()
+            h["suspeita"] = (h["n"] >= min_readings) & ((lows >= SUSPECT_LOW_SHARE * h["n"])
+                                                        | (h["pm25"] < SUSPECT_MEAN_BELOW))
         h.loc[h["n"] < min_readings, list(VARIABLES)] = np.nan
+        if drop_suspect:
+            h.loc[h["suspeita"], list(VARIABLES)] = np.nan
         parts.append(h.rename_axis("hora").reset_index().assign(device_id=device))
     return pd.concat(parts, ignore_index=True)[HOURLY_COLUMNS]
 

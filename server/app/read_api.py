@@ -54,7 +54,8 @@ class DeviceList(BaseModel):
 class HourlyPoint(BaseModel):
     hour: datetime  # início da hora
     readings: int
-    valid: bool     # readings >= min_readings; senão as médias vêm nulas
+    valid: bool     # readings >= min_readings e a hora não é suspeita; senão as médias vêm nulas
+    suspect: bool = False  # o sensor quase não viu partículas nesta hora (ver analytics.hourly_means)
     pm25: float | None
     pm10: float | None
     pm1: float | None
@@ -204,9 +205,10 @@ def hourly(device_id: DeviceId,
     slots = pd.date_range(start, end, freq="h", inclusive="left")
     h = analytics.hourly_means(conn, start, end, [device_id]).set_index("hora").reindex(slots)
     h["n"] = h["n"].fillna(0).astype(int)
-    points = [{"hour": hour, "readings": int(n), "valid": bool(n >= analytics.MIN_READINGS_PER_HOUR),
-               **{k: row[k] for k in analytics.VARIABLES}}
-              for hour, n, row in zip(slots, h["n"], _records(h))]
+    suspect = h["suspeita"].eq(True)                      # as horas sem nenhuma leitura chegam como NaN: não são suspeitas
+    points = [{"hour": hour, "readings": int(n), "valid": bool(n >= analytics.MIN_READINGS_PER_HOUR and not s),
+               "suspect": bool(s), **{k: row[k] for k in analytics.VARIABLES}}
+              for hour, n, s, row in zip(slots, h["n"], suspect, _records(h))]
     return {"generated_at": now, "device_id": device_id, "start": start, "end": end,
             "min_readings": analytics.MIN_READINGS_PER_HOUR, "hours": points}
 

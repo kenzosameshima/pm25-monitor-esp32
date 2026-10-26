@@ -97,6 +97,27 @@ def test_esconde_no_de_teste_e_reserva_card_do_no_cadastrado_sem_dados(app_env, 
     assert at.multiselect[0].options == ["no-01"]
 
 
+def test_serie_horaria_conta_as_horas_suspeitas_que_ficaram_de_fora(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0) - timedelta(hours=10)
+    dead = {**synthetic(start, {}), "pm25": 0.0, "pm1": 0.0, "pm10": 0.0}
+    conn = db.connect(str(app_env))
+    db.insert_batch(conn, "no-01", [{"device_id": "no-01", "boot_id": 9, "seq": m, "uptime_s": 0, "schema_version": "1",
+                                     "quality": "ok", "ts_sensor": db.iso(start + timedelta(minutes=m)),
+                                     "ts_received": db.iso(start + timedelta(minutes=m)), **dead} for m in range(60)], start)
+    conn.close()
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert any("1 hora suspeita ficou de fora" in c.value for c in at.caption)
+
+
+def test_sem_horas_suspeitas_a_serie_horaria_nao_menciona_o_assunto(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert not any("suspeita" in c.value for c in at.caption)
+
+
 def test_mostra_a_versao_do_firmware_quando_o_no_informa(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)

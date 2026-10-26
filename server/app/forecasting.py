@@ -42,15 +42,16 @@ DEFAULTS = {
 # ---------------------------------------------------------------- dados
 
 def hourly_series(conn, device: str, min_samples: int = MIN_SAMPLES, start: datetime = _EPOCH,
-                  end: datetime | None = None) -> pd.DataFrame:
+                  end: datetime | None = None, drop_suspect: bool = True) -> pd.DataFrame:
     """Médias horárias de PM2,5, umidade e temperatura do nó, com `n` leituras por hora.
 
     Indexada pela hora (UTC), sem saltos entre a primeira e a última hora com leitura em [start, end);
-    horas com menos de `min_samples` leituras ficam com as médias em NaN. As métricas do período e a
-    comparação com a CETESB usam esta mesma série. Sem `end`, vai até amanhã."""
+    horas com menos de `min_samples` leituras, e as suspeitas de sensor sem partículas (ver
+    `analytics.hourly_means`, `suspeita`), ficam com as médias em NaN, a menos que `drop_suspect` seja falso.
+    As métricas do período e a comparação com a CETESB usam esta mesma série. Sem `end`, vai até amanhã."""
     end = end or datetime.now(timezone.utc) + timedelta(days=1)
-    hourly = analytics.hourly_means(conn, start, end, [device], min_readings=min_samples)
-    columns = ["pm25", "humidity", "temperature", "n"]
+    hourly = analytics.hourly_means(conn, start, end, [device], min_readings=min_samples, drop_suspect=drop_suspect)
+    columns = ["pm25", "humidity", "temperature", "n", "suspeita"]
     if hourly.empty:
         return pd.DataFrame(columns=columns)
     return hourly.set_index("hora").rename_axis("ts")[columns]
