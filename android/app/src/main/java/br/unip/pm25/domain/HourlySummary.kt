@@ -18,6 +18,8 @@ data class HourlySummary(
     val hoursAboveGood: Int,
     /** Horas válidas com umidade média acima de HIGH_HUMIDITY. */
     val humidHours: Int,
+    /** Horas em que o sensor quase não viu partículas: ficam fora da média e já contam entre as não válidas. */
+    val suspectHours: Int,
 )
 
 fun summarize(points: List<HourlyPoint>): HourlySummary {
@@ -29,5 +31,6 @@ fun summarize(points: List<HourlyPoint>): HourlySummary {
         max = valid.maxByOrNull { it.pm25!! },
         hoursAboveGood = valid.count { it.pm25!! > AirQuality.BOA.upperBound },
         humidHours = valid.count { (it.humidity ?: 0.0) > HIGH_HUMIDITY },
+        suspectHours = points.count { it.suspect },
     )
 }

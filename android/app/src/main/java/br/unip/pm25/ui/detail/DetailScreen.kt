@@ -163,6 +163,14 @@ private fun HistoryCard(series: HourlySeries, range: HistoryRange) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (summary.suspectHours > 0) {
+                Text(
+                    "Em ${summary.suspectHours} h o sensor quase não viu partículas, o que o ar não faz por horas: " +
+                        "essas horas também ficam em branco.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
             if (summary.humidHours > 0) {
                 Text(
                     "Em ${summary.humidHours} h a umidade média passou de ${HIGH_HUMIDITY.format(0)}%: " +
@@ -208,9 +216,11 @@ private fun HealthCard(health: Health, range: HistoryRange) {
 private fun DetailScreenPreview() {
     val end = Instant.parse("2026-10-14T12:00:00Z")
     val hours = (0 until 24).map { i ->
-        val valid = i !in 9..11
-        HourlyPoint(end.minusSeconds(3600L * (24 - i)), if (valid) 60 else 20, valid,
-            pm25 = if (valid) 12.0 + (i % 8) * 3 else null, humidity = if (valid) 60.0 + i else null)
+        val suspect = i == 14
+        val valid = i !in 9..11 && !suspect
+        HourlyPoint(end.minusSeconds(3600L * (24 - i)), if (i in 9..11) 20 else 60, valid,
+            pm25 = if (valid) 12.0 + (i % 8) * 3 else null, humidity = if (valid) 60.0 + i else null,
+            suspect = suspect)
     }
     val series = HourlySeries(end, "no-01", end.minusSeconds(86_400), end, 45, hours)
     val health = Health(end, "no-01", end.minusSeconds(86_400), end, 0.87, 182, 3, 1, 12, 0)

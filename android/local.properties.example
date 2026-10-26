@@ -1,9 +1,10 @@
 # Copie as linhas pm25.* para o local.properties (o Android Studio cria esse arquivo com o sdk.dir).
-# O local.properties não vai para o git: o token de leitura fica só na sua máquina.
+# O local.properties não vai para o git: o token de leitura não entra no repositório.
 
 # Emulador falando com a API no próprio computador (10.0.2.2 é o computador visto do emulador).
 pm25.apiUrl=http://10.0.2.2:8000/
 # Pelo túnel, de qualquer rede: pm25.apiUrl=https://<máquina>.<tailnet>.ts.net/
 
-# O mesmo valor de PM25_READ_TOKEN no server/.env.
+# O mesmo valor de PM25_READ_TOKEN no server/.env. O Gradle o grava dentro do APK, de onde pode ser
+# extraído: não compartilhe o APK. Se ele circular, troque o token no server/.env e gere o app de novo.
 pm25.readToken=TROQUE-pelo-token-de-leitura

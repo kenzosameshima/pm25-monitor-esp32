@@ -5,6 +5,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.nullable
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
@@ -37,11 +38,32 @@ enum class DeviceStatus {
     @SerialName("silent") SILENT,
 }
 
+/**
+ * Lê o estado que o servidor calculou. O app não o usa: recalcula em `currentStatus`, com os limites da
+ * própria resposta. Por isso um valor que esta versão não conhece vira null, em vez de derrubar a lista
+ * inteira como faria o enum comum. Os nomes vêm do enum, que continua sendo a única definição deles.
+ */
+object LenientDeviceStatus : KSerializer<DeviceStatus?> {
+    private val names = DeviceStatus.serializer().descriptor.let { d ->
+        List(d.elementsCount) { d.getElementName(it) }
+    }
+
+    override val descriptor = PrimitiveSerialDescriptor("DeviceStatus", PrimitiveKind.STRING).nullable
+
+    override fun deserialize(decoder: Decoder): DeviceStatus? =
+        if (decoder.decodeNotNullMark()) names.indexOf(decoder.decodeString()).let { DeviceStatus.entries.getOrNull(it) }
+        else decoder.decodeNull()
+
+    override fun serialize(encoder: Encoder, value: DeviceStatus?) {
+        if (value == null) encoder.encodeNull() else encoder.encodeString(names[value.ordinal])
+    }
+}
+
 @Serializable
 data class DeviceState(
     @SerialName("device_id") val deviceId: String,
     val location: String? = null,
-    val status: DeviceStatus,
+    @Serializable(LenientDeviceStatus::class) val status: DeviceStatus? = null,
     @SerialName("minutes_since_last") val minutesSinceLast: Double? = null,
     @SerialName("last_received") @Serializable(InstantSerializer::class) val lastReceived: Instant? = null,
     val latest: LatestReading? = null,
@@ -69,6 +91,8 @@ data class HourlyPoint(
     val pm1: Double? = null,
     val temperature: Double? = null,
     val humidity: Double? = null,
+    /** O sensor quase não viu partículas na hora, então ela não vale; um servidor mais antigo não manda o campo. */
+    val suspect: Boolean = false,
 )
 
 @Serializable
