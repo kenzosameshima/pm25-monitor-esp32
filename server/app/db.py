@@ -150,18 +150,9 @@ def record_invalid(
         )
 
 
-def last_seen(conn: sqlite3.Connection, device_ids: Iterable[str] | None = None) -> dict[str, datetime]:
-    """Último instante em que o servidor recebeu dados de cada dispositivo."""
-    # Um MAX por nó, resolvido pelo índice (device_id, ts_received), em vez de varrer a tabela inteira.
-    rows = conn.execute(
-        "SELECT d.device_id, (SELECT MAX(m.ts_received) FROM measurements m WHERE m.device_id = d.device_id) AS last"
-        " FROM devices d"
-    ).fetchall()
-    result = {r["device_id"]: parse_iso(r["last"]) for r in rows if r["last"] is not None}
-    if device_ids is not None:
-        wanted = set(device_ids)
-        result = {k: v for k, v in result.items() if k in wanted}
-    return result
+def has_readings(conn: sqlite3.Connection, device_id: str) -> bool:
+    """Se o servidor já guardou alguma leitura do nó. Um nó cadastrado que nunca enviou dados não tem."""
+    return conn.execute("SELECT 1 FROM measurements WHERE device_id = ? LIMIT 1", (device_id,)).fetchone() is not None
 
 
 def ping(conn: sqlite3.Connection) -> None:

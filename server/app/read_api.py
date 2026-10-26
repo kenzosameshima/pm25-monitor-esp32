@@ -133,7 +133,7 @@ def _now() -> datetime:
 
 
 def _require_device(conn, device_id: str) -> None:
-    if analytics.is_test_device(device_id) or device_id not in db.last_seen(conn, [device_id]):
+    if analytics.is_test_device(device_id) or not db.has_readings(conn, device_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Nó sem leituras")
 
 
@@ -201,12 +201,12 @@ def hourly(device_id: DeviceId,
         raise HTTPException(422, "Intervalo inválido: start < end, até 31 dias")
     _require_device(conn, device_id)
 
-    hours = pd.date_range(start, end, freq="h", inclusive="left")
-    h = analytics.hourly_means(conn, start, end, [device_id]).set_index("hora").reindex(hours)
+    slots = pd.date_range(start, end, freq="h", inclusive="left")
+    h = analytics.hourly_means(conn, start, end, [device_id]).set_index("hora").reindex(slots)
     h["n"] = h["n"].fillna(0).astype(int)
     points = [{"hour": hour, "readings": int(n), "valid": bool(n >= analytics.MIN_READINGS_PER_HOUR),
                **{k: row[k] for k in analytics.VARIABLES}}
-              for hour, n, row in zip(hours, h["n"], _records(h))]
+              for hour, n, row in zip(slots, h["n"], _records(h))]
     return {"generated_at": now, "device_id": device_id, "start": start, "end": end,
             "min_readings": analytics.MIN_READINGS_PER_HOUR, "hours": points}
 
