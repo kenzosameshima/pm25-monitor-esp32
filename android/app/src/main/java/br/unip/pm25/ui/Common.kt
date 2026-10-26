@@ -44,6 +44,8 @@ fun Double?.format(decimals: Int = 1): String =
 
 fun LoadError.message(): String = when (this) {
     LoadError.Network -> "Sem conexão com o servidor. Confira a internet e se a API está no ar."
+    LoadError.Tls -> "Não foi possível abrir a conexão segura com o servidor. Confira a data e a hora do " +
+        "celular e se a rede não intercepta a conexão."
     LoadError.Unauthorized -> "O servidor recusou o token de leitura. Confira pm25.readToken no local.properties."
     LoadError.ReadDisabled -> "A consulta está desligada no servidor (PM25_READ_TOKEN vazio)."
     LoadError.NotFound -> "O servidor não tem leituras deste sensor."
