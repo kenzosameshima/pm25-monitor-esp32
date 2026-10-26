@@ -97,18 +97,44 @@ def test_esconde_no_de_teste_e_reserva_card_do_no_cadastrado_sem_dados(app_env, 
     assert at.multiselect[0].options == ["no-01"]
 
 
+def add_dead_hours(path: Path, device: str, hours_ago: list[int]) -> None:
+    """Uma hora cheia de leituras com PM1, PM2,5 e PM10 em zero, para cada `hours_ago` (horas antes da hora atual)."""
+    top = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    conn = db.connect(str(path))
+    for k in hours_ago:
+        start = top - timedelta(hours=k)
+        dead = {**synthetic(start, {}), "pm25": 0.0, "pm1": 0.0, "pm10": 0.0}
+        db.insert_batch(conn, device, [{"device_id": device, "boot_id": 9, "seq": k * 60 + m, "uptime_s": 0,
+                                        "schema_version": "1", "quality": "ok",
+                                        "ts_sensor": db.iso(start + timedelta(minutes=m)),
+                                        "ts_received": db.iso(start + timedelta(minutes=m)), **dead}
+                                       for m in range(60)], start)
+    conn.close()
+
+
 def test_serie_horaria_conta_as_horas_suspeitas_que_ficaram_de_fora(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
-    start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0) - timedelta(hours=10)
-    dead = {**synthetic(start, {}), "pm25": 0.0, "pm1": 0.0, "pm10": 0.0}
-    conn = db.connect(str(app_env))
-    db.insert_batch(conn, "no-01", [{"device_id": "no-01", "boot_id": 9, "seq": m, "uptime_s": 0, "schema_version": "1",
-                                     "quality": "ok", "ts_sensor": db.iso(start + timedelta(minutes=m)),
-                                     "ts_received": db.iso(start + timedelta(minutes=m)), **dead} for m in range(60)], start)
-    conn.close()
+    add_dead_hours(app_env, "no-01", [10])
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert any("1 hora suspeita ficou de fora" in c.value for c in at.caption)
+    assert any("1 hora suspeita ficou de fora (no-01: 1)" in c.value for c in at.caption)
+
+
+def test_aviso_das_horas_suspeitas_separa_a_contagem_por_no(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    add_dead_hours(app_env, "no-01", [10])
+    add_dead_hours(app_env, "no-02", [12, 11])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert any("3 horas suspeitas ficaram de fora (no-01: 1, no-02: 2)" in c.value for c in at.caption)
+
+
+def test_aviso_das_horas_suspeitas_so_cita_os_nos_com_horas_suspeitas(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    add_dead_hours(app_env, "no-02", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert any("1 hora suspeita ficou de fora (no-02: 1)" in c.value for c in at.caption)
 
 
 def test_sem_horas_suspeitas_a_serie_horaria_nao_menciona_o_assunto(app_env):

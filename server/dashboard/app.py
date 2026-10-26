@@ -87,12 +87,20 @@ def load_hourly(start: datetime, end: datetime, devices: tuple, only_ok: bool) -
     return hourly.rename(columns={"n": "minutos"})
 
 
-def suspect_note(hours: int) -> str:
-    """Aviso de quantas horas a regra de sensor sem partículas deixou de fora da série horária."""
+def suspect_hours_by_node(hourly: pd.DataFrame) -> dict[str, int]:
+    """Quantas horas suspeitas cada nó tem na série horária, só dos nós que têm alguma."""
+    counts = hourly[hourly["suspeita"].astype(bool)].groupby("device_id").size()
+    return {str(device): int(n) for device, n in counts.items()}
+
+
+def suspect_note(by_node: dict[str, int]) -> str:
+    """Aviso de quantas horas a regra de sensor sem partículas deixou de fora da série horária, por nó."""
+    hours = sum(by_node.values())
     verb = "hora suspeita ficou" if hours == 1 else "horas suspeitas ficaram"
+    nodes = ", ".join(f"{device}: {n}" for device, n in sorted(by_node.items()))
     low = f"{analytics.SUSPECT_LOW_PM25:.1f}".replace(".", ",")
     mean = f"{analytics.SUSPECT_MEAN_BELOW:.1f}".replace(".", ",")
-    return (f"{hours} {verb} de fora: pelo menos {analytics.SUSPECT_LOW_SHARE:.0%} dos minutos com PM2,5 abaixo de "
+    return (f"{hours} {verb} de fora ({nodes}): pelo menos {analytics.SUSPECT_LOW_SHARE:.0%} dos minutos com PM2,5 abaixo de "
             f"{low} µg/m³, ou média abaixo de {mean} µg/m³. O sensor quase não viu partículas, o que o ar não faz "
             "por horas.")
 
@@ -262,7 +270,7 @@ def series_tab(devices_all: list[str]) -> None:
     if resolution == "Média horária":
         hourly = load_hourly(start, end, tuple(devices), only_ok)
         data = hourly.dropna(subset=["pm25"]).drop(columns=["suspeita"])
-        suspect = int(hourly["suspeita"].sum())
+        suspect = suspect_hours_by_node(hourly)
         if data.empty:
             st.info(f"Sem horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura no período escolhido.")
             if suspect:
