@@ -19,6 +19,20 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `le a hora suspeita, que nao vale e vem sem medias`() {
+        val hours = ApiJson.decodeFromString<HourlySeries>(fixture("hourly_suspect.json")).hours
+        assertEquals(listOf(false, true, false), hours.map { it.suspect })
+        assertEquals(listOf(true, false, true), hours.map { it.valid })
+        assertNull(hours[1].pm25)
+    }
+
+    @Test
+    fun `resposta de servidor sem o campo suspect nao tem hora suspeita`() {
+        val hours = ApiJson.decodeFromString<HourlySeries>(fixture("hourly.json")).hours
+        assertEquals(List(6) { false }, hours.map { it.suspect })
+    }
+
+    @Test
     fun `le a saude da coleta`() {
         val health = ApiJson.decodeFromString<Health>(fixture("health.json"))
         assertEquals("no-01", health.deviceId)
@@ -41,6 +55,17 @@ class ApiModelsTest {
         assertEquals(14.5, latest.pm25!!, 0.0)
         assertEquals(-70, latest.rssi)
         assertEquals(Instant.parse("2026-10-14T04:35:00Z"), latest.ts)
+    }
+
+    @Test
+    fun `estado novo do servidor nao derruba a lista inteira`() {
+        val list = ApiJson.decodeFromString<DeviceList>(
+            """{"generated_at": "2026-10-14T04:36:18Z", "late_after_min": 3, "silent_after_min": 15, "devices": [
+                {"device_id": "no-01", "status": "paused"},
+                {"device_id": "no-02", "status": "online"}]}"""
+        )
+        assertEquals(listOf("no-01", "no-02"), list.devices.map { it.deviceId })
+        assertEquals(listOf(null, DeviceStatus.ONLINE), list.devices.map { it.status })
     }
 
     @Test

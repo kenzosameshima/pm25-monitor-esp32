@@ -47,10 +47,12 @@ import br.unip.pm25.ui.ErrorMessage
 import br.unip.pm25.ui.Metric
 import br.unip.pm25.ui.QualityChip
 import br.unip.pm25.ui.StaleBanner
+import br.unip.pm25.ui.asHeading
 import br.unip.pm25.ui.detail.ChartLegend
 import br.unip.pm25.ui.detail.ChartSeries
 import br.unip.pm25.ui.detail.HourlyChart
 import br.unip.pm25.ui.format
+import br.unip.pm25.ui.formatWith
 import br.unip.pm25.ui.theme.Pm25Theme
 import java.time.Instant
 
@@ -116,7 +118,7 @@ private fun PendingHourCard(data: ForecastResponse, serverNow: Instant) {
     val models = data.predictors.filter { it != PERSISTENCE }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Hora em andamento", style = MaterialTheme.typography.titleMedium)
+            Text("Hora em andamento", style = MaterialTheme.typography.titleMedium, modifier = Modifier.asHeading())
             if (pending == null) {
                 Text("Os dados disponíveis não incluem a hora atual; puxe para atualizar.",
                     style = MaterialTheme.typography.bodyMedium)
@@ -142,7 +144,7 @@ private fun PendingHourCard(data: ForecastResponse, serverNow: Instant) {
 private fun PredictionRow(label: String, value: Double?) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        Text("${value.format()} µg/m³", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(value.formatWith("µg/m³"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         AirQuality.of(value)?.let {
             Box(Modifier.padding(start = 12.dp)) { QualityChip(it) }
         }
@@ -156,16 +158,15 @@ private fun ComparisonCard(data: ForecastResponse) {
         data.predictors.map { p ->
             ChartSeries(predictorLabel(p), data.hours.map { it.predictions[p] }, colors.getValue(p), dashed = true)
         }
-    val observedHours = data.hours.count { it.observed != null }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Previsto × observado (µg/m³)", style = MaterialTheme.typography.titleMedium)
+            Text("Previsto × observado (µg/m³)", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.asHeading())
             HourlyChart(
                 hours = data.hours.map { it.hour },
                 series = series,
                 timeFormat = DAY_CLOCK,  // 48 h cruzam a meia-noite: só a hora seria ambígua
-                description = "PM2,5 observado e previsto por hora nas últimas $FORECAST_HOURS horas, " +
-                    "com $observedHours horas observadas e ${data.predictors.size} previsores.",
+                description = forecastChartDescription(data),
             )
             ChartLegend(series)
             Text(
@@ -182,7 +183,8 @@ private fun ComparisonCard(data: ForecastResponse) {
 private fun ScoresCard(scores: List<PredictorScore>) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Desempenho nas últimas $FORECAST_HOURS horas", style = MaterialTheme.typography.titleMedium)
+            Text("Desempenho nas últimas $FORECAST_HOURS horas", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.asHeading())
             if (scores.isEmpty()) {
                 Text("Ainda não há horas com observação e previsão para comparar.",
                     style = MaterialTheme.typography.bodyMedium)

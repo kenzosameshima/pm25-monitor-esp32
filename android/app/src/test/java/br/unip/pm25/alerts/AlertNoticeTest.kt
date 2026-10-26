@@ -49,5 +49,6 @@ class AlertNoticeTest {
     fun `servidor fora do ar explica conforme o erro`() {
         assertTrue(Alert.ServerDown(LoadError.Network).notice(now).text.startsWith("Há pelo menos 15 minutos"))
         assertTrue(Alert.ServerDown(LoadError.Unauthorized).notice(now).text.contains("token de leitura"))
+        assertTrue(Alert.ServerDown(LoadError.Tls).notice(now).text.contains("conexão segura"))
     }
 }

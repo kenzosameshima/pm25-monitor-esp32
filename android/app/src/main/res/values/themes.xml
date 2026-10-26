@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- A janela que aparece antes de o Compose desenhar a primeira tela. Clara aqui e escura em values-night,
+         para o app não abrir branco quando o aparelho está no modo escuro. -->
+    <style name="Theme.Pm25" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

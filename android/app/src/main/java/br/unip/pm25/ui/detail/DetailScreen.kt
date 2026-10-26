@@ -41,7 +41,10 @@ import br.unip.pm25.ui.CLOCK
 import br.unip.pm25.ui.DAY_CLOCK
 import br.unip.pm25.ui.ErrorMessage
 import br.unip.pm25.ui.Metric
+import br.unip.pm25.ui.MetricRow
+import br.unip.pm25.ui.NO_VALUE
 import br.unip.pm25.ui.StaleBanner
+import br.unip.pm25.ui.asHeading
 import br.unip.pm25.ui.format
 import br.unip.pm25.ui.theme.Pm25Theme
 import java.time.Instant
@@ -141,16 +144,16 @@ private fun HistoryCard(series: HourlySeries, range: HistoryRange) {
         "${summary.validHours} de ${summary.totalHours} horas válidas."
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("PM2,5 por hora (µg/m³)", style = MaterialTheme.typography.titleMedium)
+            Text("PM2,5 por hora (µg/m³)", style = MaterialTheme.typography.titleMedium, modifier = Modifier.asHeading())
             HourlyChart(series.hours.map { it.hour },
                 listOf(ChartSeries("PM2,5", series.hours.map { if (it.valid) it.pm25 else null },
                     MaterialTheme.colorScheme.primary)),
                 timeFormat, description)
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            MetricRow {
                 Metric("Média", summary.mean.format())
-                Metric("Máxima", summary.max?.let { "${it.pm25.format()} às ${DAY_CLOCK.format(it.hour)}" } ?: "—")
+                Metric("Máxima", summary.max?.let { "${it.pm25.format()} às ${DAY_CLOCK.format(it.hour)}" } ?: NO_VALUE)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            MetricRow {
                 Metric("Horas válidas", "${summary.validHours} de ${summary.totalHours}")
                 Metric("Acima de 25 µg/m³", "${summary.hoursAboveGood} h")
             }
@@ -160,6 +163,14 @@ private fun HistoryCard(series: HourlySeries, range: HistoryRange) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (summary.suspectHours > 0) {
+                Text(
+                    "Em ${summary.suspectHours} h o sensor quase não viu partículas, o que o ar não faz por horas: " +
+                        "essas horas também ficam em branco.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
             if (summary.humidHours > 0) {
                 Text(
                     "Em ${summary.humidHours} h a umidade média passou de ${HIGH_HUMIDITY.format(0)}%: " +
@@ -176,7 +187,8 @@ private fun HistoryCard(series: HourlySeries, range: HistoryRange) {
 private fun HealthCard(health: Health, range: HistoryRange) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Saúde da coleta (${range.label})", style = MaterialTheme.typography.titleMedium)
+            Text("Saúde da coleta (${range.label})", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.asHeading())
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 Metric("Completude", "${(health.completeness * 100).format(0)}%", Modifier.weight(1f))
                 Metric("Maior lacuna", "${health.largestGapMin} min", Modifier.weight(1f))
@@ -199,13 +211,16 @@ private fun HealthCard(health: Health, range: HistoryRange) {
 }
 
 @Preview(showBackground = true)
+@Preview(showBackground = true, fontScale = 2f, name = "Fonte 200%")
 @Composable
 private fun DetailScreenPreview() {
     val end = Instant.parse("2026-10-14T12:00:00Z")
     val hours = (0 until 24).map { i ->
-        val valid = i !in 9..11
-        HourlyPoint(end.minusSeconds(3600L * (24 - i)), if (valid) 60 else 20, valid,
-            pm25 = if (valid) 12.0 + (i % 8) * 3 else null, humidity = if (valid) 60.0 + i else null)
+        val suspect = i == 14
+        val valid = i !in 9..11 && !suspect
+        HourlyPoint(end.minusSeconds(3600L * (24 - i)), if (i in 9..11) 20 else 60, valid,
+            pm25 = if (valid) 12.0 + (i % 8) * 3 else null, humidity = if (valid) 60.0 + i else null,
+            suspect = suspect)
     }
     val series = HourlySeries(end, "no-01", end.minusSeconds(86_400), end, 45, hours)
     val health = Health(end, "no-01", end.minusSeconds(86_400), end, 0.87, 182, 3, 1, 12, 0)

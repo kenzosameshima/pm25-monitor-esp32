@@ -60,9 +60,16 @@ object AlertSchedule {
  * validada (com acesso à internet de fato); na rede local (emulador ou servidor no mesmo Wi-Fi), basta
  * a conexão que o WorkManager já exige.
  */
-private fun canTellServerFailures(context: Context): Boolean {
-    val host = runCatching { URI(BuildConfig.API_URL).host }.getOrNull().orEmpty()
-    if (isLocalNetworkHost(host)) return true
+private fun canTellServerFailures(context: Context): Boolean =
+    failuresTellAboutServer(BuildConfig.API_URL) { hasValidatedNetwork(context) }
+
+/** A decisão de `canTellServerFailures`, sem o sistema: `hasValidatedNetwork` só é chamada para um servidor na internet. */
+internal fun failuresTellAboutServer(apiUrl: String, hasValidatedNetwork: () -> Boolean): Boolean {
+    val host = runCatching { URI(apiUrl).host }.getOrNull().orEmpty()
+    return isLocalNetworkHost(host) || hasValidatedNetwork()
+}
+
+private fun hasValidatedNetwork(context: Context): Boolean {
     val connectivity = context.getSystemService(ConnectivityManager::class.java) ?: return false
     val capabilities = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return false
     return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)

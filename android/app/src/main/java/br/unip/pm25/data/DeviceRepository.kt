@@ -7,13 +7,19 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import retrofit2.HttpException
 import java.io.IOException
+import java.security.cert.CertificateException
 import java.time.Instant
 import java.time.format.DateTimeParseException
+import javax.net.ssl.SSLException
+import javax.net.ssl.SSLPeerUnverifiedException
 
 /** Por que uma consulta falhou, em termos que a tela consegue explicar ao usuário. */
 sealed interface LoadError {
     /** Sem rede, servidor desligado ou tempo esgotado: vale tentar de novo. */
     data object Network : LoadError
+
+    /** A conexão segura falhou: certificado não aceito, data do celular errada ou rede que intercepta o tráfego. */
+    data object Tls : LoadError
 
     /** 401: token de leitura ausente ou errado no app. */
     data object Unauthorized : LoadError
@@ -130,6 +136,8 @@ class DeviceRepository(
                     else -> LoadError.Server(e.code())
                 }
             )
+        } catch (e: SSLException) {  // vem antes de IOException, de que é subclasse
+            Outcome.Failure(if (e.isCertificateProblem()) LoadError.Tls else LoadError.Network)
         } catch (e: IOException) {
             Outcome.Failure(LoadError.Network)
         } catch (e: SerializationException) {
@@ -138,5 +146,9 @@ class DeviceRepository(
             Outcome.Failure(LoadError.BadResponse)
         }
 }
+
+/** Só certificado recusado conta como falha da conexão segura; reset e queda no meio do handshake também são SSLException, mas são rede. */
+private fun SSLException.isCertificateProblem() =
+    this is SSLPeerUnverifiedException || generateSequence<Throwable>(this) { it.cause }.any { it is CertificateException }
 
 private const val DEVICES = "devices"

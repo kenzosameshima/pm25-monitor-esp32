@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -29,6 +31,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.onClick as semanticsOnClick
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -50,11 +54,13 @@ import br.unip.pm25.domain.readingAge
 import br.unip.pm25.ui.AlertsCard
 import br.unip.pm25.ui.ErrorPanel
 import br.unip.pm25.ui.Metric
+import br.unip.pm25.ui.MetricRow
 import br.unip.pm25.ui.QualityChip
 import br.unip.pm25.ui.StaleBanner
 import br.unip.pm25.ui.rememberAlertsPrompt
 import br.unip.pm25.ui.format
 import br.unip.pm25.ui.formatMoment
+import br.unip.pm25.ui.formatWith
 import br.unip.pm25.ui.theme.Pm25Theme
 import kotlinx.coroutines.delay
 import java.time.Instant
@@ -149,7 +155,9 @@ private fun DeviceListContent(
 
 @Composable
 private fun DeviceCard(device: DeviceState, status: DeviceStatus, serverNow: Instant, onClick: () -> Unit) {
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+    // O rótulo diz ao leitor de tela o que o toque faz; a ação continua sendo a do próprio cartão.
+    val opens = Modifier.semantics { semanticsOnClick(label = "Ver o histórico de ${device.deviceId}", action = null) }
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth().then(opens)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 StatusDot(status)
@@ -168,24 +176,32 @@ private fun DeviceCard(device: DeviceState, status: DeviceStatus, serverNow: Ins
     }
 }
 
+/** A faixa vai para a linha de baixo quando a fonte grande não deixa o valor e ela lado a lado, em vez de ser espremida. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LatestReadingContent(latest: LatestReading, serverNow: Instant) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
         Column {
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(latest.pm25.format(), style = MaterialTheme.typography.displaySmall)
-                Text(" µg/m³", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 6.dp))
+                if (latest.pm25 != null) {
+                    Text(" µg/m³", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 6.dp))
+                }
             }
             Text("PM2,5 · leitura ${formatAge(readingAge(latest.ts, serverNow))}",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Spacer(Modifier.weight(1f))
         AirQuality.of(latest.pm25)?.let { QualityChip(it) }
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-        Metric("Temperatura", "${latest.temperature.format()} °C")
-        Metric("Umidade", "${latest.humidity.format(0)}%")
-        Metric("PM10", "${latest.pm10.format()} µg/m³")
+    MetricRow {
+        Metric("Temperatura", latest.temperature.formatWith("°C"))
+        Metric("Umidade", latest.humidity.formatWith("%", decimals = 0, gap = ""))
+        Metric("PM10", latest.pm10.formatWith("µg/m³"))
     }
     if (latest.quality != "ok") {
         Text("O servidor marcou esta leitura como implausível (${latest.quality}).",
@@ -210,6 +226,7 @@ private fun DeviceStatus.label() = when (this) {
 }
 
 @Preview(showBackground = true)
+@Preview(showBackground = true, fontScale = 2f, name = "Fonte 200%")
 @Composable
 private fun HomeScreenPreview() {
     val now = Instant.parse("2026-10-14T12:00:00Z")

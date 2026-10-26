@@ -11,8 +11,13 @@ import org.junit.Test
 import retrofit2.HttpException
 import retrofit2.Response
 import java.io.IOException
+import java.net.SocketTimeoutException
 import java.time.Duration
 import java.time.Instant
+import java.security.cert.CertificateExpiredException
+import javax.net.ssl.SSLException
+import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLPeerUnverifiedException
 
 class DeviceRepositoryTest {
     private val list = DeviceList(Instant.parse("2026-10-14T11:59:00Z"), 3, 15, emptyList())
@@ -55,6 +60,17 @@ class DeviceRepositoryTest {
     fun `falha de rede e resposta fora do contrato`() {
         assertEquals(LoadError.Network, failureOf { throw IOException("sem rota") })
         assertEquals(LoadError.BadResponse, failureOf { throw SerializationException("campo faltando") })
+    }
+
+    @Test
+    fun `falha da conexao segura nao e confundida com falta de rede`() {
+        assertEquals(LoadError.Tls, failureOf {
+            throw SSLHandshakeException("falha").initCause(CertificateExpiredException("certificado vencido"))
+        })
+        assertEquals(LoadError.Tls, failureOf { throw SSLPeerUnverifiedException("nome do servidor") })
+        assertEquals(LoadError.Network, failureOf { throw SSLException("Connection reset") })
+        assertEquals(LoadError.Network, failureOf { throw SSLHandshakeException("Connection closed by peer") })
+        assertEquals(LoadError.Network, failureOf { throw SocketTimeoutException("tempo esgotado") })
     }
 
     @Test

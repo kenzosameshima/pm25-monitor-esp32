@@ -3,6 +3,9 @@ package br.unip.pm25.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -16,6 +19,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import br.unip.pm25.data.LoadError
 import br.unip.pm25.domain.AirQuality
@@ -39,13 +46,22 @@ fun formatMoment(moment: Instant, now: Instant = Instant.now()): String {
     return (if (sameDay) CLOCK else DAY_CLOCK).format(moment)
 }
 
+/** O que aparece no lugar de um valor que o servidor não mandou. */
+const val NO_VALUE = "—"
+
 fun Double?.format(decimals: Int = 1): String =
-    if (this == null) "—" else String.format(PT_BR, "%.${decimals}f", this)
+    if (this == null) NO_VALUE else String.format(PT_BR, "%.${decimals}f", this)
+
+/** O valor com a unidade, ou só `NO_VALUE` se não há valor: "— °C" parece um dado e é lido como se fosse. */
+fun Double?.formatWith(unit: String, decimals: Int = 1, gap: String = " "): String =
+    if (this == null) NO_VALUE else format(decimals) + gap + unit
 
 fun LoadError.message(): String = when (this) {
     LoadError.Network -> "Sem conexão com o servidor. Confira a internet e se a API está no ar."
-    LoadError.Unauthorized -> "O servidor recusou o token de leitura. Confira pm25.readToken no local.properties."
-    LoadError.ReadDisabled -> "A consulta está desligada no servidor (PM25_READ_TOKEN vazio)."
+    LoadError.Tls -> "Não foi possível abrir a conexão segura com o servidor. Confira a data e a hora do " +
+        "celular e se a rede não intercepta a conexão."
+    LoadError.Unauthorized -> "O servidor recusou o token de leitura do app. Gere o app de novo com o token certo."
+    LoadError.ReadDisabled -> "A consulta está desligada no servidor. Quem cuida do servidor precisa ativá-la."
     LoadError.NotFound -> "O servidor não tem leituras deste sensor."
     is LoadError.Blocked -> "Acesso bloqueado por tentativas inválidas. Tente de novo em " +
         (retryAfterSeconds?.let { "$it s" } ?: "alguns minutos") + "."
@@ -84,9 +100,29 @@ fun ErrorPanel(error: LoadError, onRetry: () -> Unit) {
     ErrorMessage(error, onRetry, Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
 }
 
+/** Métricas lado a lado; com fonte grande, as que não cabem passam para a linha de baixo em vez de sair da tela. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun MetricRow(content: @Composable FlowRowScope.() -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
+    )
+}
+
+/** Marca um título como cabeçalho, para o leitor de tela poder pular de um para o outro. */
+fun Modifier.asHeading(): Modifier = semantics { heading() }
+
+/** Rótulo e valor são lidos juntos pelo leitor de tela; um valor ausente é lido como "sem dado", não como um traço. */
 @Composable
 fun Metric(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier) {
+    val reading = if (value == NO_VALUE) {
+        Modifier.clearAndSetSemantics { contentDescription = "$label: sem dado" }
+    } else {
+        Modifier.semantics(mergeDescendants = true) {}
+    }
+    Column(modifier.then(reading)) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.bodyMedium)
     }
