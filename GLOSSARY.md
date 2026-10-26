@@ -67,8 +67,12 @@ _Avoid_: repetição, leitura duplicada
 ### Análise e previsão
 
 **Hora válida**:
-Hora com leituras em pelo menos 75% dos minutos, a única que tem média horária.
+Hora com leituras em pelo menos 75% dos minutos e que não é suspeita, a única que tem média horária.
 _Avoid_: hora boa, hora completa
+
+**Hora suspeita**:
+Hora com leituras suficientes em que o sensor quase não viu partículas: pelo menos um quarto das leituras abaixo de 0,5 µg/m³ de PM2,5, ou média abaixo de 1,0 µg/m³. Fica sem média e é contada à parte.
+_Avoid_: hora zerada, hora inválida (inválida é a de poucas leituras)
 
 **Média horária**:
 A média das leituras de uma hora válida de um nó, hora cheia em UTC.
