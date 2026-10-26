@@ -30,6 +30,10 @@ _Avoid_: boot, sessão
 O conjunto de leituras que um nó envia numa única remessa ao servidor.
 _Avoid_: pacote, batch
 
+**Versão do firmware**:
+O texto que identifica a compilação gravada num nó, informado por ele em cada lote. Nó com um firmware anterior ao campo não tem versão.
+_Avoid_: build, release
+
 **Leitura marcada**:
 Leitura que o servidor considerou implausível. Fica guardada, mas não entra nas médias horárias por padrão.
 _Avoid_: leitura suspeita, leitura ruim, flagged

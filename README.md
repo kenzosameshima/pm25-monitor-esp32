@@ -57,6 +57,7 @@ Cada leitura é a média de um minuto de relógio. O nó envia `POST /v1/measure
 {
   "schema_version": "1",
   "device_id": "no-01",
+  "firmware": "build Oct 26 2026 12:00:00",
   "readings": [
     {"boot_id": 3, "seq": 0, "ts": "2026-09-22T12:00:00Z", "uptime_s": 120, "samples": 58,
      "pm1": 8.2, "pm25": 12.5, "pm10": 15.0, "pm25_cf1": 13.0,
@@ -66,6 +67,8 @@ Cada leitura é a média de um minuto de relógio. O nó envia `POST /v1/measure
 ```
 
 O campo `ts` marca o início da janela de um minuto, sempre em UTC. `pm25` é o valor "atmospheric environment" do PMS5003, usado nas análises; `pm25_cf1` é o valor "standard particle", guardado porque as correções publicadas para sensores Plantower costumam partir dele. `samples` conta quantos quadros do sensor entraram na média, e `rssi` e `uptime_s` explicam lacunas depois. Temperatura, umidade, pressão e RSSI podem vir como `null`. A pressão (`pressure`, em hPa) só vem do BME280 e é apenas guardada em `measurements.pressure`: nenhuma análise, rota de leitura, painel ou o app a usa por enquanto. Bancos anteriores ganham a coluna sozinhos quando a API sobe, e leituras antigas ficam com `null`; a faixa plausível é 300 a 1100 hPa (fora dela a leitura é marcada `pressao_fora_faixa`). Um lote aceita até 500 leituras.
+
+O campo `firmware` é opcional e só diagnóstico: identifica a compilação gravada no nó. Por padrão o firmware envia `build <data> <hora>` da compilação; para usar um nome seu (por exemplo o hash do commit), defina `FW_VERSION` em `config.h`. O servidor guarda a versão de cada lote em `ingest_batches.firmware` e o painel mostra a última informada em cada nó. Um valor que não é texto, ou que é vazio, é ignorado; caracteres de controle são removidos e o texto é cortado em 64 caracteres, sem nunca recusar o lote, porque o nó descarta o que a API recusa com 4xx. Nó com firmware anterior a esse campo simplesmente não aparece com versão. Ao subir uma versão nova da API, reinicie a API antes do painel: é ela que acrescenta a coluna ao banco.
 
 | Resposta | Significado | O que o nó faz |
 |---|---|---|
