@@ -27,6 +27,13 @@
 #include "pms5003.h"
 #include "reading.h"
 
+// Versão enviada à API em cada lote, para conferir no servidor qual compilação está gravada no nó. Defina
+// FW_VERSION em config.h para usar um nome seu (por exemplo o hash do commit); sem isso, vale a data e a hora
+// em que este arquivo foi compilado.
+#ifndef FW_VERSION
+#define FW_VERSION "build " __DATE__ " " __TIME__
+#endif
+
 #if defined(TH_SENSOR_BME280) && defined(TH_SENSOR_DHT22)
 #error "Escolha apenas um sensor de temperatura e umidade em config.h"
 #elif defined(TH_SENSOR_BME280)
@@ -267,7 +274,7 @@ static void confirmPending(size_t n) {
 // ---------------- Envio ----------------
 static int postReadings(const Reading* rs, size_t n) {
   if (WiFi.status() != WL_CONNECTED || !clockReadyForSend()) return -1;
-  std::string body = buildPayload(DEVICE_ID, rs, n);
+  std::string body = buildPayload(DEVICE_ID, FW_VERSION, rs, n);
   static WiFiClient plainClient;
   static WiFiClientSecure secureClient;
   HTTPClient http;
@@ -480,7 +487,7 @@ void setup() {
   beginWifi();
   configTime(0, 0, NTP_SERVER_1, NTP_SERVER_2);  // relógio em UTC; o SNTP ressincroniza periodicamente
 
-  Serial.printf("[boot] %s boot_id=%lu pendentes=%lu\n", DEVICE_ID, (unsigned long)bootId,
+  Serial.printf("[boot] %s firmware=%s boot_id=%lu pendentes=%lu\n", DEVICE_ID, FW_VERSION, (unsigned long)bootId,
                 (unsigned long)pendingRecords());
 }
 

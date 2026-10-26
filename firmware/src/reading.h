@@ -41,13 +41,29 @@ inline void formatIsoUtc(uint32_t epoch, char* out, size_t n) {
   strftime(out, n, "%Y-%m-%dT%H:%M:%SZ", &tmv);
 }
 
+// Versão do firmware no JSON: só letras, números, espaço e . _ + : / - (o resto vira '_', para o texto nunca
+// precisar de escape), com no máximo 64 caracteres, como a API guarda. Sem versão, o campo é omitido.
+inline void appendFirmware(std::string& s, const char* firmware) {
+  if (firmware == nullptr || firmware[0] == '\0') return;
+  s += ",\"firmware\":\"";
+  for (size_t i = 0; firmware[i] != '\0' && i < 64; ++i) {
+    char c = firmware[i];
+    bool ok = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == ' ' || c == '.' ||
+              c == '_' || c == '+' || c == ':' || c == '/' || c == '-';
+    s += ok ? c : '_';
+  }
+  s += '"';
+}
+
 // deviceId deve conter só letras, números, '-' e '_' (a API valida o mesmo padrão).
-inline std::string buildPayload(const char* deviceId, const Reading* rs, size_t count) {
+inline std::string buildPayload(const char* deviceId, const char* firmware, const Reading* rs, size_t count) {
   std::string s;
-  s.reserve(64 + count * 260);
+  s.reserve(160 + count * 260);
   s += "{\"schema_version\":\"1\",\"device_id\":\"";
   s += deviceId;
-  s += "\",\"readings\":[";
+  s += '"';
+  appendFirmware(s, firmware);
+  s += ",\"readings\":[";
   for (size_t i = 0; i < count; ++i) {
     const Reading& r = rs[i];
     char ts[24];

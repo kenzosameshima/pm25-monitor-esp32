@@ -13,6 +13,9 @@
 #define API_URL "https://desktop-kenzo.tail7d201d.ts.net/v1/measurements"
 #define DEVICE_ID "no-01"                      // letras, números, '-' e '_'
 #define DEVICE_TOKEN "TROQUE-este-token-do-no-01"  // o mesmo cadastrado em PM25_DEVICE_TOKENS no servidor
+// Opcional: nome da versão enviado à API em cada lote (aparece no painel). Sem esta linha, vale a data e a hora
+// da compilação, o que já distingue uma gravação da outra. Aqui, por exemplo, o hash do commit gravado no nó.
+// #define FW_VERSION "5094a68"
 
 // Certificado raiz que valida o servidor HTTPS: a CA raiz do emissor do certificado público.
 // Os certificados do Tailscale são emitidos pela Let's Encrypt, cuja cadeia termina na ISRG Root X1

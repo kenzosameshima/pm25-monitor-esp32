@@ -100,7 +100,9 @@ int main() {
     memset(rs, 0, sizeof rs);
     rs[0] = {3, 0, 1790078400u, 120, 8.2f, 12.46f, 15.0f, 13.0f, 23.4f, 61.0f, 931.27f, -63, 58};
     rs[1] = {3, 1, 1790078460u, 180, 8.0f, 12.0f, 14.9f, 12.8f, NAN, NAN, NAN, RSSI_NONE, 57};
-    std::string json = buildPayload("no-01", rs, 2);
+    std::string json = buildPayload("no-01", "build Oct 26 2026 12:00:00", rs, 2);
+    assert(json.find("\"device_id\":\"no-01\",\"firmware\":\"build Oct 26 2026 12:00:00\",\"readings\":[") !=
+           std::string::npos);
     assert(json.find("\"ts\":\"2026-09-22T12:00:00Z\"") != std::string::npos);
     assert(json.find("\"pm25\":12.5") != std::string::npos);
     assert(json.find("\"temperature\":null") != std::string::npos);
@@ -111,6 +113,14 @@ int main() {
     FILE* f = fopen("payload_exemplo.json", "w");
     fputs(json.c_str(), f);
     fclose(f);
+    // versão sem escape: caracteres fora da lista viram '_', o limite é 64 e sem versão o campo some
+    std::string odd = buildPayload("no-01", "a\"b\\c\n", rs, 1);
+    assert(odd.find("\"firmware\":\"a_b_c_\"") != std::string::npos);
+    std::string longer = buildPayload("no-01", std::string(100, 'x').c_str(), rs, 1);
+    assert(longer.find("\"firmware\":\"" + std::string(64, 'x') + "\"") != std::string::npos);
+    assert(longer.find(std::string(65, 'x')) == std::string::npos);
+    assert(buildPayload("no-01", nullptr, rs, 1).find("firmware") == std::string::npos);
+    assert(buildPayload("no-01", "", rs, 1).find("firmware") == std::string::npos);
   }
   puts("firmware: todos os testes passaram");
   return 0;
