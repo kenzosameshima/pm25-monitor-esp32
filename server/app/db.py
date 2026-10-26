@@ -36,6 +36,42 @@ def connect(path: str, readonly: bool = False) -> sqlite3.Connection:
     return conn
 
 
+class SnapshotError(RuntimeError):
+    """A cópia do banco não passou na verificação de integridade e foi descartada."""
+
+
+def snapshot(source_path: str, dest: Path, *, single_file: bool = False) -> int:
+    """Copia o banco pela API de backup do SQLite, íntegra mesmo com a API gravando, e devolve quantas leituras tem.
+
+    A cópia é feita num arquivo `.part` e só vira `dest` depois de passar no `integrity_check`; uma cópia
+    ruim, ou qualquer erro no caminho, não deixa arquivo nenhum. Um `dest` que já existe é substituído.
+    Com `single_file`, a cópia sai sem WAL (arquivo único e estável, para o hash identificar os dados)."""
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    partial = dest.with_name(dest.name + ".part")
+    partial.unlink(missing_ok=True)
+    src = connect(source_path, readonly=True)
+    dst = sqlite3.connect(partial)
+    try:
+        src.backup(dst)
+        if single_file:
+            dst.execute("PRAGMA journal_mode=DELETE")
+        check = dst.execute("PRAGMA integrity_check").fetchone()[0]
+        rows = dst.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
+    except BaseException:
+        dst.close()
+        src.close()
+        partial.unlink(missing_ok=True)
+        raise
+    dst.close()
+    src.close()
+    if check != "ok":
+        partial.unlink(missing_ok=True)
+        raise SnapshotError(f"integrity_check retornou {check!r}")
+    partial.replace(dest)
+    return rows
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     """Acrescenta ao banco já existente as colunas que o esquema ganhou depois (CREATE IF NOT EXISTS não as cria)."""
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(measurements)")}
@@ -190,6 +226,15 @@ def fetch_ingest_batches(conn: sqlite3.Connection, since: datetime) -> list[sqli
         " WHERE received_at >= ? ORDER BY received_at",
         (iso(since),),
     ).fetchall()
+
+
+def duplicates_discarded(conn: sqlite3.Connection, device_id: str, start: datetime, end: datetime) -> int:
+    """Leituras repetidas que o servidor descartou nos lotes do nó recebidos em [start, end)."""
+    return conn.execute(
+        "SELECT COALESCE(SUM(n_duplicates), 0) FROM ingest_batches"
+        " WHERE device_id = ? AND received_at >= ? AND received_at < ?",
+        (device_id, iso(start), iso(end)),
+    ).fetchone()[0]
 
 
 def device_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:

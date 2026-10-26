@@ -61,6 +61,14 @@ RETRO_SUFFIX = "-retro"
 MAX_REPLAY_HOURS = 7 * 24
 
 
+def _stored_versions(conn, device: str, targets: list[datetime]) -> dict[str, set[tuple[str, str]]]:
+    """Modelo e versão já gravados em `forecasts` para cada hora-alvo de `targets` (chave ISO), num nó."""
+    stored: dict[str, set[tuple[str, str]]] = {}
+    for r in db.fetch_forecasts(conn, min(targets), max(targets) + timedelta(hours=1), [device]):
+        stored.setdefault(r["target_hour"], set()).add((r["model_name"], r["model_version"]))
+    return stored
+
+
 def replay_rows(conn, models: list[forecasting.Forecaster], targets: list[datetime],
                 generated_at: datetime) -> tuple[list[dict], list[str]]:
     """Previsões retroativas das horas-alvo `targets`, na versão "<versão>-retro". Não grava nada.
@@ -68,11 +76,12 @@ def replay_rows(conn, models: list[forecasting.Forecaster], targets: list[dateti
     Cada hora é calculada como o job a calcularia às HH:05, só com as leituras de sensor anteriores à hora-alvo.
     Pula as horas que já têm a previsão em tempo real do modelo; as sem dados suficientes voltam em `skipped`."""
     rows, skipped = [], []
+    if not targets:
+        return rows, skipped
     for device in analytics.production_devices(conn):
+        stored = _stored_versions(conn, device, targets)
         for target in targets:
-            real = {(m, v) for m, v in conn.execute(
-                "SELECT model_name, model_version FROM forecasts WHERE device_id = ? AND target_hour = ?",
-                (device, db.iso(target)))}
+            real = stored.get(db.iso(target), set())
             wanted = [m for m in models
                       if (m.kind, m.version) not in real and (m.kind, m.version + RETRO_SUFFIX) not in real]
             if not wanted:
