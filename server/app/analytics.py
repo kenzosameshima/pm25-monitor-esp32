@@ -29,7 +29,7 @@ AIR_QUALITY_BANDS = [(25.0, "Boa"), (50.0, "Moderada"), (75.0, "Ruim"), (125.0, 
 
 HOURLY_COLUMNS = ["device_id", "hora", "n", *VARIABLES]
 STATUS_COLUMNS = ["device_id", "location", "first_ts", "last_received", "status", "minutes_since",
-                  "ts_sensor", *VARIABLES, "rssi", "quality"]
+                  "ts_sensor", *VARIABLES, "rssi", "quality", "firmware"]
 HEALTH_COLUMNS = ["device_id", "completude", "maior_lacuna_min", "mensagens_perdidas", "reinicios",
                   "duplicatas_descartadas", "leituras_marcadas"]
 METRIC_COLUMNS = ["previsor", "horas", "mae", "rmse", "skill"]
@@ -122,6 +122,7 @@ def device_status(conn: sqlite3.Connection, now: datetime) -> pd.DataFrame:
         return pd.DataFrame(columns=STATUS_COLUMNS)
     latest = _frame(db.latest_measurements(conn), ["ts_sensor"])
     out = overview.merge(latest, on="device_id", how="left")
+    out["firmware"] = out["device_id"].map(db.latest_firmware(conn))
     states = [_status(last, now) for last in out["last_received"]]
     out["status"] = [s for s, _ in states]
     out["minutes_since"] = [m for _, m in states]

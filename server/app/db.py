@@ -77,6 +77,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(measurements)")}
     if "pressure" not in columns:
         conn.execute("ALTER TABLE measurements ADD COLUMN pressure REAL")
+    batch_columns = {r["name"] for r in conn.execute("PRAGMA table_info(ingest_batches)")}
+    if "firmware" not in batch_columns:
+        conn.execute("ALTER TABLE ingest_batches ADD COLUMN firmware TEXT")
+    # Aqui e não no schema.sql: num banco antigo a coluna só existe depois do ALTER acima.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_batches_firmware ON ingest_batches (device_id, received_at)"
+                 " WHERE firmware IS NOT NULL")
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -103,11 +109,13 @@ def insert_batch(
     rows: list[dict[str, Any]],
     received_at: datetime,
     remote_addr: str | None = None,
+    firmware: str | None = None,
 ) -> tuple[int, int]:
     """Grava um lote de leituras numa única transação. Retorna (inseridas, duplicadas).
 
     Leituras repetidas (mesmo device_id, boot_id e seq) são ignoradas, o que torna os
     reenvios do nó seguros: ele pode mandar o mesmo lote várias vezes sem duplicar dados.
+    `firmware` é a versão informada pelo nó neste lote, se informou.
     """
     received = iso(received_at)
     with conn:
@@ -121,9 +129,9 @@ def insert_batch(
         inserted = conn.total_changes - before
         duplicates = len(rows) - inserted
         conn.execute(
-            "INSERT INTO ingest_batches (received_at, device_id, n_readings, n_inserted, n_duplicates, remote_addr)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (received, device_id, len(rows), inserted, duplicates, remote_addr),
+            "INSERT INTO ingest_batches (received_at, device_id, n_readings, n_inserted, n_duplicates, remote_addr,"
+            " firmware) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (received, device_id, len(rows), inserted, duplicates, remote_addr, firmware),
         )
     return inserted, duplicates
 
@@ -239,6 +247,19 @@ def device_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         " (SELECT MAX(ts_received) FROM measurements m WHERE m.device_id = d.device_id) AS last_received"
         " FROM devices d) WHERE first_ts IS NOT NULL ORDER BY device_id"
     ).fetchall()
+
+
+def latest_firmware(conn: sqlite3.Connection) -> dict[str, str]:
+    """Versão do firmware de cada nó: a do lote mais recente em que ele informou uma. Nó que nunca informou fica de fora.
+
+    Um banco que a API ainda não migrou não tem a coluna; os leitores não migram, então ele responde vazio."""
+    if "firmware" not in {r["name"] for r in conn.execute("PRAGMA table_info(ingest_batches)")}:
+        return {}
+    rows = conn.execute(
+        "SELECT d.device_id, (SELECT b.firmware FROM ingest_batches b WHERE b.device_id = d.device_id"
+        " AND b.firmware IS NOT NULL ORDER BY b.received_at DESC LIMIT 1) AS firmware FROM devices d"
+    ).fetchall()
+    return {r["device_id"]: r["firmware"] for r in rows if r["firmware"] is not None}
 
 
 def set_location(conn: sqlite3.Connection, device_id: str, location: str | None) -> bool:

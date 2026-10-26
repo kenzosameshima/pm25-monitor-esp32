@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS ingest_batches (
     n_readings    INTEGER NOT NULL,
     n_inserted    INTEGER NOT NULL,
     n_duplicates  INTEGER NOT NULL,
-    remote_addr   TEXT
+    remote_addr   TEXT,
+    firmware      TEXT                  -- versão informada pelo nó neste lote (campo opcional do contrato)
 );
 
 -- Requisições rejeitadas, guardadas para auditoria.

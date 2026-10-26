@@ -211,6 +211,41 @@ def test_contrato_payload_gerado_pelo_firmware_e_aceito(client):
     with sqlite3.connect(client.db_path) as conn:
         row = conn.execute("SELECT temperature, pressure, rssi, quality FROM measurements WHERE seq = 1").fetchone()
     assert row == (None, None, None, "ok")
+    assert stored_firmware(client) == ["build Oct 26 2026 12:00:00"]
+
+
+# ---------------- versão do firmware: campo opcional que nunca pode custar leituras ----------------
+
+def post_with_firmware(client, firmware):
+    body = {"schema_version": "1", "device_id": "no-01", "readings": [reading(0)], "firmware": firmware}
+    return client.post(URL, json=body, headers={"Authorization": f"Bearer {TOKEN_1}"})
+
+
+def stored_firmware(client):
+    with sqlite3.connect(client.db_path) as conn:
+        return [r[0] for r in conn.execute("SELECT firmware FROM ingest_batches ORDER BY id")]
+
+
+def test_lote_guarda_a_versao_do_firmware(client):
+    assert post_with_firmware(client, "build Oct 26 2026 12:00:00").status_code == 201
+    assert stored_firmware(client) == ["build Oct 26 2026 12:00:00"]
+
+
+def test_lote_sem_versao_do_firmware_continua_valido(client):
+    assert post(client, [reading(0)]).status_code == 201
+    assert stored_firmware(client) == [None]
+
+
+@pytest.mark.parametrize("sent, kept", [
+    (123, None), ("", None), ("   ", None), (["x"], None),       # não é um texto útil: ignorado
+    ("x" * 500, "x" * 64),                                         # comprido demais: cortado
+    ("a\x00b\nc", "abc"),                                          # caracteres de controle: removidos
+])
+def test_versao_do_firmware_invalida_nao_derruba_o_lote(client, sent, kept):
+    """O nó descarta lote recusado com 4xx; um campo só de diagnóstico não pode causar isso."""
+    assert post_with_firmware(client, sent).status_code == 201
+    assert count(client, "SELECT COUNT(*) FROM measurements") == 1
+    assert stored_firmware(client) == [kept]
 
 
 # ---------------- API exposta na internet: corpo, autenticação uniforme e bloqueio por IP ----------------

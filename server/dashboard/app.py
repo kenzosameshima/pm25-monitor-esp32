@@ -195,6 +195,8 @@ def status_tab() -> None:
             if isinstance(dev["location"], str):
                 st.caption(dev["location"])
             st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")
+            if isinstance(dev["firmware"], str):
+                st.caption(f"Firmware: {dev['firmware']}")
             # Uma linha de colunas por grupo: a faixa sob o PM2,5 não desalinha a linha de baixo.
             a, b = st.columns(2)
             band, color = air_quality(dev["pm25"]) or (None, "off")

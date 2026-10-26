@@ -37,12 +37,25 @@ class Reading(BaseModel):
         return v.astimezone(timezone.utc)
 
 
+MAX_FIRMWARE_LEN = 64
+
+
 class Batch(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     schema_version: Literal["1"]
     device_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    # Identifica a compilação gravada no nó. Só diagnóstico: o nó descarta o lote recusado com 4xx, então
+    # um valor estranho é limpo ou ignorado, nunca motivo para recusar as leituras.
+    firmware: str | None = None
     readings: list[Reading] = Field(min_length=1, max_length=MAX_BATCH)
+
+    @field_validator("firmware", mode="before")
+    @classmethod
+    def _tidy_firmware(cls, v):
+        if not isinstance(v, str):
+            return None
+        return "".join(c for c in v if c.isprintable()).strip()[:MAX_FIRMWARE_LEN].strip() or None
 
 
 class IngestResult(BaseModel):

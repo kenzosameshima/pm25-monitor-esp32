@@ -140,7 +140,7 @@ def ingest(batch: Batch, request: Request, device: str = Depends(authenticate), 
         }
         for r in batch.readings
     ]
-    inserted, duplicates = db.insert_batch(conn, batch.device_id, rows, now, client_ip(request))
+    inserted, duplicates = db.insert_batch(conn, batch.device_id, rows, now, client_ip(request), batch.firmware)
     return IngestResult(inserted=inserted, duplicates=duplicates)
 
 

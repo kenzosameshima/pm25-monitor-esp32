@@ -97,6 +97,20 @@ def test_esconde_no_de_teste_e_reserva_card_do_no_cadastrado_sem_dados(app_env, 
     assert at.multiselect[0].options == ["no-01"]
 
 
+def test_mostra_a_versao_do_firmware_quando_o_no_informa(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    conn = db.connect(str(app_env))
+    db.insert_batch(conn, "no-01", [{"device_id": "no-01", "boot_id": 1, "seq": 3 * 60, "ts_sensor": db.iso(now),
+                                     "ts_received": db.iso(now), "uptime_s": 3 * 3600, "schema_version": "1",
+                                     "quality": "ok", **synthetic(now, {})}], now, firmware="build Oct 26 2026")
+    conn.close()
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    firmware = [c.value for c in at.caption if "Firmware" in c.value]
+    assert firmware == ["Firmware: build Oct 26 2026"]               # o no-02 não informa: nada é mostrado
+
+
 def test_avisa_quando_a_ultima_leitura_foi_marcada(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)

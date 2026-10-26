@@ -91,6 +91,14 @@ def test_estado_traz_a_leitura_mais_recente(conn):
     assert status.loc["no-01", "ts_sensor"] == pd.Timestamp(NOW - timedelta(minutes=1))
 
 
+def test_estado_traz_a_ultima_versao_do_firmware(conn):
+    db.insert_batch(conn, "no-01", [reading("no-01", -2)], NOW, firmware="v1")
+    db.insert_batch(conn, "no-01", [reading("no-01", -1)], NOW + timedelta(minutes=1), firmware="v2")
+    db.insert_batch(conn, "no-02", [reading("no-02", -1)], NOW)
+    status = analytics.device_status(conn, NOW).set_index("device_id")
+    assert status.loc["no-01", "firmware"] == "v2" and pd.isna(status.loc["no-02", "firmware"])
+
+
 def test_estado_deixa_de_fora_nos_de_teste(conn):
     insert(conn, [reading("no-01", -1), reading("teste-https", -1)])
     assert list(analytics.device_status(conn, NOW)["device_id"]) == ["no-01"]
