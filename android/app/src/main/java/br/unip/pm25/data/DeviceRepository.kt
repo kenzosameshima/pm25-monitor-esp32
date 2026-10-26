@@ -55,45 +55,59 @@ class DeviceRepository(
     private val store: SnapshotStore,
     private val clock: () -> Instant = Instant::now,
 ) {
-    suspend fun devices(): Outcome<Timed<DeviceList>> = fetch(DEVICES, DeviceList.serializer()) { api.devices() }
+    suspend fun devices(): Outcome<Timed<DeviceList>> = fetch(devicesRoute())
 
-    suspend fun cachedDevices(): Timed<DeviceList>? = cached(DEVICES, DeviceList.serializer())
+    suspend fun cachedDevices(): Timed<DeviceList>? = cached(devicesRoute())
 
     suspend fun hourly(deviceId: String, hours: Int): Outcome<Timed<HourlySeries>> =
-        fetch(key("hourly", deviceId, hours), HourlySeries.serializer()) { api.hourly(deviceId, hours) }
+        fetch(hourlyRoute(deviceId, hours))
 
     suspend fun cachedHourly(deviceId: String, hours: Int): Timed<HourlySeries>? =
-        cached(key("hourly", deviceId, hours), HourlySeries.serializer())
+        cached(hourlyRoute(deviceId, hours))
 
     suspend fun health(deviceId: String, hours: Int): Outcome<Timed<Health>> =
-        fetch(key("health", deviceId, hours), Health.serializer()) { api.health(deviceId, hours) }
+        fetch(healthRoute(deviceId, hours))
 
     suspend fun cachedHealth(deviceId: String, hours: Int): Timed<Health>? =
-        cached(key("health", deviceId, hours), Health.serializer())
+        cached(healthRoute(deviceId, hours))
 
     suspend fun forecast(deviceId: String, hours: Int): Outcome<Timed<ForecastResponse>> =
-        fetch(key("forecast", deviceId, hours), ForecastResponse.serializer()) { api.forecast(deviceId, hours) }
+        fetch(forecastRoute(deviceId, hours))
 
     suspend fun cachedForecast(deviceId: String, hours: Int): Timed<ForecastResponse>? =
-        cached(key("forecast", deviceId, hours), ForecastResponse.serializer())
+        cached(forecastRoute(deviceId, hours))
+
+    /** Uma consulta à API e a cópia salva dela: a chave e o formato do arquivo ficam juntos, numa definição só. */
+    private class Route<T>(val key: String, val serializer: KSerializer<T>, val call: suspend () -> T)
+
+    private fun devicesRoute() = Route(DEVICES, DeviceList.serializer()) { api.devices() }
+
+    private fun hourlyRoute(deviceId: String, hours: Int) =
+        Route(key("hourly", deviceId, hours), HourlySeries.serializer()) { api.hourly(deviceId, hours) }
+
+    private fun healthRoute(deviceId: String, hours: Int) =
+        Route(key("health", deviceId, hours), Health.serializer()) { api.health(deviceId, hours) }
+
+    private fun forecastRoute(deviceId: String, hours: Int) =
+        Route(key("forecast", deviceId, hours), ForecastResponse.serializer()) { api.forecast(deviceId, hours) }
 
     private fun key(route: String, deviceId: String, hours: Int) = "$route-$deviceId-$hours"
 
-    private suspend fun <T> fetch(key: String, serializer: KSerializer<T>, call: suspend () -> T): Outcome<Timed<T>> =
-        when (val result = load(call)) {
+    private suspend fun <T> fetch(route: Route<T>): Outcome<Timed<T>> =
+        when (val result = load(route.call)) {
             is Outcome.Success -> {
                 val timed = Timed(result.value, clock())
-                store.write(key, ApiJson.encodeToString(Timed.serializer(serializer), timed))
+                store.write(route.key, ApiJson.encodeToString(Timed.serializer(route.serializer), timed))
                 Outcome.Success(timed)
             }
             is Outcome.Failure -> result
         }
 
     /** A versão salva, ou null se não houver ou se ela não seguir mais o contrato (app atualizado, arquivo estragado). */
-    private suspend fun <T> cached(key: String, serializer: KSerializer<T>): Timed<T>? {
-        val text = store.read(key) ?: return null
+    private suspend fun <T> cached(route: Route<T>): Timed<T>? {
+        val text = store.read(route.key) ?: return null
         return try {
-            ApiJson.decodeFromString(Timed.serializer(serializer), text)
+            ApiJson.decodeFromString(Timed.serializer(route.serializer), text)
         } catch (e: IllegalArgumentException) {  // inclui SerializationException
             null
         } catch (e: DateTimeParseException) {
