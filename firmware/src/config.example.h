@@ -10,7 +10,7 @@
 // Tailscale Funnel; passo a passo na seção "Transporte HTTPS entre redes" do README). Use o endereço
 // público do túnel, sem porta, e o caminho /v1/measurements.
 // Na rede local, sem túnel, dá para usar "http://IP-reservado-do-servidor:8000/v1/measurements".
-#define API_URL "https://desktop-kenzo.tail7d201d.ts.net/v1/measurements"
+#define API_URL "https://MAQUINA.TAILNET.ts.net/v1/measurements"
 #define DEVICE_ID "no-01"                      // letras, números, '-' e '_'
 #define DEVICE_TOKEN "TROQUE-este-token-do-no-01"  // o mesmo cadastrado em PM25_DEVICE_TOKENS no servidor
 // Opcional: nome da versão enviado à API em cada lote (aparece no painel). Sem esta linha, vale a data e a hora
