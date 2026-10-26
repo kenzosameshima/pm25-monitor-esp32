@@ -129,6 +129,20 @@ def test_local_de_no_desconhecido_nao_e_cadastrado(client):
 
 # ---------------------------------------------------------------- médias horárias
 
+def test_hora_sem_particulas_nao_e_valida_e_vem_marcada_como_suspeita(client):
+    insert_hours(client, [60, 60], pm25=[20.0, 0.0])
+    body = client.get("/v1/devices/no-01/hourly", headers=READ, params={"hours": 2}).json()
+    normal, dead = body["hours"]
+    assert (normal["valid"], normal["suspect"], normal["pm25"]) == (True, False, 20.0)
+    assert (dead["readings"], dead["valid"], dead["suspect"], dead["pm25"]) == (60, False, True, None)
+
+
+def test_hora_sem_leituras_nao_e_suspeita(client):
+    insert_hours(client, [60, 0], pm25=[20.0, 0.0])
+    normal, empty = client.get("/v1/devices/no-01/hourly", headers=READ, params={"hours": 2}).json()["hours"]
+    assert (empty["readings"], empty["valid"], empty["suspect"]) == (0, False, False)
+
+
 def test_horas_sem_saltos_com_validade(client):
     insert_hours(client, [60, 44, 0, 50], pm25=[10.0, 20.0, 0.0, 30.0])
     start = db.iso(HOUR - timedelta(hours=5))

@@ -34,13 +34,13 @@ def test_leituras_com_qualidade_ruim_sao_ignoradas(conn):
 
 
 def test_features_alvo_e_atrasos_sem_vazamento(conn):
-    insert_hours(conn, "no-01", [float(h) for h in range(50)])
+    insert_hours(conn, "no-01", [10.0 + h for h in range(50)])     # a rampa não começa em zero: zero seria hora suspeita
     frame = fc.dataset(conn, ["no-01"], min_samples=1)
     assert frame.index.min() == at(24)                            # precisa de 24 h de histórico
     assert frame.index.max() == at(48)                            # a hora 49 não tem alvo
     row = frame.loc[at(30)]
-    assert row["pm25"] == 30 and row["y"] == 31                   # alvo: média da hora seguinte
-    assert row["lag_1"] == 29 and row["lag_24"] == 6
+    assert row["pm25"] == 40 and row["y"] == 41                   # alvo: média da hora seguinte
+    assert row["lag_1"] == 39 and row["lag_24"] == 16
     assert frame[fc.FEATURES].notna().all().all()
 
 
@@ -48,6 +48,24 @@ def test_dataset_sem_lista_deixa_de_fora_os_nos_de_teste(conn):
     insert_hours(conn, "no-01", series(30))
     insert_hours(conn, "teste-https", series(30))
     assert set(fc.dataset(conn, min_samples=1)["device_id"]) == {"no-01"}
+
+
+def test_hora_suspeita_tira_do_treino_as_linhas_que_dependem_dela(conn):
+    values = [20.0 + h for h in range(50)]
+    values[30] = 0.0                                                # sensor sem partículas durante a hora 30
+    insert_hours(conn, "no-01", values, per_hour=60)
+    frame = fc.dataset(conn, ["no-01"])
+    hours = {int((t - at(0)) / pd.Timedelta(hours=1)) for t in frame.index}
+    gone = {29, 30, 31, 32, 33, 36, 42}                              # o alvo, a própria hora e as linhas com ela entre os atrasos
+    assert not gone & hours
+    assert {24, 25, 28, 34, 35, 37, 41, 43, 48} <= hours
+
+
+def test_latest_row_vazia_quando_a_hora_anterior_e_suspeita(conn):
+    values = [20.0 + h for h in range(30)]
+    values[29] = 0.0
+    insert_hours(conn, "no-01", values, per_hour=60)
+    assert fc.latest_row(conn, "no-01", at(30) + timedelta(minutes=5)).empty
 
 
 def test_latest_row_usa_a_ultima_hora_completa(conn):
