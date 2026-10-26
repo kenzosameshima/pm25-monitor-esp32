@@ -24,6 +24,7 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "API_URL", "\"$apiUrl\"")
         buildConfigField("String", "READ_TOKEN", "\"$readToken\"")
     }
@@ -62,7 +63,17 @@ dependencies {
     implementation(libs.retrofit.kotlinx.serialization)
     implementation(libs.androidx.work.runtime.ktx)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    // A atividade vazia em que os testes de interface desenham cada tela (só na versão de depuração).
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    // Testes de interface: rodam num emulador ou aparelho (connectedDebugAndroidTest), não na JVM.
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    // O Espresso que o teste do Compose traz sozinho chama InputManager.getInstance(), que o Android 17 não tem mais.
+    androidTestImplementation(libs.androidx.test.espresso.core)
 }
