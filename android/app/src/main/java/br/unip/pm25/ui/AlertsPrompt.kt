@@ -75,7 +75,7 @@ fun AlertsCard(prompt: AlertsPrompt) {
     }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Alertas desligados", style = MaterialTheme.typography.titleSmall)
+            Text("Alertas desligados", style = MaterialTheme.typography.titleSmall, modifier = Modifier.asHeading())
             Text(
                 "Com os alertas, o app avisa quando um sensor para de enviar dados, quando a média horária " +
                     "de PM2,5 fica na faixa Ruim ou pior e quando o servidor não responde. A checagem roda " +

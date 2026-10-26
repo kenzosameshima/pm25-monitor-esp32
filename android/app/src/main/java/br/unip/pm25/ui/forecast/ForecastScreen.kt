@@ -47,6 +47,7 @@ import br.unip.pm25.ui.ErrorMessage
 import br.unip.pm25.ui.Metric
 import br.unip.pm25.ui.QualityChip
 import br.unip.pm25.ui.StaleBanner
+import br.unip.pm25.ui.asHeading
 import br.unip.pm25.ui.detail.ChartLegend
 import br.unip.pm25.ui.detail.ChartSeries
 import br.unip.pm25.ui.detail.HourlyChart
@@ -117,7 +118,7 @@ private fun PendingHourCard(data: ForecastResponse, serverNow: Instant) {
     val models = data.predictors.filter { it != PERSISTENCE }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Hora em andamento", style = MaterialTheme.typography.titleMedium)
+            Text("Hora em andamento", style = MaterialTheme.typography.titleMedium, modifier = Modifier.asHeading())
             if (pending == null) {
                 Text("Os dados disponíveis não incluem a hora atual; puxe para atualizar.",
                     style = MaterialTheme.typography.bodyMedium)
@@ -159,7 +160,8 @@ private fun ComparisonCard(data: ForecastResponse) {
         }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Previsto × observado (µg/m³)", style = MaterialTheme.typography.titleMedium)
+            Text("Previsto × observado (µg/m³)", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.asHeading())
             HourlyChart(
                 hours = data.hours.map { it.hour },
                 series = series,
@@ -181,7 +183,8 @@ private fun ComparisonCard(data: ForecastResponse) {
 private fun ScoresCard(scores: List<PredictorScore>) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Desempenho nas últimas $FORECAST_HOURS horas", style = MaterialTheme.typography.titleMedium)
+            Text("Desempenho nas últimas $FORECAST_HOURS horas", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.asHeading())
             if (scores.isEmpty()) {
                 Text("Ainda não há horas com observação e previsão para comparar.",
                     style = MaterialTheme.typography.bodyMedium)

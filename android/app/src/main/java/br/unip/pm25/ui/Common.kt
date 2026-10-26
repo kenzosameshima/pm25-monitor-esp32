@@ -3,6 +3,9 @@ package br.unip.pm25.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -18,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import br.unip.pm25.data.LoadError
@@ -95,6 +99,20 @@ fun ErrorMessage(error: LoadError, onRetry: () -> Unit, modifier: Modifier = Mod
 fun ErrorPanel(error: LoadError, onRetry: () -> Unit) {
     ErrorMessage(error, onRetry, Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
 }
+
+/** Métricas lado a lado; com fonte grande, as que não cabem passam para a linha de baixo em vez de sair da tela. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun MetricRow(content: @Composable FlowRowScope.() -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
+    )
+}
+
+/** Marca um título como cabeçalho, para o leitor de tela poder pular de um para o outro. */
+fun Modifier.asHeading(): Modifier = semantics { heading() }
 
 /** Rótulo e valor são lidos juntos pelo leitor de tela; um valor ausente é lido como "sem dado", não como um traço. */
 @Composable

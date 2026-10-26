@@ -41,8 +41,10 @@ import br.unip.pm25.ui.CLOCK
 import br.unip.pm25.ui.DAY_CLOCK
 import br.unip.pm25.ui.ErrorMessage
 import br.unip.pm25.ui.Metric
+import br.unip.pm25.ui.MetricRow
 import br.unip.pm25.ui.NO_VALUE
 import br.unip.pm25.ui.StaleBanner
+import br.unip.pm25.ui.asHeading
 import br.unip.pm25.ui.format
 import br.unip.pm25.ui.theme.Pm25Theme
 import java.time.Instant
@@ -142,16 +144,16 @@ private fun HistoryCard(series: HourlySeries, range: HistoryRange) {
         "${summary.validHours} de ${summary.totalHours} horas válidas."
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("PM2,5 por hora (µg/m³)", style = MaterialTheme.typography.titleMedium)
+            Text("PM2,5 por hora (µg/m³)", style = MaterialTheme.typography.titleMedium, modifier = Modifier.asHeading())
             HourlyChart(series.hours.map { it.hour },
                 listOf(ChartSeries("PM2,5", series.hours.map { if (it.valid) it.pm25 else null },
                     MaterialTheme.colorScheme.primary)),
                 timeFormat, description)
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            MetricRow {
                 Metric("Média", summary.mean.format())
                 Metric("Máxima", summary.max?.let { "${it.pm25.format()} às ${DAY_CLOCK.format(it.hour)}" } ?: NO_VALUE)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            MetricRow {
                 Metric("Horas válidas", "${summary.validHours} de ${summary.totalHours}")
                 Metric("Acima de 25 µg/m³", "${summary.hoursAboveGood} h")
             }
@@ -177,7 +179,8 @@ private fun HistoryCard(series: HourlySeries, range: HistoryRange) {
 private fun HealthCard(health: Health, range: HistoryRange) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Saúde da coleta (${range.label})", style = MaterialTheme.typography.titleMedium)
+            Text("Saúde da coleta (${range.label})", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.asHeading())
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 Metric("Completude", "${(health.completeness * 100).format(0)}%", Modifier.weight(1f))
                 Metric("Maior lacuna", "${health.largestGapMin} min", Modifier.weight(1f))
@@ -200,6 +203,7 @@ private fun HealthCard(health: Health, range: HistoryRange) {
 }
 
 @Preview(showBackground = true)
+@Preview(showBackground = true, fontScale = 2f, name = "Fonte 200%")
 @Composable
 private fun DetailScreenPreview() {
     val end = Instant.parse("2026-10-14T12:00:00Z")

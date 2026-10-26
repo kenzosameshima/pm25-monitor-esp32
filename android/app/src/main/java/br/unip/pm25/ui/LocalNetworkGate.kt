@@ -65,7 +65,7 @@ fun LocalNetworkGate(apiUrl: String, content: @Composable () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Acesso à rede local", style = MaterialTheme.typography.titleLarge)
+            Text("Acesso à rede local", style = MaterialTheme.typography.titleLarge, modifier = Modifier.asHeading())
             Text(
                 "O servidor configurado (${hostOf(apiUrl)}) está na rede local. A partir do Android 17, " +
                     "o app só consegue falar com ele com a sua permissão. O app não procura outros " +
