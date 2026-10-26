@@ -227,6 +227,30 @@ def test_estacao_sem_dados_no_periodo(tmp_path, dbfile, capsys):
     assert "no-01: nenhuma hora pareada" in capsys.readouterr().out
 
 
+def test_horas_suspeitas_ficam_fora_do_pareamento_ou_entram_marcadas(tmp_path):
+    """Conferência da regra contra a estação: com --include-suspect as horas suspeitas voltam, marcadas e separadas."""
+    values = [12.0] * 10 + [0.0] * 2 + [12.0] * 8                      # duas horas com o sensor sem partículas
+    path = str(tmp_path / "pm25.db")
+    conn = db.connect(path)
+    db.init_db(conn)
+    insert_node(conn, "no-01", values, [60.0] * 20)
+    conn.close()
+    csv = csv_file(tmp_path, [qualar_line(h, 10 if h in (10, 11) else 12, "end") for h in range(20)])
+
+    rc, report, out = run_main(tmp_path, "--cetesb", csv, "--db", path)
+    node = report["nos"]["no-01"]
+    assert rc == 0 and node["total"]["n"] == 18 and "suspeitas" not in node      # as suspeitas nem chegam a parear
+    assert report["regras"]["horas_suspeitas_incluidas"] is False
+
+    rc, report, out = run_main(tmp_path, "--cetesb", csv, "--db", path, "--include-suspect")
+    node = report["nos"]["no-01"]
+    assert node["total"]["n"] == 20 and report["regras"]["horas_suspeitas_incluidas"] is True
+    assert node["suspeitas"]["n"] == 2 and node["suspeitas"]["vies"] == -10.0     # o nó lê 0 onde a estação lê 10
+    assert node["demais"]["n"] == 18 and node["demais"]["vies"] == 0.0
+    pairs = pd.read_csv(out / "comparacao_cetesb_pares.csv")
+    assert list(pairs.columns) == cc.PAIR_COLUMNS and int(pairs["suspeita"].sum()) == 2
+
+
 def test_arquivos_ausentes_retornam_1(tmp_path):
     assert cc.main(["--cetesb", str(tmp_path / "x.csv"), "--db", str(tmp_path / "x.db")]) == 1
 

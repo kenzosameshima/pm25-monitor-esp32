@@ -82,6 +82,27 @@ def test_dia_completo(conn, tmp_path):
     assert op["lacunas_min"] == {"comunicacao": 0, "aquisicao": 0, "reinicio": 0, "bordas": 0, "total": 0}
 
 
+def test_horas_suspeitas_saem_das_estatisticas_e_sao_contadas_no_relatorio(conn, tmp_path):
+    insert(conn, "no-01", plan(pm25=lambda m: 0.0 if 600 <= m < 720 else 10.0))     # duas horas com o sensor sem partículas
+    block = node(conn, tmp_path)
+    pm = block["pm25"]
+    assert (pm["horas_validas"], pm["horas_suspeitas"], pm["horas_esperadas"]) == (22, 2, 24)
+    assert pm["media"] == 10.0 and pm["dias_validos_24h"] == 1
+    assert block["operacional"]["minutos_com_leitura"] == 1440                      # a coleta continua completa
+
+
+def test_analise_de_sensibilidade_mantem_as_horas_suspeitas(conn, tmp_path):
+    insert(conn, "no-01", plan(pm25=lambda m: 0.0 if 600 <= m < 720 else 10.0))
+    db_file = conn.execute("PRAGMA database_list").fetchone()["file"]
+    report = pmx.run(db_file, DAY, DAY, tmp_path / "saida", None, freeze=False, include_suspect=True)
+    pm = report["nos"]["no-01"]["pm25"]
+    assert (pm["horas_validas"], pm["horas_suspeitas"]) == (24, 2)                 # a regra ainda conta as marcadas
+    assert pm["media"] == pytest.approx(22 * 10.0 / 24, abs=1e-4)
+    rules = report["regras"]["hora_suspeita"]
+    assert rules == {"fracao_de_leituras_abaixo": 0.25, "pm25_abaixo_ug_m3": 0.5, "ou_media_abaixo_ug_m3": 1.0,
+                     "incluidas_nas_estatisticas": True}
+
+
 def test_lacuna_de_aquisicao_minutos_sem_leitura_e_sem_salto_de_seq(conn, tmp_path):
     insert(conn, "no-01", plan(acq=range(600, 630)))  # 30 minutos mudos
     op = node(conn, tmp_path)["operacional"]

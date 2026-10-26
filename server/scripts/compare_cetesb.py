@@ -52,7 +52,7 @@ from scripts.period_metrics import BRT, period_bounds
 
 HUMIDITY_LIMIT = HIGH_HUMIDITY  # % de umidade relativa; acima disso o PMS5003 tende a superestimar
 MIN_PAIRS = 24                  # abaixo disso a correlação e a regressão não são reportadas como confiáveis
-PAIR_COLUMNS = ["hora_utc", "device_id", "pm25_no", "pm25_cetesb", "umidade"]
+PAIR_COLUMNS = ["hora_utc", "device_id", "pm25_no", "pm25_cetesb", "umidade", "suspeita"]
 _DATE = re.compile(r"\d{2}/\d{2}/\d{4}$")
 # Rótulos do cabeçalho do QUALAR (sem acento e em minúsculas) e a chave usada no relatório.
 _HEADER_KEYS = {"nome da estacao": "estacao", "codigo da estacao": "codigo_estacao"}
@@ -170,21 +170,26 @@ def by_humidity(pairs: pd.DataFrame, limit: float) -> dict:
 
 # ---------------------------------------------------------------- pareamento e execução
 
-def paired(conn, device: str, ref: pd.Series, start: datetime, end: datetime, min_samples: int) -> pd.DataFrame:
-    """Horas do período com média válida no nó e valor na CETESB, nas colunas de PAIR_COLUMNS."""
-    hourly = hourly_series(conn, device, min_samples)
+def paired(conn, device: str, ref: pd.Series, start: datetime, end: datetime, min_samples: int,
+           drop_suspect: bool = True) -> pd.DataFrame:
+    """Horas do período com média válida no nó e valor na CETESB, nas colunas de PAIR_COLUMNS.
+
+    As horas suspeitas (sensor sem partículas) não têm média e ficam de fora; com `drop_suspect` falso entram,
+    com `suspeita` verdadeira, para conferir a regra contra a estação."""
+    hourly = hourly_series(conn, device, min_samples, drop_suspect=drop_suspect)
     if hourly.empty:
         return pd.DataFrame(columns=PAIR_COLUMNS)
     hourly = hourly[(hourly.index >= start) & (hourly.index < end)]
-    df = pd.DataFrame({"pm25_no": hourly["pm25"], "umidade": hourly["humidity"]}).join(
-        ref.rename("pm25_cetesb"), how="inner")
+    df = pd.DataFrame({"pm25_no": hourly["pm25"], "umidade": hourly["humidity"],
+                       "suspeita": hourly["suspeita"].astype(bool)}).join(ref.rename("pm25_cetesb"), how="inner")
     df = df.dropna(subset=["pm25_no", "pm25_cetesb"])
     df.index.name = "hora_utc"
     return df.reset_index().assign(device_id=device)[PAIR_COLUMNS]
 
 
 def run(db_path: str, cetesb_path: str, out_dir: Path, start: date | None, end: date | None,
-        devices: list[str] | None, hour_label: str, humidity_limit: float, min_samples: int) -> dict:
+        devices: list[str] | None, hour_label: str, humidity_limit: float, min_samples: int,
+        include_suspect: bool = False) -> dict:
     ref, info = read_cetesb(cetesb_path, hour_label)
     first = ref.index.min().astimezone(BRT).date()
     last = ref.index.max().astimezone(BRT).date()
@@ -196,12 +201,17 @@ def run(db_path: str, cetesb_path: str, out_dir: Path, start: date | None, end: 
         ids = devices if devices is not None else analytics.production_devices(conn)
         report: dict = {"periodo": {"inicio": start.isoformat(), "fim": end.isoformat(), "fuso": "America/Sao_Paulo (UTC-3)"},
                         "cetesb": info, "regras": {"min_leituras_por_hora": min_samples, "limite_umidade_pct": humidity_limit,
-                                                   "min_pares": MIN_PAIRS}, "nos": {}}
+                                                   "min_pares": MIN_PAIRS,
+                                                   "horas_suspeitas_incluidas": include_suspect}, "nos": {}}
         frames = []
         for device in ids:
-            df = paired(conn, device, ref, start_utc, end_utc, min_samples)
+            df = paired(conn, device, ref, start_utc, end_utc, min_samples, drop_suspect=not include_suspect)
             frames.append(df)
             report["nos"][device] = by_humidity(df, humidity_limit)
+            if include_suspect:   # a conferência da regra: as horas suspeitas contra as demais
+                flag = df["suspeita"].astype(bool)
+                report["nos"][device]["suspeitas"] = agreement(df.loc[flag, "pm25_no"], df.loc[flag, "pm25_cetesb"])
+                report["nos"][device]["demais"] = agreement(df.loc[~flag, "pm25_no"], df.loc[~flag, "pm25_cetesb"])
     finally:
         conn.close()
 
@@ -227,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="o rótulo HH:00 da CETESB marca o fim (padrão) ou o início da hora")
     ap.add_argument("--humidity-limit", type=float, default=HUMIDITY_LIMIT, help="umidade (%%) que separa os dois grupos")
     ap.add_argument("--min-samples", type=int, default=MIN_SAMPLES, help="leituras por hora para a hora do nó valer")
+    ap.add_argument("--include-suspect", action="store_true",
+                    help="inclui as horas suspeitas (sensor sem partículas), marcadas, e compara-as com as demais")
     args = ap.parse_args(argv)
 
     db_path = args.db or get_settings().db_path
@@ -239,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = run(db_path, args.cetesb, Path(args.out_dir), args.start, args.end,
                      args.devices.split(",") if args.devices else None, args.hour_label,
-                     args.humidity_limit, args.min_samples)
+                     args.humidity_limit, args.min_samples, args.include_suspect)
     except ValueError as exc:
         print(f"Erro: {exc}", file=sys.stderr)
         return 2
