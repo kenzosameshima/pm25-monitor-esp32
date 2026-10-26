@@ -51,6 +51,7 @@ import br.unip.pm25.ui.detail.ChartLegend
 import br.unip.pm25.ui.detail.ChartSeries
 import br.unip.pm25.ui.detail.HourlyChart
 import br.unip.pm25.ui.format
+import br.unip.pm25.ui.formatWith
 import br.unip.pm25.ui.theme.Pm25Theme
 import java.time.Instant
 
@@ -142,7 +143,7 @@ private fun PendingHourCard(data: ForecastResponse, serverNow: Instant) {
 private fun PredictionRow(label: String, value: Double?) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        Text("${value.format()} µg/m³", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(value.formatWith("µg/m³"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         AirQuality.of(value)?.let {
             Box(Modifier.padding(start = 12.dp)) { QualityChip(it) }
         }

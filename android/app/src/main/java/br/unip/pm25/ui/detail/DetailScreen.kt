@@ -41,6 +41,7 @@ import br.unip.pm25.ui.CLOCK
 import br.unip.pm25.ui.DAY_CLOCK
 import br.unip.pm25.ui.ErrorMessage
 import br.unip.pm25.ui.Metric
+import br.unip.pm25.ui.NO_VALUE
 import br.unip.pm25.ui.StaleBanner
 import br.unip.pm25.ui.format
 import br.unip.pm25.ui.theme.Pm25Theme
@@ -148,7 +149,7 @@ private fun HistoryCard(series: HourlySeries, range: HistoryRange) {
                 timeFormat, description)
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 Metric("Média", summary.mean.format())
-                Metric("Máxima", summary.max?.let { "${it.pm25.format()} às ${DAY_CLOCK.format(it.hour)}" } ?: "—")
+                Metric("Máxima", summary.max?.let { "${it.pm25.format()} às ${DAY_CLOCK.format(it.hour)}" } ?: NO_VALUE)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 Metric("Horas válidas", "${summary.validHours} de ${summary.totalHours}")

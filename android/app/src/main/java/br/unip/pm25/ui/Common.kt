@@ -16,6 +16,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import br.unip.pm25.data.LoadError
 import br.unip.pm25.domain.AirQuality
@@ -39,8 +42,15 @@ fun formatMoment(moment: Instant, now: Instant = Instant.now()): String {
     return (if (sameDay) CLOCK else DAY_CLOCK).format(moment)
 }
 
+/** O que aparece no lugar de um valor que o servidor não mandou. */
+const val NO_VALUE = "—"
+
 fun Double?.format(decimals: Int = 1): String =
-    if (this == null) "—" else String.format(PT_BR, "%.${decimals}f", this)
+    if (this == null) NO_VALUE else String.format(PT_BR, "%.${decimals}f", this)
+
+/** O valor com a unidade, ou só `NO_VALUE` se não há valor: "— °C" parece um dado e é lido como se fosse. */
+fun Double?.formatWith(unit: String, decimals: Int = 1, gap: String = " "): String =
+    if (this == null) NO_VALUE else format(decimals) + gap + unit
 
 fun LoadError.message(): String = when (this) {
     LoadError.Network -> "Sem conexão com o servidor. Confira a internet e se a API está no ar."
@@ -86,9 +96,15 @@ fun ErrorPanel(error: LoadError, onRetry: () -> Unit) {
     ErrorMessage(error, onRetry, Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
 }
 
+/** Rótulo e valor são lidos juntos pelo leitor de tela; um valor ausente é lido como "sem dado", não como um traço. */
 @Composable
 fun Metric(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier) {
+    val reading = if (value == NO_VALUE) {
+        Modifier.clearAndSetSemantics { contentDescription = "$label: sem dado" }
+    } else {
+        Modifier.semantics(mergeDescendants = true) {}
+    }
+    Column(modifier.then(reading)) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.bodyMedium)
     }

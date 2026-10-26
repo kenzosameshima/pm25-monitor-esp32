@@ -55,6 +55,7 @@ import br.unip.pm25.ui.StaleBanner
 import br.unip.pm25.ui.rememberAlertsPrompt
 import br.unip.pm25.ui.format
 import br.unip.pm25.ui.formatMoment
+import br.unip.pm25.ui.formatWith
 import br.unip.pm25.ui.theme.Pm25Theme
 import kotlinx.coroutines.delay
 import java.time.Instant
@@ -174,7 +175,9 @@ private fun LatestReadingContent(latest: LatestReading, serverNow: Instant) {
         Column {
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(latest.pm25.format(), style = MaterialTheme.typography.displaySmall)
-                Text(" µg/m³", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 6.dp))
+                if (latest.pm25 != null) {
+                    Text(" µg/m³", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 6.dp))
+                }
             }
             Text("PM2,5 · leitura ${formatAge(readingAge(latest.ts, serverNow))}",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -183,9 +186,9 @@ private fun LatestReadingContent(latest: LatestReading, serverNow: Instant) {
         AirQuality.of(latest.pm25)?.let { QualityChip(it) }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-        Metric("Temperatura", "${latest.temperature.format()} °C")
-        Metric("Umidade", "${latest.humidity.format(0)}%")
-        Metric("PM10", "${latest.pm10.format()} µg/m³")
+        Metric("Temperatura", latest.temperature.formatWith("°C"))
+        Metric("Umidade", latest.humidity.formatWith("%", decimals = 0, gap = ""))
+        Metric("PM10", latest.pm10.formatWith("µg/m³"))
     }
     if (latest.quality != "ok") {
         Text("O servidor marcou esta leitura como implausível (${latest.quality}).",
