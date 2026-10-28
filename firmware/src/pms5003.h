@@ -43,7 +43,7 @@ class PmsParser {
     if (pos_ < kFrameLen) return false;
     pos_ = 0;
     uint16_t sum = 0;
-    for (int i = 0; i < kFrameLen - 2; ++i) sum += buf_[i];
+    for (int i = 0; i < kFrameLen - 2; ++i) sum = (uint16_t)(sum + buf_[i]);
     if (sum != word(30)) {
       errors_++;
       return false;

@@ -99,7 +99,7 @@ int64_t lastPmsMinute = -1;  // minuto de relógio da última leitura da UART (-
 
 // ---------------- Utilidades ----------------
 static bool timeValid() { return time(nullptr) >= MIN_VALID_EPOCH; }
-static uint32_t uptimeSeconds() { return (uint32_t)(esp_timer_get_time() / 1000000ULL); }
+static uint32_t uptimeSeconds() { return (uint32_t)((uint64_t)esp_timer_get_time() / 1000000ULL); }
 static uint32_t pendingRecords() { return (pendingSize - pendingOffset) / sizeof(Reading); }
 static bool isSuccess(int code) { return code == 200 || code == 201; }
 
@@ -276,7 +276,7 @@ static int postReadings(const Reading* rs, size_t n) {
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", "Bearer " DEVICE_TOKEN);
-  int code = http.POST((uint8_t*)body.data(), body.size());
+  int code = http.POST((uint8_t*)&body[0], body.size());
   if (!isSuccess(code)) {
     String detail = code > 0 ? http.getString() : HTTPClient::errorToString(code);
     Serial.printf("[http] %d %s\n", code, detail.c_str());

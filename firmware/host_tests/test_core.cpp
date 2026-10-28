@@ -20,14 +20,14 @@ static std::vector<uint8_t> frame(uint16_t pm25_cf1, uint16_t pm25_atm, bool cor
   data[5] = 8;          // PM10 atm
   std::vector<uint8_t> f = {0x42, 0x4D, 0x00, 28};
   for (uint16_t v : data) {
-    f.push_back(v >> 8);
-    f.push_back(v & 0xFF);
+    f.push_back(static_cast<uint8_t>(v >> 8));
+    f.push_back(static_cast<uint8_t>(v & 0xFF));
   }
   uint16_t sum = 0;
   for (uint8_t b : f) sum += b;
   if (corrupt) sum++;
-  f.push_back(sum >> 8);
-  f.push_back(sum & 0xFF);
+  f.push_back(static_cast<uint8_t>(sum >> 8));
+  f.push_back(static_cast<uint8_t>(sum & 0xFF));
   assert(f.size() == 32);
   return f;
 }

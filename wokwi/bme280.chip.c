@@ -200,7 +200,7 @@ static float compensate_pressure_hpa(int32_t adc_P, int32_t t_fine)
     var2 = ((int64_t)cal.P8 * var4) / 524288;
     var4 = ((var4 + var1 + var2) / 256) + ((int64_t)cal.P7 * 16);
 
-    return (float)(var4 / 256.0 / 100.0);
+    return (float)((double)var4 / 256.0 / 100.0);
 }
 
 static float compensate_humidity(int32_t adc_H, int32_t t_fine)
@@ -501,6 +501,9 @@ static void timer_callback(void *user_data)
 // ============================================================================
 // Chip initialization
 // ============================================================================
+
+// Ponto de entrada chamado pelo Wokwi; o protótipo evita o aviso -Wmissing-prototypes.
+void chip_init(void);
 
 void chip_init(void)
 {
