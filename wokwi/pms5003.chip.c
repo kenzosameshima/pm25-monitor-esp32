@@ -204,6 +204,9 @@ static void timer_callback(
 // Chip initialization
 // ============================================================================
 
+// Ponto de entrada chamado pelo Wokwi; o protótipo evita o aviso -Wmissing-prototypes.
+void chip_init(void);
+
 void chip_init(void)
 {
     pms5003_state_t *chip =

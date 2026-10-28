@@ -1,6 +1,6 @@
 # Sistema de coleta de PM2,5 — TCC (UNIP, 2026)
 
-Este repositório reúne a cadeia de coleta e o painel do projeto: o firmware dos nós sensores (ESP32 + PMS5003 + BME280 ou DHT22), a API de ingestão, o banco SQLite, o backup diário, o dashboard em Streamlit, as rotas de leitura para o app de consulta (com alertas no celular), um simulador de sensor e os chips simulados do Wokwi, para testar tudo sem hardware. A avaliação dos modelos de previsão e o job horário que grava as previsões no mesmo banco também estão aqui; o modelo do TCC depende das semanas de coleta real.
+Este repositório reúne a cadeia de coleta e o painel do projeto: o firmware dos nós sensores (ESP32 + PMS5003 + BME280), a API de ingestão, o banco SQLite, o backup diário, o dashboard em Streamlit, as rotas de leitura para o app de consulta (com alertas no celular), um simulador de sensor e os chips simulados do Wokwi, para testar tudo sem hardware. A avaliação dos modelos de previsão e o job horário que grava as previsões no mesmo banco também estão aqui; o modelo do TCC depende das semanas de coleta real.
 
 ```
 nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──▶ SQLite (WAL) ──▶ backup diário
@@ -191,9 +191,9 @@ O dashboard lê o banco em modo somente leitura e tem três abas. Status mostra,
 | Pino 5 (TX) | GPIO16 (RX2) |
 | Pinos 3 (SET) e 6 (RESET) | Desconectados: o sensor opera continuamente |
 
-O PMS5003 precisa de 5 V na alimentação, mas seus sinais são de 3,3 V e ligam direto no ESP32. O BME280 vai em 3,3 V, com SDA no GPIO21 e SCL no GPIO22; o DHT22 vai em 3,3 V, com o dado no GPIO4 e resistor de pull-up de 10 kΩ, se o módulo não tiver um. Os pinos podem ser trocados em `config.h`.
+O PMS5003 precisa de 5 V na alimentação, mas seus sinais são de 3,3 V e ligam direto no ESP32. O BME280 vai em 3,3 V, com SDA no GPIO21 e SCL no GPIO22. Os pinos podem ser trocados em `config.h`.
 
-Com o PlatformIO (VS Code), copie `firmware/src/config.example.h` para `firmware/src/config.h`, preencha Wi-Fi, URL da API, `DEVICE_ID`, token e o sensor de temperatura e umidade usado, e rode:
+Com o PlatformIO (VS Code), copie `firmware/src/config.example.h` para `firmware/src/config.h`, preencha Wi-Fi, URL da API, `DEVICE_ID` e token, e rode:
 
 ```bash
 cd firmware
@@ -201,18 +201,16 @@ pio run -t upload
 pio device monitor
 ```
 
-Na Arduino IDE, crie uma pasta `pm25_node` com um arquivo `pm25_node.ino` vazio, copie para ela `main.cpp`, `pms5003.h`, `reading.h` e o seu `config.h`, instale as bibliotecas "Adafruit BME280 Library" e "DHT sensor library" e compile para a placa "ESP32 Dev Module".
+Na Arduino IDE, crie uma pasta `pm25_node` com um arquivo `pm25_node.ino` vazio, copie para ela `main.cpp`, `pms5003.h`, `reading.h` e o seu `config.h`, instale a biblioteca "Adafruit BME280 Library" e compile para a placa "ESP32 Dev Module".
 
 Depois de ligado, o nó descarta os primeiros 30 segundos do PMS5003 (tempo de estabilização da ventoinha), espera o relógio sincronizar por NTP e passa a fechar uma leitura a cada minuto de relógio. Com HTTPS o envio só começa depois do NTP (sem hora válida o certificado não é aceito), e uma falha de conexão ou de handshake TLS vale como falha de rede: o lote continua no buffer e é reenviado com espera crescente. Cada tentativa HTTPS espera no máximo 15 s pela conexão, 20 s pelo handshake e 8 s pela resposta, abaixo do watchdog de 90 s. O monitor serial mostra uma linha por minuto, por exemplo `[leitura] seq=41 pm2.5=13.2 quadros=58 T=23.9 UR=62.4 rssi=-64 pendentes=0`. O que a API não confirmar vai para um buffer em LittleFS com capacidade para cinco dias, que sobrevive a reinícios e quedas de energia. Se o Wi-Fi ficar 15 minutos fora, o ESP32 reinicia sozinho, e um watchdog de 90 segundos cobre travamentos.
 
-O firmware foi compilado sem avisos (`-Wall`) nas quatro combinações dos cores Arduino do ESP32 2.0.17 e 3.3.12 com BME280 e DHT22 (inclusive com HTTPS e a CA raiz embutida). Para o core 3.x no PlatformIO, a plataforma testada foi `https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312-1/platform-espressif32.zip`; no Windows, rode o `pio` do PowerShell, não do Git Bash (o instalador do core 3.x recusa o MSYS). Uso de memória, em bytes (RAM estática / flash), antes e depois do HTTPS:
+O firmware foi compilado sem avisos (`-Wall`) nos cores Arduino do ESP32 2.0.17 e 3.3.12 (inclusive com HTTPS e a CA raiz embutida). Para o core 3.x no PlatformIO, a plataforma testada foi `https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312-1/platform-espressif32.zip`; no Windows, rode o `pio` do PowerShell, não do Git Bash (o instalador do core 3.x recusa o MSYS). Uso de memória, em bytes (RAM estática / flash), antes e depois do HTTPS:
 
 | Combinação | Antes | Depois |
 |---|---|---|
 | Core 2.0.17, BME280 | 50 808 / 1 005 265 | 50 808 / 1 005 573 |
-| Core 2.0.17, DHT22 | 50 312 / 979 241 | 50 312 / 979 521 |
 | Core 3.3.12, BME280 | 54 120 / 1 144 780 | 54 120 / 1 145 032 |
-| Core 3.3.12, DHT22 | 54 056 / 1 139 320 | 54 056 / 1 139 564 |
 
 A RAM estática não muda, e a flash cresce menos de 310 bytes; o buffer de cinco dias fica em LittleFS e o lote de 60 leituras segue sendo um vetor estático, então ambos continuam cabendo. As duas medidas "antes" usam o mesmo `config.h` da "depois", com a CA embutida. O que não foi medido, por falta de hardware, é o pico de memória dinâmica durante o handshake TLS (da ordem de dezenas de KiB de heap, liberados ao fim de cada envio): ao testar o nó, confira a linha `[tls] ... heap livre` do monitor serial. Com `https://` na `API_URL` e sem `API_ROOT_CA`, o firmware não compila, a menos que se defina `API_TLS_INSECURE_TEST` (só para bancada). A leitura dos quadros do sensor, a média do minuto e a montagem do JSON têm testes que rodam no computador:
 

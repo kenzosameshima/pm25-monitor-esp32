@@ -21,8 +21,6 @@
 // Mesma ligação dos chips simulados: PMS5003 na UART2 e BME280 em 0x76.
 #define PMS_RX_PIN 16
 #define PMS_TX_PIN 17
-#define TH_SENSOR_BME280
 #define BME280_ADDR 0x76
 #define I2C_SDA_PIN 21
 #define I2C_SCL_PIN 22
-#define DHT_PIN 4

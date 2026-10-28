@@ -16,7 +16,7 @@ struct Reading {
   uint32_t uptime_s;
   float pm1, pm25, pm10, pm25_cf1;
   float temperature, humidity;  // NAN quando indisponível
-  float pressure;               // hPa; NAN quando indisponível (o DHT22 não mede)
+  float pressure;               // hPa; NAN quando indisponível
   int16_t rssi;                 // RSSI_NONE quando indisponível
   uint16_t samples;             // quadros do PMS5003 na média
 };
