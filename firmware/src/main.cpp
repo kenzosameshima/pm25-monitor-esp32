@@ -1,4 +1,4 @@
-// Firmware do nó sensor de PM2,5: ESP32 + PMS5003 + BME280 ou DHT22.
+// Firmware do nó sensor de PM2,5: ESP32 + PMS5003 + BME280.
 //
 // A cada minuto de relógio (UTC), fecha a média dos quadros do PMS5003, lê temperatura e umidade
 // e envia a leitura à API por HTTP POST (HTTPS, com validação do certificado, quando a API_URL
@@ -34,19 +34,10 @@
 #define FW_VERSION "build " __DATE__ " " __TIME__
 #endif
 
-#if defined(TH_SENSOR_BME280) && defined(TH_SENSOR_DHT22)
-#error "Escolha apenas um sensor de temperatura e umidade em config.h"
-#elif defined(TH_SENSOR_BME280)
 #include <Adafruit_BME280.h>
 #include <Wire.h>
 Adafruit_BME280 bme;
 bool bmeOk = false;
-#elif defined(TH_SENSOR_DHT22)
-#include <DHT.h>
-DHT dht(DHT_PIN, DHT22);
-#else
-#error "Defina TH_SENSOR_BME280 ou TH_SENSOR_DHT22 em config.h"
-#endif
 
 // ---------------- Parâmetros ----------------
 static const uint32_t PMS_WARMUP_MS = 30000;        // ventoinha estabilizando após ligar
@@ -141,26 +132,16 @@ static void setupWatchdog() {
 
 // ---------------- Temperatura, umidade e pressão ----------------
 static void initTemperatureHumidity() {
-#if defined(TH_SENSOR_BME280)
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   bmeOk = bme.begin(BME280_ADDR, &Wire);
   if (!bmeOk) Serial.println("[bme280] não encontrado: confira a fiação e o endereço (0x76/0x77)");
-#else
-  dht.begin();
-#endif
 }
 
 static void readEnvironment(float& t, float& h, float& p) {
-#if defined(TH_SENSOR_BME280)
   if (!bmeOk) bmeOk = bme.begin(BME280_ADDR, &Wire);
   t = bmeOk ? bme.readTemperature() : NAN;
   h = bmeOk ? bme.readHumidity() : NAN;
   p = bmeOk ? bme.readPressure() / 100.0F : NAN;  // Pa -> hPa
-#else
-  t = dht.readTemperature();  // NAN em caso de falha
-  h = dht.readHumidity();
-  p = NAN;  // o DHT22 não mede pressão
-#endif
 }
 
 // ---------------- Buffer persistente (LittleFS) ----------------

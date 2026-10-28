@@ -68,11 +68,7 @@
 #define PMS_RX_PIN 16  // RX do ESP32 <- TX do PMS5003 (pino 5 do sensor)
 #define PMS_TX_PIN 17  // TX do ESP32 -> RX do PMS5003 (pino 4 do sensor)
 
-// ---- Temperatura e umidade: deixe apenas UMA das opções ----
-#define TH_SENSOR_BME280
-// #define TH_SENSOR_DHT22
-
+// ---- BME280 (temperatura, umidade e pressão, por I2C) ----
 #define BME280_ADDR 0x76  // alguns módulos usam 0x77
 #define I2C_SDA_PIN 21
 #define I2C_SCL_PIN 22
-#define DHT_PIN 4
