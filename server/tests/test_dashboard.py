@@ -217,7 +217,7 @@ def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     assert len(at.metric) == 4
-    assert [e.label for e in at.expander] == ["Como interpretar os indicadores"]   # o cartão não tem expansor próprio
+    assert "Última leitura recebida" not in [e.label for e in at.expander]       # o cartão não tem expansor próprio
 
 
 def aq_scales(at) -> list[str]:
@@ -384,29 +384,67 @@ def add_dead_hours(path: Path, device: str, hours_ago: list[int]) -> None:
     conn.close()
 
 
-def test_serie_horaria_conta_as_horas_suspeitas_que_ficaram_de_fora(app_env):
+HOURS_DETAILS = "Critérios e detalhamento por sensor"
+
+
+def hours_details(at) -> str:
+    """O texto do expansor único da série horária, com a regra das horas, o detalhe por sensor e o critério das suspeitas."""
+    boxes = [e for e in at.expander if e.label == HOURS_DETAILS]
+    assert len(boxes) == 1, [e.label for e in at.expander]
+    return " ".join(c.value for c in boxes[0].caption)
+
+
+def visible_captions(at) -> list[str]:
+    """Os avisos que aparecem sem abrir nenhum expansor."""
+    inside = {c.value for e in at.expander for c in e.caption}
+    return [c.value for c in at.caption if c.value not in inside]
+
+
+def test_serie_horaria_diz_as_horas_sem_media_uma_vez_e_leva_o_resto_num_expansor_so(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     add_dead_hours(app_env, "no-01", [10])
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert any("1 hora suspeita ficou de fora (no-01: 1)" in c.value for c in at.caption)
+    visible = visible_captions(at)
+    summary = [v for v in visible if v.startswith("Horas sem média")]
+    assert len(summary) == 1 and "1 suspeita" in summary[0]
+    assert [v for v in visible if "suspeita" in v] == summary          # a contagem de suspeitas não se repete
+    assert not any("ficou de fora" in v or "ficaram de fora" in v for v in visible)
+    assert not any("minutos de leitura" in v for v in visible)         # a regra dos 45 minutos vai para o expansor
 
 
-def test_aviso_das_horas_suspeitas_nao_afirma_o_que_o_ar_faz_e_leva_os_criterios_num_expansor(app_env):
+def test_expansor_da_serie_horaria_traz_a_regra_das_horas_e_o_criterio_das_suspeitas(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     add_dead_hours(app_env, "no-01", [10])
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-
-    notes = [c.value for c in at.caption if "hora suspeita ficou de fora" in c.value]
-    assert len(notes) == 1 and "abaixo de" not in notes[0]       # o aviso é curto: os limites ficam no expansor
+    text = hours_details(at)
+    assert "45 minutos de leitura (75%)" in text                                        # a regra das médias horárias
+    assert "25%" in text and "0,5 µg/m³" in text and "1,0 µg/m³" in text               # a regra das suspeitas
+    assert "falha do sensor" in text and "ar muito limpo" in text and "CETESB" in text  # a causa não está decidida
     assert not any("o que o ar não faz" in c.value for c in at.caption)
 
-    criteria = [e for e in at.expander if e.label == "Critério das horas suspeitas"]
-    assert len(criteria) == 1
-    text = " ".join(c.value for c in criteria[0].caption)
-    assert "25%" in text and "0,5 µg/m³" in text and "1,0 µg/m³" in text        # a regra aplicada
-    assert "falha do sensor" in text and "ar muito limpo" in text and "CETESB" in text  # a causa não está decidida
+
+def test_expansor_da_serie_horaria_detalha_as_horas_sem_media_por_sensor(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    add_dead_hours(app_env, "no-01", [10])
+    add_dead_hours(app_env, "no-02", [12, 11])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    text = hours_details(at)
+    assert re.search(r"no-01:\*\* [^-]*1 suspeita", text)             # cada sensor, a sua contagem
+    assert re.search(r"no-02:\*\* [^-]*2 suspeitas", text)
+    summary = next(v for v in visible_captions(at) if v.startswith("Horas sem média"))
+    assert "3 suspeitas" in summary and "soma dos sensores" in summary    # as contagens juntam horas de sensores diferentes
+
+
+def test_detalhe_por_sensor_so_chama_de_suspeita_o_no_que_tem_horas_suspeitas(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    add_dead_hours(app_env, "no-02", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    lines = {m.group(1): m.group(2) for m in re.finditer(r"(no-0\d):\*\* ([^-]*)", hours_details(at))}
+    assert "suspeita" in lines["no-02"] and "suspeita" not in lines["no-01"]
 
 
 def trend_head(at) -> str:
@@ -502,23 +540,6 @@ def test_cabecalho_do_grafico_avisa_quando_nenhum_no_enviou(app_env):
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     assert "no-01, no-02 · sem leituras neste período" in trend_head(at)
-
-
-def test_aviso_das_horas_suspeitas_separa_a_contagem_por_no(app_env):
-    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
-    add_dead_hours(app_env, "no-01", [10])
-    add_dead_hours(app_env, "no-02", [12, 11])
-    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
-    assert not at.exception, at.exception
-    assert any("3 horas suspeitas ficaram de fora (no-01: 1, no-02: 2)" in c.value for c in at.caption)
-
-
-def test_aviso_das_horas_suspeitas_so_cita_os_nos_com_horas_suspeitas(app_env):
-    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
-    add_dead_hours(app_env, "no-02", [10])
-    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
-    assert not at.exception, at.exception
-    assert any("1 hora suspeita ficou de fora (no-02: 1)" in c.value for c in at.caption)
 
 
 def test_sem_horas_suspeitas_a_serie_horaria_nao_menciona_o_assunto(app_env):

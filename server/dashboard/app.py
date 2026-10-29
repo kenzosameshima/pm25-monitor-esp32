@@ -163,20 +163,6 @@ def load_hourly(start: datetime, end: datetime, devices: tuple, only_ok: bool) -
     return hourly.rename(columns={"n": "minutos"})
 
 
-def suspect_hours_by_node(hourly: pd.DataFrame) -> dict[str, int]:
-    """Quantas horas suspeitas cada nó tem na série horária, só dos nós que têm alguma."""
-    counts = hourly[hourly["suspeita"].astype(bool)].groupby("device_id").size()
-    return {str(device): int(n) for device, n in counts.items()}
-
-
-def suspect_note(by_node: dict[str, int]) -> str:
-    """Aviso de quantas horas a regra de sensor sem partículas deixou de fora da série horária, por nó."""
-    hours = sum(by_node.values())
-    verb = "hora suspeita ficou" if hours == 1 else "horas suspeitas ficaram"
-    nodes = ", ".join(f"{device}: {n}" for device, n in sorted(by_node.items()))
-    return f"{hours} {verb} de fora ({nodes}). O sensor quase não viu partículas nessas horas."
-
-
 def suspect_criteria() -> str:
     """A regra das horas suspeitas e o que ela não decide, para quem quer saber por que uma hora ficou de fora."""
     low = f"{analytics.SUSPECT_LOW_PM25:.1f}".replace(".", ",")
@@ -187,10 +173,18 @@ def suspect_criteria() -> str:
             "ainda precisa ser conferida contra a estação da CETESB.")
 
 
-def show_suspect_note(by_node: dict[str, int]) -> None:
-    st.caption(suspect_note(by_node))
-    with st.expander("Critério das horas suspeitas"):
-        st.caption(suspect_criteria())
+def show_hour_notes(exclusions: pd.DataFrame) -> None:
+    """O resumo das horas sem média e, num expansor só, a regra das médias, o detalhe por sensor e o critério das
+    suspeitas: cada número aparece uma vez, e o que explica o número fica a um clique."""
+    if not exclusions.empty:
+        st.caption(exclusion_note(exclusions))
+    with st.expander("Critérios e detalhamento por sensor"):
+        st.caption(f"A média de uma hora só vale com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura "
+                   f"({MIN_READINGS_PER_HOUR / 60:.0%}).")
+        if not exclusions.empty:
+            st.caption(exclusion_details(exclusions))
+            if (exclusions["causa"] == analytics.SUSPECT_HOUR).any():
+                st.caption(suspect_criteria())
 
 
 @st.cache_data(ttl=60)
@@ -356,14 +350,27 @@ def chart_description(data: pd.DataFrame, x: str, y: str, title: str, names: lis
             f"{data[x].max():%d/%m %H:%M}; valores de {decimal_comma(data[y].min())} a {decimal_comma(data[y].max())}.")
 
 
-def exclusion_note(exclusions: pd.DataFrame) -> str:
-    """Quantas horas ficaram sem média em cada causa, para quem quer o número além da faixa colorida."""
+def cause_counts(exclusions: pd.DataFrame) -> str:
+    """As horas de `exclusions` contadas por causa: "96 sem leituras, 9 com poucas leituras e 54 suspeitas"."""
     count = exclusions["causa"].value_counts()
     wording = {analytics.NO_READINGS: lambda n: f"{n} sem leituras",
                analytics.FEW_READINGS: lambda n: f"{n} com poucas leituras",
                analytics.SUSPECT_HOUR: lambda n: f"{n} {'suspeita' if n == 1 else 'suspeitas'}"}
     parts = [say(int(count[cause])) for cause, say in wording.items() if count.get(cause, 0)]
-    return "Horas sem média: " + (parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " e " + parts[-1]) + "."
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " e " + parts[-1]
+
+
+def exclusion_note(exclusions: pd.DataFrame) -> str:
+    """Quantas horas ficaram sem média em cada causa, para quem quer o número além da faixa colorida. Com mais de um
+    sensor, são horas de sensores diferentes somadas, e o texto diz isso."""
+    label = "Horas sem média (soma dos sensores)" if exclusions["device_id"].nunique() > 1 else "Horas sem média"
+    return f"{label}: {cause_counts(exclusions)}."
+
+
+def exclusion_details(exclusions: pd.DataFrame) -> str:
+    """Uma linha por sensor com as horas sem média de cada causa."""
+    lines = [f"- **{device}:** {cause_counts(group)}." for device, group in exclusions.groupby("device_id")]
+    return "Por sensor:" + "\n" + "\n".join(lines)
 
 
 def exclusion_strip(exclusions: pd.DataFrame, domain: list[str]) -> alt.Chart:
@@ -528,7 +535,6 @@ def series_tab(devices_all: list[str]) -> None:
     if resolution == "Média horária":
         hourly = load_hourly(start, end, tuple(devices), only_ok)
         data = hourly.dropna(subset=["pm25"]).drop(columns=["suspeita"])
-        suspect = suspect_hours_by_node(hourly)
         # O eixo vai do início do período até agora; um nó que parou aparece sem leituras até lá.
         until = min(end, now_utc())
         domain = [start.astimezone(tz).replace(tzinfo=None).isoformat(),
@@ -538,18 +544,12 @@ def series_tab(devices_all: list[str]) -> None:
             strip = exclusion_strip(exclusions, domain)
         if data.empty:
             st.info(f"Sem horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura no período escolhido.")
-            if suspect:
-                show_suspect_note(suspect)
+            show_hour_notes(exclusions)
             if strip is not None:
-                st.caption(exclusion_note(exclusions))
                 st.altair_chart(strip, width="stretch")
             return
         data["hora_local"] = local_naive(data["hora"])
-        st.caption(f"Médias de horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura (75%).")
-        if suspect:
-            show_suspect_note(suspect)
-        if strip is not None:
-            st.caption(exclusion_note(exclusions))
+        show_hour_notes(exclusions)
         max_gap = pd.Timedelta(hours=1)
     else:
         # Cada minuto vira um ponto no navegador: períodos longos travariam a página.
