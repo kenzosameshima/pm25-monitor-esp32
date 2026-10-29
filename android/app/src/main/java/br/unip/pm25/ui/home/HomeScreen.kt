@@ -235,7 +235,7 @@ private fun LatestReadingContent(latest: LatestReading, serverNow: Instant) {
         if (!zeroed) AirQuality.of(latest.pm25)?.let { QualityChip(it) }
     }
     if (zeroed) {
-        Text(ZERO_READING_NOTE, style = MaterialTheme.typography.bodySmall,
+        Text(zeroReadingNote(latest), style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     MetricRow {

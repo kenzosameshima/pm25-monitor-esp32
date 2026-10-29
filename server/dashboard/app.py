@@ -183,6 +183,14 @@ def last_reading_text(dev: pd.Series, when: str) -> str:
     return f"Leitura de {when}, histórico (não é o valor atual): {values}.{note}"
 
 
+def zero_reading_note(pm1, pm25, pm10) -> str:
+    """Aviso do cartão de um nó em operação cuja leitura chegou toda em zero, citando só o que o nó enviou."""
+    names = [name for name, value in (("PM1", pm1), ("PM2,5", pm25), ("PM10", pm10)) if pd.notna(value)]
+    listed = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} e {names[-1]}"
+    return (f"Leitura zerada ({listed} em 0,0): o sensor pode não estar vendo partículas. "
+            "Por isso o cartão fica sem faixa de qualidade do ar.")
+
+
 STATUS_LABELS = {"em_operacao": "🟢 em operação", "atrasado": "🟡 atrasado", "sem_dados": "🔴 sem dados"}
 HEALTH_LABELS = {
     "device_id": "Sensor",
@@ -345,8 +353,7 @@ def status_tab() -> None:
                               help="Faixas da CETESB para a média de 24 horas; aplicadas à leitura de um minuto, "
                                    "servem só de referência.")
                     if zeroed:
-                        st.caption("Leitura zerada (PM1, PM2,5 e PM10 em 0,0): o sensor pode não estar vendo "
-                                   "partículas. Por isso o cartão fica sem faixa de qualidade do ar.")
+                        st.caption(zero_reading_note(dev["pm1"], dev["pm25"], dev["pm10"]))
                     position = None if zeroed else analytics.band_position(dev["pm25"])
                     if position is not None:
                         st.html(band_scale_html(position, f"PM2,5 de {fmt(dev['pm25'], ' µg/m³')}, na faixa {band}"))

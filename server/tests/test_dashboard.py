@@ -426,3 +426,16 @@ def test_pm10_leva_a_unidade_no_rotulo_para_o_valor_caber_na_coluna_estreita(app
     assert not at.exception, at.exception
     pm10 = next(m for m in at.metric if m.label.startswith("PM10"))
     assert re.fullmatch(r"\d+,\d", pm10.value), pm10.value   # "50,9 µg/m³" ficava cortado num cartão de meia tela
+
+
+@pytest.mark.parametrize("values, named", [
+    ({"pm1": None, "pm25": 0.0, "pm10": 0.0}, "(PM2,5 e PM10 em 0,0)"),
+    ({"pm1": 0.0, "pm25": 0.0, "pm10": None}, "(PM1 e PM2,5 em 0,0)"),
+])
+def test_nota_da_leitura_zerada_cita_so_as_particulas_que_o_no_enviou(app_env, values, named):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=0.02, **values)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    notes = [c.value for c in at.caption if "Leitura zerada" in c.value]
+    assert len(notes) == 1 and notes[0].startswith(f"Leitura zerada {named}:"), notes
