@@ -190,7 +190,7 @@ private fun HealthCard(health: Health, range: HistoryRange) {
             Text("Saúde da coleta (${range.label})", style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.asHeading())
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                Metric("Completude", "${(health.completeness * 100).format(0)}%", Modifier.weight(1f))
+                Metric("Completude", completenessText(health.completeness), Modifier.weight(1f))
                 Metric("Maior lacuna", "${health.largestGapMin} min", Modifier.weight(1f))
                 Metric("Reinícios", "${health.restarts}", Modifier.weight(1f))
             }

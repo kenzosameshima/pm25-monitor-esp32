@@ -49,3 +49,24 @@ class HistoryTextTest {
         )
     }
 }
+
+class CompletenessTextTest {
+    @Test
+    fun `escreve uma casa decimal com virgula`() {
+        assertEquals("87,0%", completenessText(0.87))
+        assertEquals("99,9%", completenessText(0.9993))
+        assertEquals("12,5%", completenessText(0.125))
+    }
+
+    @Test
+    fun `so diz 100 por cento quando a coleta esta completa`() {
+        assertEquals("100%", completenessText(1.0))
+        assertEquals("99,9%", completenessText(0.99996))   // arredondar para cima diria 100,0%
+    }
+
+    @Test
+    fun `so diz zero quando nao houve nenhuma leitura`() {
+        assertEquals("0%", completenessText(0.0))
+        assertEquals("0,1%", completenessText(0.0004))      // arredondar para baixo diria 0,0%
+    }
+}

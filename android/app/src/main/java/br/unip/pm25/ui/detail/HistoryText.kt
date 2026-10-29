@@ -1,7 +1,9 @@
 package br.unip.pm25.ui.detail
 
 import br.unip.pm25.domain.HourlySummary
+import br.unip.pm25.ui.PT_BR
 import br.unip.pm25.ui.format
+import kotlin.math.floor
 
 /**
  * Quantas horas ficaram sem média em cada causa, com as mesmas palavras do dashboard; null se nenhuma ficou. Uma hora
@@ -25,4 +27,16 @@ internal fun historyDescription(rangeLabel: String, summary: HourlySummary): Str
         "máxima ${summary.max?.pm25.format()} microgramas por metro cúbico, " +
         "${summary.validHours} de ${summary.totalHours} horas válidas."
     return blankHoursNote(summary)?.let { "$base $it" } ?: base
+}
+
+/**
+ * A completude da coleta em porcentagem, com uma casa decimal cortada, não arredondada: arredondar mostraria 100%
+ * para 99,96%, e uma coleta que perdeu leituras não está completa. Pelo mesmo motivo, só a coleta sem nenhuma
+ * leitura mostra 0%.
+ */
+internal fun completenessText(completeness: Double): String {
+    if (completeness >= 1.0) return "100%"
+    if (completeness <= 0.0) return "0%"
+    val tenths = floor(completeness * 1000 + 1e-9).toInt().coerceIn(1, 999)
+    return String.format(PT_BR, "%.1f%%", tenths / 10.0)
 }
