@@ -1095,6 +1095,28 @@ def test_amostra_pequena_vale_para_todas_as_linhas_que_tem_menos_de_um_dia(app_e
     assert set(text["Observação"]) == {"Amostra de apenas 11 horas"}
 
 
+def test_com_poucos_sensores_o_seletor_da_previsao_vira_botoes_no_lugar_da_lista(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    tab = at.tabs[2]
+    sensor = tab.segmented_control[0]
+    assert sensor.label == "Sensor" and list(sensor.options) == ["no-01", "no-02"] and sensor.value == "no-01"
+    assert len(tab.selectbox) == 0
+    choose_forecast_sensor(at, "no-02")
+    assert not at.exception, at.exception
+    assert at.tabs[2].segmented_control[0].value == "no-02"            # e a escolha vale para a aba toda
+
+
+def test_com_muitos_sensores_o_seletor_continua_lista(app_env):          # a largura dela (240 px) o AppTest não mostra
+    populate(app_env, hours=3, devices=tuple((f"no-0{n}", 1) for n in range(1, 6)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    tab = at.tabs[2]
+    assert len(tab.segmented_control) == 0 and len(tab.selectbox) == 1
+    assert tab.selectbox[0].label == "Sensor" and len(tab.selectbox[0].options) == 5
+
+
 def forecast_head(at) -> str:
     """O HTML da linha acima do gráfico da aba Previsto × observado."""
     return next(h.proto.body for h in at.tabs[2].get("html") if 'class="aq-trend-head"' in h.proto.body)

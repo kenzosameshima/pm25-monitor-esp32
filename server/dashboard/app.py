@@ -671,8 +671,18 @@ def show_evaluation_notes(table: pd.DataFrame, metrics: pd.DataFrame) -> None:
     st.caption(evaluated_text(len(rated), len(metrics), hours.min(), hours.max()))
 
 
+SENSOR_BUTTONS_MAX = 4        # até aqui o sensor da aba de previsão se escolhe em botões; acima, numa lista estreita
+
+
+def forecast_sensor(devices_all: list[str]) -> str:
+    """O sensor da aba de previsão: botões lado a lado enquanto são poucos, que mostram as opções sem um clique a mais."""
+    if len(devices_all) <= SENSOR_BUTTONS_MAX:
+        return st.segmented_control("Sensor", devices_all, default=devices_all[0], required=True, key="forecast_device")
+    return st.selectbox("Sensor", devices_all, key="forecast_device", width=240)
+
+
 def forecast_tab(devices_all: list[str]) -> None:
-    device = st.selectbox("Sensor", devices_all, key="forecast_device")
+    device = forecast_sensor(devices_all)
     comparison = load_forecast(device, now_utc())
     table = comparison.series.rename(columns=SERIES_LABELS)
     has_models = len(table.columns) > len(SERIES_LABELS)
