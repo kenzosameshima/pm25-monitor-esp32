@@ -463,6 +463,37 @@ def test_grafico_de_seis_horas_tem_titulo_curto_e_uma_linha_so_com_periodo_e_leg
     assert "sem leituras" not in head
 
 
+def chart_heads(at) -> list[str]:
+    """Os HTMLs da linha acima de cada gráfico de linhas, na ordem da página: o de 6 horas e depois os da aba Séries."""
+    return [h.proto.body for h in at.get("html") if 'class="aq-trend-head"' in h.proto.body]
+
+
+def test_cada_grafico_da_aba_series_tem_a_variavel_e_a_legenda_numa_linha(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    heads = chart_heads(at)
+    assert len(heads) == 3                                          # o de 6 horas, PM2,5 e umidade
+    assert "PM2,5 (µg/m³)" in heads[1] and "Umidade relativa (%)" in heads[2]
+    for head in heads[1:]:
+        assert "background:#22b8cf" in head and "background:#e0529c" in head      # cada sensor, com a cor da sua linha
+        assert "</i>no-01</span>" in head and "</i>no-02</span>" in head
+
+
+def test_graficos_da_aba_series_nao_repetem_titulo_e_legenda_dentro_do_grafico(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    specs = [json.loads(c.proto.spec) for c in at.get("vega_lite_chart")]
+    lines = [s for s in specs if s["description"].startswith("Gráfico de linhas") and "por sensor" in s["description"]][1:]
+    assert len(lines) == 2
+    for spec in lines:
+        assert "title" not in spec                                  # o nome da variável vai na linha de cima
+        colors = [layer["encoding"]["color"] for layer in spec.get("layer", [spec]) if "color" in layer.get("encoding", {})]
+        assert colors and all(c.get("legend") is None for c in colors)          # e a legenda também
+        assert spec["height"] <= 250                                 # sem o cabeçalho, a área das linhas segue a mesma
+
+
 def test_grafico_de_seis_horas_nao_repete_titulo_e_legenda_dentro_do_grafico(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()

@@ -95,10 +95,10 @@ PAGE_STYLE = """<style>
 .aq-ticks {position: relative; height: 1rem; margin-top: .35rem; font-size: .75rem; opacity: .75;
            font-variant-numeric: tabular-nums}
 .aq-ticks span {position: absolute; transform: translateX(-50%)}
-/* A linha acima do gráfico de 6 horas: o período e a unidade de um lado, a legenda e os avisos do outro. */
+/* A linha acima de um gráfico de linhas: o período e a unidade (ou a variável) de um lado, a legenda e os avisos do outro. */
 .aq-trend-head {display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .25rem 1rem;
                 font-size: .875rem}
-.aq-period, .aq-key-off {opacity: .75}
+.aq-label, .aq-key-off {opacity: .75}
 .aq-keys {display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem}
 .aq-key i {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem}
 /* A última leitura de um nó sem dados, no expansor: o aviso, os valores em grade sobre um fundo próprio e o sinal. */
@@ -293,11 +293,12 @@ def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta)
 
 def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timedelta,
                rule: float | None = None, color: str = "device_id", legend: str = "Sensor",
-               domain: list[str] | None = None, compact: bool = False) -> alt.Chart:
+               domain: list[str] | None = None, compact: bool = False, headless: bool = False) -> alt.Chart:
     """Linhas por nó, uma cor fixa para cada. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
-    fixa o eixo do tempo. `compact` é o gráfico das últimas 6 horas: só a hora nos rótulos e sem título nem legenda,
-    que a página escreve numa linha acima. Ele leva uma linha fina de 30 em 30 minutos no eixo e mostra o ponto
-    só sob o mouse (o do tooltip), menos os das leituras isoladas, que sem vizinhas não formariam linha."""
+    fixa o eixo do tempo. `headless` tira o título e a legenda de dentro do gráfico: a página os escreve numa linha
+    acima e a área das linhas fica do mesmo tamanho. `compact` é o gráfico das últimas 6 horas: só a hora nos
+    rótulos, uma linha fina com marcas de 30 em 30 minutos no eixo e o ponto só sob o mouse (o do tooltip), menos os
+    das leituras isoladas, que sem vizinhas não formariam linha."""
     data = with_segments(data[[x, y, color]].dropna(), x, color, max_gap)
     data = data.assign(valor=data[y].map(decimal_comma))      # o tooltip do Vega escreveria o ponto decimal
     names = sorted(data[color].unique())
@@ -312,7 +313,7 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
                 scale=alt.Scale(domain=domain) if domain else alt.Undefined),
         y=alt.Y(f"{y}:Q", title=None, scale=alt.Scale(zero=False),
                 axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')", minExtent=Y_AXIS_WIDTH)),
-        color=alt.Color(f"{color}:N", title=legend, legend=None if compact else alt.Legend(orient="top"),
+        color=alt.Color(f"{color}:N", title=legend, legend=None if headless else alt.Legend(orient="top"),
                         scale=alt.Scale(domain=names, range=[sensor_color(n) for n in names])
                         if sensors else alt.Undefined),
         detail="segmento:N",
@@ -337,7 +338,7 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
     # No Streamlit a altura inclui título, legenda e eixos: 330 deixa para a área das linhas cerca de 200 px, e sem
     # título nem legenda 240 deixam o mesmo tanto.
     description = chart_description(data, x, y, title, names)
-    if compact:
+    if headless:
         return chart.properties(height=240, description=description)
     return chart.properties(height=330, description=description, title=alt.TitleParams(title, anchor="start"))
 
@@ -461,10 +462,11 @@ def status_tab() -> None:
     # Um nó sem leitura na janela some do gráfico: o aviso ao lado da legenda diz que ele não foi esquecido.
     sent = sorted(set(recent["device_id"])) if not recent.empty else []
     missing = [d for d in devices if d in by_id.index and d not in sent]
-    st.html(trend_head_html(period_text(first, last), "µg/m³", [(d, sensor_color(d)) for d in sent], missing))
+    st.html(trend_head_html(f"{period_text(first, last)} · µg/m³", [(d, sensor_color(d)) for d in sent], missing))
     if not recent.empty:
         st.altair_chart(line_chart(recent.assign(hora=local_naive(recent["ts_sensor"])), "hora", "pm25",
-                                   VARIABLES["pm25"], pd.Timedelta(minutes=5), compact=True), width="stretch")
+                                   VARIABLES["pm25"], pd.Timedelta(minutes=5), compact=True, headless=True),
+                        width="stretch")
 
     window_start = now - timedelta(hours=24)
     health = load_health(window_start, now).rename(columns=HEALTH_LABELS)
@@ -568,8 +570,10 @@ def series_tab(devices_all: list[str]) -> None:
 
     for i, var in enumerate(variables):
         rule = HIGH_HUMIDITY if var == "humidity" else None
-        st.altair_chart(line_chart(data, "hora_local", var, VARIABLES[var], max_gap, rule=rule, domain=domain),
-                        width="stretch")
+        nodes = sorted(data.loc[data[var].notna(), "device_id"].unique())
+        st.html(trend_head_html(VARIABLES[var], [(n, sensor_color(n)) for n in nodes]))
+        st.altair_chart(line_chart(data, "hora_local", var, VARIABLES[var], max_gap, rule=rule, domain=domain,
+                                   headless=True), width="stretch")
         if i == 0 and strip is not None:      # a faixa vale para todas as variáveis: as horas sem média são as mesmas
             st.altair_chart(strip, width="stretch")
 
