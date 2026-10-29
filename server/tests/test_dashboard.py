@@ -473,3 +473,41 @@ def test_tabela_de_previsao_escreve_os_numeros_com_virgula(app_env):
     for column in ("MAE (µg/m³)", "RMSE (µg/m³)", "Skill score"):
         assert text[column].str.fullmatch(r"-?\d+,\d\d").all(), (column, list(text[column]))
     assert not has_decimal_point(text), text
+
+
+def page_style(at) -> str:
+    return next(h.proto.body for h in at.get("html") if "stMainBlockContainer" in h.proto.body)
+
+
+def wide_screen_rules(at) -> str:
+    """As regras que valem a partir de 640 px, a largura em que o Streamlit deixa de empilhar as colunas."""
+    block = re.search(r"@media \(min-width: 640px\) \{(.*?)\n\}", page_style(at), re.S)
+    assert block, "faltam as regras do cabeçalho para telas largas"
+    return block.group(1)
+
+
+def rem_of(rules: str, selector: str, prop: str) -> float:
+    match = re.search(rf"{re.escape(selector)}\s*\{{[^}}]*?{prop}:\s*([\d.]+)rem", rules)
+    assert match, f"{selector} sem {prop} em rem"
+    return float(match.group(1))
+
+
+def test_cabecalho_em_tela_larga_gasta_menos_altura(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    rules = wide_screen_rules(at)
+    assert 1.5 <= rem_of(rules, "[data-testid='stMainBlockContainer']", "padding-top") <= 2.0   # 24 a 32 px (era 56)
+    assert 1.625 <= rem_of(rules, "h1", "font-size") <= 1.75                                   # 26 a 28 px (era 44)
+    assert rem_of(rules, "h1", "padding-bottom") <= 0.5                                         # o título junto das abas
+    assert rem_of(rules, "[role='tabpanel']", "padding-top") <= 0.5                             # e as abas, do conteúdo
+    # A barra do Streamlit fica por cima do conteúdo e tem fundo sólido: com a margem menor ela esconderia o título.
+    assert re.search(r"\[data-testid='stHeader'\]\s*\{[^}]*background:\s*transparent", rules)
+
+
+def test_cabecalho_no_celular_segue_como_esta(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    # Fora da regra de tela larga a margem de cima fica em 3,5rem: no celular a barra do Streamlit cobriria uma menor.
+    assert "padding-top: 3.5rem" in page_style(at).split("@media")[0]

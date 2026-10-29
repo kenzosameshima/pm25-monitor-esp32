@@ -39,6 +39,16 @@ alt.data_transformers.disable_max_rows()
 PAGE_STYLE = """<style>
 /* O padrão do Streamlit (6rem em cima, 10rem embaixo) cria scroll em abas que caberiam na tela. */
 [data-testid='stMainBlockContainer'] {padding-top: 3.5rem; padding-bottom: 2rem}
+/* Em tela larga, a margem de cima, o título de 44 px e os respiros em volta das abas gastavam um quarto da altura
+   antes do primeiro conteúdo. Menores, deixam o conteúdo mais acima. Abaixo de 640 px (o celular) nada muda: lá a
+   barra do Streamlit cobriria uma margem menor. A barra fica por cima do conteúdo e tem fundo sólido, então com a
+   margem menor ela esconderia o título: ela passa a ser transparente. */
+@media (min-width: 640px) {
+[data-testid='stHeader'] {background: transparent}
+[data-testid='stMainBlockContainer'] {padding-top: 1.75rem}
+[data-testid='stMainBlockContainer'] [data-testid='stHeading'] h1 {font-size: 1.75rem; line-height: 1.2; padding-top: 0; padding-bottom: .25rem}
+[data-testid='stTabs'] [role='tabpanel'] {padding-top: .5rem}
+}
 /* Texto auxiliar: o Streamlit o deixa a 60% de opacidade, o que dá 3,7:1 no tema claro. A 75% passa de 4,5:1
    nos dois temas e ainda fica abaixo do texto principal. */
 [data-testid='stCaptionContainer'] {opacity: .75 !important}
