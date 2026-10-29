@@ -187,6 +187,7 @@ SENSOR_PALETTE = ["#22b8cf", "#e0529c", "#8b93a1", "#c9a227"]
 # Horas sem média: cinza para a que não tem leitura, azul-aço para a de poucas leituras e âmbar para a suspeita.
 EXCLUSION_COLORS = {analytics.NO_READINGS: "#8b93a1", analytics.FEW_READINGS: "#6aa6c8",
                     analytics.SUSPECT_HOUR: "#e2b53b"}
+PERIOD_PRESETS = {"7 dias": 7, "30 dias": 30}
 Y_AXIS_WIDTH = 48  # largura mínima do eixo vertical: faz a faixa das horas sem média alinhar com os gráficos de linha
 
 
@@ -213,15 +214,15 @@ def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta)
 
 def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timedelta,
                rule: float | None = None, color: str = "device_id", legend: str = "Sensor",
-               domain: list[str] | None = None) -> alt.Chart:
+               domain: list[str] | None = None, time_only: bool = False, subtitle: str | None = None) -> alt.Chart:
     """Linhas por nó, uma cor fixa para cada. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
-    fixa o eixo do tempo."""
+    fixa o eixo do tempo, e `time_only` mostra só a hora nos rótulos, com a data no `subtitle`."""
     data = with_segments(data[[x, y, color]].dropna(), x, color, max_gap)
     data = data.assign(valor=data[y].map(decimal_comma))      # o tooltip do Vega escreveria o ponto decimal
     names = sorted(data[color].unique())
     sensors = color == "device_id"
     chart = alt.Chart(data).mark_line(point=len(data) <= 400).encode(
-        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%d/%m %H:%M"),
+        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%H:%M" if time_only else "%d/%m %H:%M"),
                 scale=alt.Scale(domain=domain) if domain else alt.Undefined),
         y=alt.Y(f"{y}:Q", title=None, scale=alt.Scale(zero=False),
                 axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')", minExtent=Y_AXIS_WIDTH)),
@@ -239,7 +240,8 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
         chart = chart + alt.Chart(pd.DataFrame({"limite": [rule]})).mark_rule(
             strokeDash=[4, 4], color="gray").encode(y="limite:Q")
     # No Streamlit a altura inclui título, legenda e eixos: 330 deixa para a área das linhas cerca de 200 px.
-    return chart.properties(height=330, title=alt.TitleParams(title, anchor="start"))
+    return chart.properties(height=330, title=alt.TitleParams(title, subtitle=subtitle or alt.Undefined,
+                                                              anchor="start"))
 
 
 def exclusion_note(exclusions: pd.DataFrame) -> str:
@@ -280,7 +282,7 @@ def status_tab() -> None:
     by_id = status.set_index("device_id")
     devices = expected_devices(status)
     for col, device in zip(st.columns(len(devices)), devices):
-        with col:
+        with col, st.container(border=True):
             st.subheader(device)
             if device not in by_id.index:
                 st.caption("⚪ aguardando instalação · nenhuma leitura recebida")
@@ -291,28 +293,46 @@ def status_tab() -> None:
             if isinstance(dev["location"], str):
                 st.caption(dev["location"])
             st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")
-            if isinstance(dev["firmware"], str):
-                st.caption(f"Firmware: {dev['firmware']}")
             if dev["status"] == "sem_dados":
                 # Sem envio recente, o último valor não diz como o ar está agora (um sensor parado em zero
                 # apareceria como "Boa"): o valor atual fica vazio e a última leitura, dita histórica, no expansor.
                 st.metric("PM2,5", "—")
                 with st.expander("Ver a última leitura recebida"):
                     st.caption(last_reading_text(dev, when))
-                continue
-            # Uma linha de colunas por grupo: a faixa sob o PM2,5 não desalinha a linha de baixo.
-            a, b = st.columns(2)
-            band, color = air_quality(dev["pm25"]) or (None, "off")
-            a.metric("PM2,5", fmt(dev["pm25"], " µg/m³"), delta=band, delta_color=color, delta_arrow="off",
-                     help="Faixas da CETESB para a média de 24 horas; aplicadas à leitura de um minuto, "
-                          "servem só de referência.")
-            b.metric("PM10", fmt(dev["pm10"], " µg/m³"))
-            a, b, c = st.columns(3)
-            a.metric("Temperatura", fmt(dev["temperature"], " °C"))
-            b.metric("Umidade", fmt(dev["humidity"], "%"))
-            c.metric("Sinal Wi-Fi", fmt(dev["rssi"], " dBm", 0))
-            if dev["quality"] != "ok":
-                st.caption(f":red[O servidor marcou esta leitura como implausível ({dev['quality']}).]")
+            else:
+                # Uma linha de colunas por grupo: a faixa sob o PM2,5 não desalinha a linha de baixo.
+                a, b = st.columns(2)
+                band, color = air_quality(dev["pm25"]) or (None, "off")
+                a.metric("PM2,5", fmt(dev["pm25"], " µg/m³"), delta=band, delta_color=color, delta_arrow="off",
+                         help="Faixas da CETESB para a média de 24 horas; aplicadas à leitura de um minuto, "
+                              "servem só de referência.")
+                b.metric("PM10", fmt(dev["pm10"], " µg/m³"))
+                a, b = st.columns(2)
+                a.metric("Temperatura", fmt(dev["temperature"], " °C"))
+                b.metric("Umidade", fmt(dev["humidity"], "%"))
+                # O sinal e o firmware dizem como o nó está, não como está o ar: ficam no rodapé do cartão.
+                if pd.notna(dev["rssi"]):
+                    st.caption(f"Sinal Wi-Fi: {fmt(dev['rssi'], ' dBm', 0)}")
+                if dev["quality"] != "ok":
+                    st.caption(f":red[O servidor marcou esta leitura como implausível ({dev['quality']}).]")
+            if isinstance(dev["firmware"], str):
+                st.caption(f"Firmware: {dev['firmware']}")
+
+    # O gráfico vem antes da tabela: a primeira tela responde "qual é a leitura, está atualizada e como evolui".
+    recent = load_measurements(now - timedelta(hours=6), now + timedelta(minutes=1), tuple(status["device_id"]))
+    tz = ZoneInfo(LOCAL_TZ)
+    first, last = (now - timedelta(hours=6)).astimezone(tz), now.astimezone(tz)
+    days = f"{first:%d/%m}" if first.date() == last.date() else f"{first:%d/%m} a {last:%d/%m}"
+    st.markdown("#### PM2,5 nas últimas 6 horas")
+    if not recent.empty:
+        st.altair_chart(line_chart(recent.assign(hora=local_naive(recent["ts_sensor"])), "hora", "pm25",
+                                   VARIABLES["pm25"], pd.Timedelta(minutes=5), time_only=True, subtitle=days),
+                        width="stretch")
+    # Um nó sem leitura na janela some do gráfico e da legenda: o aviso diz que ele não foi esquecido.
+    sent = set(recent["device_id"]) if not recent.empty else set()
+    missing = [d for d in devices if d in by_id.index and d not in sent]
+    if missing:
+        st.caption(f"{', '.join(missing)}: sem leituras nas últimas 6 horas.")
 
     window_start = now - timedelta(hours=24)
     health = load_health(window_start, now).rename(columns=HEALTH_LABELS)
@@ -326,23 +346,17 @@ def status_tab() -> None:
     st.caption("Mensagens perdidas são lacunas de sequência dentro de uma mesma inicialização do nó; "
                "minutos sem leitura e sem lacuna de sequência indicam falha do sensor, não da rede.")
 
-    recent = load_measurements(now - timedelta(hours=6), now + timedelta(minutes=1), tuple(status["device_id"]))
-    st.markdown("#### PM2,5 nas últimas 6 horas")
-    if not recent.empty:
-        st.altair_chart(line_chart(recent.assign(hora=local_naive(recent["ts_sensor"])), "hora", "pm25",
-                                   VARIABLES["pm25"], pd.Timedelta(minutes=5)), width="stretch")
-    # Um nó sem leitura na janela some do gráfico e da legenda: o aviso diz que ele não foi esquecido.
-    sent = set(recent["device_id"]) if not recent.empty else set()
-    missing = [d for d in devices if d in by_id.index and d not in sent]
-    if missing:
-        st.caption(f"{', '.join(missing)}: sem leituras nas últimas 6 horas.")
-
 
 def series_tab(devices_all: list[str]) -> None:
     today = datetime.now(ZoneInfo(LOCAL_TZ)).date()
     c1, c2, c3 = st.columns([2, 2, 1])
     devices = c1.multiselect("Sensores", devices_all, default=devices_all)
-    period = c2.date_input("Período", value=(today - timedelta(days=6), today), max_value=today, format="DD/MM/YYYY")
+    choice = c2.segmented_control("Período", [*PERIOD_PRESETS, "Personalizado"], default="7 dias") or "7 dias"
+    if choice == "Personalizado":
+        period = c2.date_input("Datas", value=(today - timedelta(days=6), today), max_value=today,
+                               format="DD/MM/YYYY")
+    else:
+        period = (today - timedelta(days=PERIOD_PRESETS[choice] - 1), today)
     resolution = c3.radio("Resolução", ["Média horária", "1 minuto"])
     variables = st.multiselect("Variáveis", list(VARIABLES), default=["pm25", "humidity"], format_func=VARIABLES.get)
     only_ok = st.checkbox("Ocultar leituras marcadas como implausíveis", value=True)

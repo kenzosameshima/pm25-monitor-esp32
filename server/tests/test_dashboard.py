@@ -67,7 +67,7 @@ def test_dashboard_renderiza_as_tres_abas(app_env):
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     assert [t.label for t in at.tabs] == ["Status", "Séries", "Previsto × observado"]
-    assert len(at.metric) == 10  # 5 indicadores por sensor
+    assert len(at.metric) == 8  # 4 indicadores por sensor; o sinal Wi-Fi vai numa linha à parte
     assert at.metric[0].label == "PM2,5"
     assert at.metric[0].delta in {"Boa", "Moderada", "Ruim", "Muito ruim", "Péssima"}  # faixa da CETESB
     assert at.metric[1].label == "PM10"
@@ -93,7 +93,7 @@ def test_esconde_no_de_teste_e_reserva_card_do_no_cadastrado_sem_dados(app_env, 
     assert not at.exception, at.exception
     assert [h.value for h in at.subheader] == ["no-01", "no-02"]
     assert any("aguardando instalação" in c.value for c in at.caption)
-    assert len(at.metric) == 5  # só o no-01 tem leitura
+    assert len(at.metric) == 4  # só o no-01 tem leitura
     assert list(at.dataframe[0].value["Sensor"]) == ["no-01"]
     assert at.multiselect[0].options == ["no-01"]
 
@@ -149,7 +149,7 @@ def test_no_sem_dados_nao_mostra_a_ultima_leitura_como_se_fosse_atual(app_env):
     pm25 = [m for m in at.metric if m.label == "PM2,5"]
     assert pm25[1].value == "—"                  # no-02: nem 0,0 µg/m³ nem a faixa "Boa"
     assert not pm25[1].delta
-    assert len(at.metric) == 6                   # os 5 do no-01 e só o PM2,5 do no-02
+    assert len(at.metric) == 5                   # os 4 do no-01 e só o PM2,5 do no-02
     assert any("sem dados" in c.value for c in at.caption)
 
     last = at.expander[0]                        # a última leitura segue acessível, dita como histórico
@@ -162,8 +162,17 @@ def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env
     populate(app_env, hours=3, devices=(("no-01", 1),))
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert len(at.metric) == 5
+    assert len(at.metric) == 4
     assert len(at.expander) == 0
+
+
+def test_cartao_do_no_poe_o_sinal_wifi_numa_linha_a_parte(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert [m.label for m in at.metric] == ["PM2,5", "PM10", "Temperatura", "Umidade"]
+    wifi = [c.value for c in at.caption if c.value.startswith("Sinal Wi-Fi")]
+    assert len(wifi) == 1 and re.fullmatch(r"Sinal Wi-Fi: -?\d+ dBm", wifi[0])
 
 
 def test_numeros_do_painel_usam_virgula_decimal(app_env):
@@ -171,10 +180,31 @@ def test_numeros_do_painel_usam_virgula_decimal(app_env):
     add_last_reading(app_env, "no-02", hours_ago=27)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    values = [m.value for m in at.metric if m.value != "—" and m.label != "Sinal Wi-Fi"]  # o sinal é inteiro
+    values = [m.value for m in at.metric if m.value != "—"]
     assert values and all("." not in v and "," in v for v in values), values
     stale = [c.value for c in at.caption if "sem dados" in c.value]
     assert len(stale) == 1 and re.search(r"último envio há \d+,\d h", stale[0]), stale
+
+
+def test_periodo_tem_atalhos_e_so_o_personalizado_pede_datas(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    period = at.segmented_control[0]
+    assert period.label == "Período" and list(period.options) == ["7 dias", "30 dias", "Personalizado"]
+    assert period.value == "7 dias" and len(at.date_input) == 0
+    period.set_value("Personalizado").run()
+    assert not at.exception, at.exception
+    assert len(at.date_input) == 1
+
+
+def test_30_dias_em_um_minuto_avisa_do_limite(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.segmented_control[0].set_value("30 dias").run()
+    at.radio[0].set_value("1 minuto").run()
+    assert not at.exception, at.exception
+    assert any("até 7 dias" in i.value for i in at.info)
 
 
 def test_serie_horaria_conta_as_horas_sem_media_por_causa(app_env):
