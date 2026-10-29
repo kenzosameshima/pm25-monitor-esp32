@@ -351,7 +351,8 @@ def status_tab() -> None:
                     if position is not None:
                         st.html(band_scale_html(position, f"PM2,5 de {fmt(dev['pm25'], ' µg/m³')}, na faixa {band}"))
                 a, b, c = st.columns(3)
-                a.metric("PM10", fmt(dev["pm10"], " µg/m³"))
+                # A unidade vai no rótulo: "50,9 µg/m³" não cabe numa coluna de um terço do cartão e era cortado.
+                a.metric("PM10 (µg/m³)", fmt(dev["pm10"], ""))
                 b.metric("Temperatura", fmt(dev["temperature"], " °C"))
                 c.metric("Umidade", fmt(dev["humidity"], "%"))
                 # O sinal e o firmware dizem como o nó está, não como está o ar: ficam no rodapé do cartão.

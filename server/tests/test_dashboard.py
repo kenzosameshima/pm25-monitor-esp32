@@ -71,7 +71,7 @@ def test_dashboard_renderiza_as_tres_abas(app_env):
     assert len(at.metric) == 8  # 4 indicadores por sensor; o sinal Wi-Fi vai numa linha à parte
     assert at.metric[0].label == "PM2,5"
     assert at.metric[0].delta in {"Boa", "Moderada", "Ruim", "Muito ruim", "Péssima"}  # faixa da CETESB
-    assert at.metric[1].label == "PM10"
+    assert at.metric[1].label == "PM10 (µg/m³)"
     assert not any("implausível" in c.value for c in at.caption)
 
     # tabela de saúde da coleta: o nó 2 teve uma hora sem dados e um reinício
@@ -205,7 +205,7 @@ def test_cartao_do_no_poe_o_sinal_wifi_numa_linha_a_parte(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert [m.label for m in at.metric] == ["PM2,5", "PM10", "Temperatura", "Umidade"]
+    assert [m.label for m in at.metric] == ["PM2,5", "PM10 (µg/m³)", "Temperatura", "Umidade"]
     wifi = [c.value for c in at.caption if c.value.startswith("Sinal Wi-Fi")]
     assert len(wifi) == 1 and re.fullmatch(r"Sinal Wi-Fi: -?\d+ dBm", wifi[0])
 
@@ -418,3 +418,11 @@ def test_leitura_com_particulas_nao_traz_o_aviso_de_leitura_zerada(app_env):
     assert not at.exception, at.exception
     assert not [c for c in at.caption if "zerada" in c.value]
     assert [m for m in at.metric if m.label == "PM2,5"][0].delta
+
+
+def test_pm10_leva_a_unidade_no_rotulo_para_o_valor_caber_na_coluna_estreita(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    pm10 = next(m for m in at.metric if m.label.startswith("PM10"))
+    assert re.fullmatch(r"\d+,\d", pm10.value), pm10.value   # "50,9 µg/m³" ficava cortado num cartão de meia tela
