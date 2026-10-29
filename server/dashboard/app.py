@@ -389,11 +389,19 @@ def status_tab() -> None:
     window_start = now - timedelta(hours=24)
     health = load_health(window_start, now).rename(columns=HEALTH_LABELS)
     st.markdown("#### Saúde da coleta nas últimas 24 horas")
+    # O texto da barra de progresso só sai com ponto decimal, então a barra fica sem texto e o número, com vírgula,
+    # vai numa coluna ao lado; o Styler escreve as células com vírgula e a tabela continua ordenável pelo valor.
+    health.insert(2, "%", health["Completude"])
+    styled = health.style.format(decimal=",", na_rep="—")
+    # Com `subset`: um formatter em dicionário também redefine as colunas que ficam de fora dele.
+    styled = styled.format(lambda v: decimal_comma(v * 100, 2) + "%", subset=["%"], na_rep="—")
     st.dataframe(
-        health, hide_index=True,
+        styled, hide_index=True,
         # Azul neutro: a barra de completude não deve parecer um alerta mesmo com 99%.
-        column_config={"Completude": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1,
-                                                                      color="blue")},
+        # Largura pequena nas duas colunas da completude: com a coluna a mais, a tabela passava da largura da tela.
+        column_config={"Completude": st.column_config.ProgressColumn(format=" ", min_value=0, max_value=1,
+                                                                      color="blue", width="small"),
+                       "%": st.column_config.Column(width="small")},
     )
     st.caption("Mensagens perdidas são lacunas de sequência dentro de uma mesma inicialização do nó; "
                "minutos sem leitura e sem lacuna de sequência indicam falha do sensor, não da rede.")
@@ -526,11 +534,8 @@ def forecast_tab(devices_all: list[str]) -> None:
 
     metrics = comparison.metrics.replace({"previsor": SERIES_LABELS}).rename(columns=METRIC_LABELS)
     if not metrics.empty:
-        st.dataframe(metrics, hide_index=True, column_config={
-            "MAE (µg/m³)": st.column_config.NumberColumn(format="%.2f"),
-            "RMSE (µg/m³)": st.column_config.NumberColumn(format="%.2f"),
-            "Skill score": st.column_config.NumberColumn(format="%.2f"),
-        })
+        # O Styler escreve os números com vírgula (o formato da coluna do Streamlit só sabe o ponto).
+        st.dataframe(metrics.style.format(decimal=",", precision=2, na_rep="—"), hide_index=True)
     if not metrics.empty:
         st.caption(evaluation_note(table, metrics))
     st.caption("Persistência repete a média da hora anterior e é a referência que qualquer modelo precisa superar. "
