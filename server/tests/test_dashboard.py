@@ -97,6 +97,38 @@ def test_esconde_no_de_teste_e_reserva_card_do_no_cadastrado_sem_dados(app_env, 
     assert at.multiselect[0].options == ["no-01"]
 
 
+def add_model_forecasts(path: Path, name: str, version: str, hours_ago: list[int]) -> None:
+    """Previsões de `name version` do no-01 para as horas-alvo `hours_ago` horas antes da hora atual."""
+    top = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    conn = db.connect(str(path))
+    with conn:
+        for k in hours_ago:
+            target = top - timedelta(hours=k)
+            conn.execute("INSERT INTO forecasts (device_id, generated_at, target_hour, predicted_pm25, model_name,"
+                         " model_version) VALUES (?, ?, ?, ?, ?, ?)",
+                         ("no-01", db.iso(target - timedelta(minutes=1)), db.iso(target), 15.0, name, version))
+    conn.close()
+
+
+def test_tabela_de_previsao_diz_que_todos_os_previsores_usam_as_mesmas_horas(app_env):
+    populate(app_env)                                    # ridge v1 prevê as horas -1 a -11
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    metrics = at.dataframe[1].value.set_index("Previsor")
+    assert set(metrics["Horas"]) == {11}                 # a persistência também só conta as 11 horas do modelo
+    note = [c.value for c in at.caption if "mesmas 11 horas" in c.value]
+    assert len(note) == 1 and "hora seguinte" in note[0] and " a " in note[0]  # horizonte e período avaliado
+
+
+def test_tabela_de_previsao_avisa_quando_os_modelos_nao_tem_horas_em_comum(app_env):
+    populate(app_env)
+    add_model_forecasts(app_env, "ridge", "v2", [20, 21, 22])  # a versão nova não tem hora em comum com a v1
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert not any("mesmas 11 horas" in c.value for c in at.caption)
+    assert any("nas horas em que tem previsão" in c.value for c in at.caption)
+
+
 def add_last_reading(path: Path, device: str, hours_ago: float, **values) -> None:
     """Uma única leitura de `device`, de `hours_ago` horas atrás, com os valores dados."""
     ts = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).replace(second=0, microsecond=0)

@@ -326,6 +326,18 @@ def series_tab(devices_all: list[str]) -> None:
                        file_name=f"pm25_{period[0]}_{period[1]}.csv", mime="text/csv")
 
 
+def evaluation_note(table: pd.DataFrame, metrics: pd.DataFrame) -> str:
+    """Em que horas a tabela de métricas foi calculada, para ninguém comparar linhas de amostras diferentes."""
+    horizon = "Previsão da média da hora seguinte"
+    rated = table[[SERIES_LABELS[OBSERVED], *metrics["Previsor"]]].dropna()
+    if metrics["Horas"].nunique() > 1 or len(rated) != metrics["Horas"].iloc[0]:
+        return (f"{horizon}. Os previsores não têm horas em comum: cada um foi avaliado nas horas em que tem "
+                "previsão, e só o skill score compara com a persistência nas mesmas horas.")
+    hours = local_naive(rated.index.to_series())
+    period = "" if len(rated) == 1 else f", de {hours.min():%d/%m %H:%M} a {hours.max():%d/%m %H:%M}"
+    return f"{horizon}, avaliada nas mesmas {len(rated)} horas para todos os previsores{period}."
+
+
 def forecast_tab(devices_all: list[str]) -> None:
     device = st.selectbox("Sensor", devices_all, key="forecast_device")
     comparison = load_forecast(device, now_utc())
@@ -359,8 +371,11 @@ def forecast_tab(devices_all: list[str]) -> None:
             "RMSE (µg/m³)": st.column_config.NumberColumn(format="%.2f"),
             "Skill score": st.column_config.NumberColumn(format="%.2f"),
         })
-    st.caption("Persistência prevê que a próxima hora repete a média da hora anterior; é o baseline que "
-               "qualquer modelo precisa superar (skill score acima de zero).")
+    if not metrics.empty:
+        st.caption(evaluation_note(table, metrics))
+    st.caption("Persistência repete a média da hora anterior e é a referência que qualquer modelo precisa superar. "
+               "MAE é o erro médio e RMSE pesa mais os erros grandes. O skill score compara o RMSE do previsor com "
+               "o da persistência nas mesmas horas: acima de zero, o modelo acerta mais que repetir a hora anterior.")
     if not has_models:
         st.info("Nenhuma previsão de modelo registrada ainda. Quando o job horário estiver no ar, as previsões "
                 "gravadas na tabela forecasts aparecem aqui ao lado da persistência.")

@@ -263,6 +263,67 @@ def test_comparacao_com_persistencia_e_modelo(conn):
     assert m.loc[analytics.PERSISTENCE, "skill"] == pytest.approx(0.0)
 
 
+def add_forecasts(conn, name: str, version: str, values: dict[int, float]) -> None:
+    """Previsões de `name version` para as horas-alvo `NOW − h` (h em horas), com o valor dado."""
+    with conn:
+        for h, value in values.items():
+            target = NOW - timedelta(hours=h)
+            conn.execute("INSERT INTO forecasts (device_id, generated_at, target_hour, predicted_pm25, model_name,"
+                         " model_version) VALUES (?, ?, ?, ?, ?, ?)",
+                         ("no-01", db.iso(target - timedelta(minutes=5)), db.iso(target), value, name, version))
+
+
+def hourly_levels(conn, levels: list[float]) -> None:
+    """Uma leitura por minuto em cada uma das últimas horas cheias, com o PM2,5 de `levels` (a mais antiga primeiro)."""
+    hours = len(levels)
+    insert(conn, [reading("no-01", -60 * hours + m, pm25=levels[m // 60]) for m in range(60 * hours)])
+
+
+def test_persistencia_e_modelo_sao_comparados_nas_mesmas_horas(conn):
+    hourly_levels(conn, [10.0, 15.0, 25.0, 20.0])
+    add_forecasts(conn, "ridge", "v0", {2: 24.0, 1: 21.0})   # o modelo só previu duas das três horas com persistência
+    m = analytics.forecast_comparison(conn, "no-01", NOW + timedelta(minutes=30)).metrics.set_index("previsor")
+
+    assert m.loc[analytics.PERSISTENCE, "horas"] == m.loc["ridge v0", "horas"] == 2
+    assert m.loc[analytics.PERSISTENCE, "mae"] == pytest.approx(7.5)         # erros de 10 e 5; a hora -3 (5) fica fora
+    assert m.loc[analytics.PERSISTENCE, "rmse"] == pytest.approx(math.sqrt(62.5))
+    assert m.loc["ridge v0", "mae"] == pytest.approx(1.0)
+    assert m.loc["ridge v0", "skill"] == pytest.approx(1 - 1 / math.sqrt(62.5))
+
+
+def test_modelos_com_horas_diferentes_ficam_todos_nas_horas_que_tem_em_comum(conn):
+    hourly_levels(conn, [10.0, 15.0, 25.0, 20.0])
+    add_forecasts(conn, "ridge", "v0", {3: 15.0, 2: 25.0, 1: 20.0})
+    add_forecasts(conn, "ridge", "v1", {1: 18.0})
+    m = analytics.forecast_comparison(conn, "no-01", NOW + timedelta(minutes=30)).metrics.set_index("previsor")
+
+    assert set(m["horas"]) == {1}                                         # só a hora -1 tem os três previsores
+    assert m.loc[analytics.PERSISTENCE, "mae"] == pytest.approx(5.0)
+    assert m.loc["ridge v0", "mae"] == pytest.approx(0.0)
+    assert m.loc["ridge v1", "mae"] == pytest.approx(2.0)
+
+
+def test_modelos_sem_hora_em_comum_ficam_cada_um_com_as_suas_horas(conn):
+    hourly_levels(conn, [10.0, 15.0, 25.0, 20.0])
+    add_forecasts(conn, "ridge", "v0", {3: 15.0})            # a versão antiga parou antes de a nova começar
+    add_forecasts(conn, "ridge", "v1", {1: 18.0})
+    m = analytics.forecast_comparison(conn, "no-01", NOW + timedelta(minutes=30)).metrics.set_index("previsor")
+
+    assert dict(m["horas"]) == {analytics.PERSISTENCE: 3, "ridge v0": 1, "ridge v1": 1}
+    assert m.loc["ridge v0", "skill"] == pytest.approx(1.0)  # acerto exato contra erro de 5 da persistência
+    assert m.loc["ridge v1", "skill"] == pytest.approx(0.6)  # 1 − 2/5, cada um contra a persistência nas suas horas
+
+
+def test_modelo_sem_nenhuma_hora_para_comparar_nao_derruba_a_tabela(conn):
+    hourly_levels(conn, [10.0, 15.0, 25.0, 20.0])
+    add_forecasts(conn, "ridge", "v0", {2: 24.0, 1: 21.0})
+    add_forecasts(conn, "ridge", "v1", {0: 18.0})            # só a hora em andamento, que ainda não tem observação
+    m = analytics.forecast_comparison(conn, "no-01", NOW + timedelta(minutes=30)).metrics.set_index("previsor")
+
+    assert list(m.index) == [analytics.PERSISTENCE, "ridge v0"]
+    assert set(m["horas"]) == {2}
+
+
 def test_skill_score_usa_as_mesmas_horas_da_persistencia(conn):
     insert(conn, [reading("no-01", -180 + m, pm25=10.0 + (m // 60) * 5) for m in range(180)])  # 10, 15, 20
     with conn:

@@ -213,16 +213,29 @@ def forecast_scores(y: np.ndarray, pred: np.ndarray, pred_persistence: np.ndarra
 
 
 def _forecast_metrics(series: pd.DataFrame) -> pd.DataFrame:
-    """Métricas de cada previsor nas horas com observação, persistência e previsão do previsor.
+    """Métricas de cada previsor, todos nas mesmas horas.
 
-    Exigir a persistência em todas as horas faz o skill score comparar o previsor e a persistência
-    sobre as mesmas horas, como na avaliação offline.
+    As horas avaliadas são as que têm observação, persistência e previsão de todos os modelos: só
+    assim o MAE e o RMSE de uma linha se comparam com os das outras, e o skill score compara o
+    previsor e a persistência sobre as mesmas horas, como na avaliação offline. Sem modelo, a
+    persistência fica com todas as horas que tem. Se os modelos não têm nenhuma hora em comum (uma
+    versão parou antes de a outra começar), cada um fica com as suas e a persistência com todas.
     """
+    scorable = series[[OBSERVED, PERSISTENCE]].dropna().index
+    own = {c: scorable.intersection(series[c].dropna().index)
+           for c in series.columns if c not in (OBSERVED, PERSISTENCE)}
+    own = {c: hours for c, hours in own.items() if not hours.empty}
+    shared = scorable
+    for hours in own.values():
+        shared = shared.intersection(hours)
+    windows = {PERSISTENCE: shared, **dict.fromkeys(own, shared)}
+    if own and shared.empty:
+        windows = {PERSISTENCE: scorable, **own}
     rows = []
-    for name in (c for c in series.columns if c != OBSERVED):
-        hours = series[list(dict.fromkeys([OBSERVED, PERSISTENCE, name]))].dropna()
-        if hours.empty:
+    for name, index in windows.items():
+        if index.empty:
             continue
+        hours = series.loc[index]
         s = forecast_scores(hours[OBSERVED].to_numpy(float), hours[name].to_numpy(float),
                             hours[PERSISTENCE].to_numpy(float))
         rows.append({"previsor": name, "horas": s["n"], "mae": s["mae"], "rmse": s["rmse"], "skill": s["skill"]})
