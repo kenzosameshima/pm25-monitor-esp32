@@ -123,3 +123,32 @@ class ZeroReadingTest {
         assertFalse(isZeroReading(LatestReading(ts, pm25 = Double.NaN, pm10 = 0.0)))
     }
 }
+
+class BandScaleTest {
+    @Test
+    fun `a escala da a cada faixa o mesmo comprimento`() {
+        // Os mesmos exemplos do teste do servidor (analytics.band_position): as duas pontas desenham a mesma escala.
+        val expected = listOf(
+            0.0 to 0.0, 12.5 to 0.1, 25.0 to 0.2, 37.5 to 0.3, 100.0 to 0.7, 125.0 to 0.8, 187.5 to 0.9,
+            250.0 to 1.0, 900.0 to 1.0,   // a última faixa não tem teto: a escala a mostra até 250, e o resto fica no fim
+        )
+        for ((pm25, position) in expected) {
+            assertEquals("PM2,5 $pm25", position, bandPosition(pm25)!!, 1e-9)
+        }
+    }
+
+    @Test
+    fun `sem valor valido nao ha posicao na escala`() {
+        assertNull(bandPosition(null))
+        assertNull(bandPosition(Double.NaN))
+        assertNull(bandPosition(-1.0))
+    }
+
+    @Test
+    fun `cada faixa diz de onde a onde vai`() {
+        assertEquals("de 0 a 25 µg/m³", AirQuality.BOA.rangeText())
+        assertEquals("de 25 a 50 µg/m³", AirQuality.MODERADA.rangeText())
+        assertEquals("de 75 a 125 µg/m³", AirQuality.MUITO_RUIM.rangeText())
+        assertEquals("acima de 125 µg/m³", AirQuality.PESSIMA.rangeText())
+    }
+}

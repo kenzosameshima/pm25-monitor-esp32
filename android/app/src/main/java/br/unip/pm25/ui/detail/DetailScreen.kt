@@ -139,9 +139,7 @@ private fun RangeSelector(selected: HistoryRange, onSelect: (HistoryRange) -> Un
 private fun HistoryCard(series: HourlySeries, range: HistoryRange) {
     val summary = summarize(series.hours)
     val timeFormat = if (range == HistoryRange.DAY) CLOCK else DATE
-    val description = "PM2,5 por hora nas últimas ${range.label}: média ${summary.mean.format()}, " +
-        "máxima ${summary.max?.pm25.format()} microgramas por metro cúbico, " +
-        "${summary.validHours} de ${summary.totalHours} horas válidas."
+    val description = historyDescription(range.label, summary)
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("PM2,5 por hora (µg/m³)", style = MaterialTheme.typography.titleMedium, modifier = Modifier.asHeading())
@@ -163,6 +161,9 @@ private fun HistoryCard(series: HourlySeries, range: HistoryRange) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            blankHoursNote(summary)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             if (summary.suspectHours > 0) {
                 Text(
                     suspectHoursNote(summary.suspectHours),
@@ -189,7 +190,7 @@ private fun HealthCard(health: Health, range: HistoryRange) {
             Text("Saúde da coleta (${range.label})", style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.asHeading())
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                Metric("Completude", "${(health.completeness * 100).format(0)}%", Modifier.weight(1f))
+                Metric("Completude", completenessText(health.completeness), Modifier.weight(1f))
                 Metric("Maior lacuna", "${health.largestGapMin} min", Modifier.weight(1f))
                 Metric("Reinícios", "${health.restarts}", Modifier.weight(1f))
             }

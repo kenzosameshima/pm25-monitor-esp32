@@ -42,6 +42,23 @@ class HourlySummaryTest {
     }
 
     @Test
+    fun `separa as horas sem media pela causa`() {
+        // hourly.json: a terceira hora tem 30 leituras (poucas) e a quarta, nenhuma
+        val s = summarize(ApiJson.decodeFromString<HourlySeries>(fixture("hourly.json")).hours)
+        assertEquals(1, s.noReadingHours)
+        assertEquals(1, s.fewReadingsHours)
+        assertEquals(0, s.suspectHours)
+    }
+
+    @Test
+    fun `a hora suspeita tem leituras de sobra e nao conta como poucas leituras`() {
+        val s = summarize(ApiJson.decodeFromString<HourlySeries>(fixture("hourly_suspect.json")).hours)
+        assertEquals(1, s.suspectHours)
+        assertEquals(0, s.noReadingHours)
+        assertEquals(0, s.fewReadingsHours)
+    }
+
+    @Test
     fun `sem horas validas nao ha media nem maxima`() {
         val invalid = HourlyPoint(Instant.EPOCH, readings = 10, valid = false)
         val s = summarize(listOf(invalid, invalid))
