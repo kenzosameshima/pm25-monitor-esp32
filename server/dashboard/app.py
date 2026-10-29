@@ -641,6 +641,19 @@ def series_tab(devices_all: list[str]) -> None:
                         help="Baixa os dados dos gráficos, no período e na resolução escolhidos.")
 
 
+TOO_LITTLE_TO_EVALUATE = "Ainda não há pares de previsão e observação suficientes para avaliar este sensor."
+NO_MODEL_FORECAST = "Nenhuma previsão de modelo disponível para este sensor no período exibido."
+
+
+def forecast_data_table(table: pd.DataFrame) -> pd.DataFrame:
+    """As horas que têm algum valor, com a hora local e os números com vírgula: o que existe quando não dá para avaliar.
+    Já vai em texto, com "—" nas células vazias: o navegador escreve "None" nas nulas, seja qual for o Styler."""
+    hours = table.dropna(how="all")
+    text = hours.apply(lambda column: column.map(lambda value: "—" if pd.isna(value) else decimal_comma(value)))
+    text.insert(0, "Hora", local_naive(hours.index.to_series()).dt.strftime("%d/%m %H:%M").to_numpy())
+    return text
+
+
 def evaluation_note(table: pd.DataFrame, metrics: pd.DataFrame) -> str:
     """Em que horas a tabela de métricas foi calculada, para ninguém comparar linhas de amostras diferentes."""
     horizon = "Previsão da média da hora seguinte"
@@ -658,11 +671,20 @@ def forecast_tab(devices_all: list[str]) -> None:
     comparison = load_forecast(device, now_utc())
     table = comparison.series.rename(columns=SERIES_LABELS)
     has_models = len(table.columns) > len(SERIES_LABELS)
+    metrics = comparison.metrics.replace({"previsor": SERIES_LABELS}).rename(columns=METRIC_LABELS)
 
-    long =table.reset_index(names="hora").melt("hora", var_name="serie", value_name="pm25").dropna()
-    if long.empty:
-        st.info("Ainda não há horas completas para comparar.")
+    if metrics.empty:                    # nenhuma hora com observação e persistência: nada para avaliar nem para desenhar
+        st.info(TOO_LITTLE_TO_EVALUATE)
+        if not has_models:
+            st.caption(NO_MODEL_FORECAST)
+        if not table.dropna(how="all").empty:
+            with st.expander("Ver dados disponíveis"):
+                st.dataframe(forecast_data_table(table), hide_index=True)
         return
+    if not has_models:                   # antes do gráfico: é o que explica o gráfico ter só a persistência
+        st.info(NO_MODEL_FORECAST)
+
+    long = table.reset_index(names="hora").melt("hora", var_name="serie", value_name="pm25").dropna()
     long["hora_local"] = local_naive(long["hora"])
     long["valor"] = long["pm25"].map(decimal_comma)          # o tooltip do Vega escreveria o ponto decimal
     long = with_segments(long, "hora_local", "serie", pd.Timedelta(hours=1))
@@ -684,18 +706,12 @@ def forecast_tab(devices_all: list[str]) -> None:
                             title=True, subtitle=f"{first:%d/%m %H:%M} a {last:%d/%m %H:%M} · horário de Brasília"))
     st.altair_chart(chart, width="stretch")
 
-    metrics = comparison.metrics.replace({"previsor": SERIES_LABELS}).rename(columns=METRIC_LABELS)
-    if not metrics.empty:
-        # O Styler escreve os números com vírgula (o formato da coluna do Streamlit só sabe o ponto).
-        st.dataframe(metrics.style.format(decimal=",", precision=2, na_rep="—"), hide_index=True)
-    if not metrics.empty:
-        st.caption(evaluation_note(table, metrics))
+    # O Styler escreve os números com vírgula (o formato da coluna do Streamlit só sabe o ponto).
+    st.dataframe(metrics.style.format(decimal=",", precision=2, na_rep="—"), hide_index=True)
+    st.caption(evaluation_note(table, metrics))
     st.caption("Persistência repete a média da hora anterior e é a referência que qualquer modelo precisa superar. "
                "MAE é o erro médio e RMSE pesa mais os erros grandes. O skill score compara o RMSE do previsor com "
                "o da persistência nas mesmas horas: acima de zero, o modelo acerta mais que repetir a hora anterior.")
-    if not has_models:
-        st.info("Nenhuma previsão de modelo registrada ainda. Quando o job horário estiver no ar, as previsões "
-                "gravadas na tabela forecasts aparecem aqui ao lado da persistência.")
 
 
 # ---------------------------------------------------------------- página

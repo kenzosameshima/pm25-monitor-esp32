@@ -965,6 +965,75 @@ def test_tabela_de_previsao_escreve_os_numeros_com_virgula(app_env):
     assert not has_decimal_point(text), text
 
 
+def add_full_hours(path: Path, device: str, hours_ago: list[int], boot_id: int = 5) -> None:
+    """Uma hora cheia de leituras normais de `device` para cada `hours_ago` (horas antes da hora atual)."""
+    top = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    conn = db.connect(str(path))
+    for k in hours_ago:
+        start = top - timedelta(hours=k)
+        db.insert_batch(conn, device, [{"device_id": device, "boot_id": boot_id, "seq": k * 60 + m, "uptime_s": 0,
+                                        "schema_version": "1", "quality": "ok",
+                                        "ts_sensor": db.iso(start + timedelta(minutes=m)),
+                                        "ts_received": db.iso(start + timedelta(minutes=m)),
+                                        **synthetic(start + timedelta(minutes=m), {})} for m in range(60)], start)
+    conn.close()
+
+
+def choose_forecast_sensor(at, device: str) -> None:
+    """Escolhe o sensor da aba Previsto × observado, seja o controle botões ou lista."""
+    tab = at.tabs[2]
+    control = tab.segmented_control[0] if len(tab.segmented_control) else tab.selectbox[0]
+    control.set_value(device).run()
+
+
+def tab_order(tab) -> list[str]:
+    """Os tipos dos elementos de uma aba, na ordem em que aparecem."""
+    return [tab.children[key].type for key in sorted(tab.children)]
+
+
+TOO_LITTLE = "Ainda não há pares de previsão e observação suficientes para avaliar este sensor."
+NO_MODEL = "Nenhuma previsão de modelo disponível para este sensor no período exibido."
+
+
+def test_sensor_sem_pares_para_avaliar_diz_isso_e_deixa_os_dados_num_expansor_em_vez_de_um_grafico(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_full_hours(app_env, "no-02", [30, 20])                   # duas horas soltas: nenhuma tem a anterior para a persistência
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    choose_forecast_sensor(at, "no-02")
+    assert not at.exception, at.exception
+    tab = at.tabs[2]
+    assert [i.value for i in tab.info] == [TOO_LITTLE]
+    assert NO_MODEL in [c.value for c in tab.caption]                    # a falta de modelo também, antes de qualquer gráfico
+    assert len(tab.get("vega_lite_chart")) == 0                          # nada de gráfico de dois pontos com eixo em 5,214894
+    box = next(e for e in tab.expander if e.label == "Ver dados disponíveis")
+    text = shown(box.dataframe[0])
+    assert list(text.columns)[:3] == ["Hora", "Observado", "Persistência"] and len(text) == 4     # as duas horas e a seguinte a cada uma
+    assert text["Hora"].str.fullmatch("[0-9]{2}/[0-9]{2} [0-9]{2}:00").all() and not has_decimal_point(text)
+    # O navegador escreve "None" nas células nulas, seja qual for o `na_rep` do Styler: o vazio já vai como texto.
+    raw = box.dataframe[0].value
+    assert not raw.isna().any().any() and (raw == "—").sum().sum() == 4          # metade das células: cada hora tem um só valor
+
+
+def test_aviso_de_que_nao_ha_modelo_vem_antes_do_grafico_e_nao_cita_job_nem_tabela(app_env):
+    populate(app_env)                                           # o no-02 tem dados e nenhuma previsão de modelo
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    choose_forecast_sensor(at, "no-02")
+    assert not at.exception, at.exception
+    tab = at.tabs[2]
+    assert [i.value for i in tab.info] == [NO_MODEL]
+    order = tab_order(tab)
+    assert order.index("info") < order.index("vega_lite_chart")              # o aviso vem antes do gráfico, não depois
+    page = " ".join([i.value for i in at.info] + [c.value for c in at.caption])
+    assert "job horário" not in page and "forecasts" not in page          # nada de detalhe interno nem de causa operacional
+
+
+def test_sensor_com_modelo_nao_mostra_aviso_de_modelo_ausente(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert not at.tabs[2].info and NO_MODEL not in [c.value for c in at.tabs[2].caption]
+
+
 def forecast_head(at) -> str:
     """O HTML da linha acima do gráfico da aba Previsto × observado."""
     return next(h.proto.body for h in at.tabs[2].get("html") if 'class="aq-trend-head"' in h.proto.body)
