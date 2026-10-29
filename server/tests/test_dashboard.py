@@ -394,3 +394,27 @@ def test_troca_para_resolucao_de_um_minuto(app_env):
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     at.radio[0].set_value("1 minuto").run()
     assert not at.exception, at.exception
+
+
+def test_no_em_operacao_com_leitura_zerada_fica_sem_faixa_e_diz_por_que(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=0.02, pm1=0.0, pm25=0.0, pm10=0.0)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+
+    pm25 = [m for m in at.metric if m.label == "PM2,5"]
+    assert pm25[1].value == "0,0 µg/m³"          # o valor segue visível: é o que o nó enviou
+    assert not pm25[1].delta                     # mas sem o selo "Boa", que um sensor parado em zero não merece
+    assert len(aq_scales(at)) == 1               # a escala é só do no-01
+    notes = [c.value for c in at.caption if "Leitura zerada" in c.value]
+    assert len(notes) == 1
+    assert "PM1, PM2,5 e PM10" in notes[0] and "pode não estar vendo partículas" in notes[0]
+    assert "sem faixa" in notes[0]
+
+
+def test_leitura_com_particulas_nao_traz_o_aviso_de_leitura_zerada(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert not [c for c in at.caption if "zerada" in c.value]
+    assert [m for m in at.metric if m.label == "PM2,5"][0].delta

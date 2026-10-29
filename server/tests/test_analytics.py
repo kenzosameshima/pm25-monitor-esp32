@@ -420,3 +420,19 @@ def test_comparacao_sem_dados(conn):
     comp = analytics.forecast_comparison(conn, "no-01", NOW)
     assert comp.series.isna().all().all()
     assert comp.metrics.empty and list(comp.metrics.columns) == analytics.METRIC_COLUMNS
+
+
+# ---------------------------------------------------------------- leitura zerada
+
+@pytest.mark.parametrize("pm1, pm25, pm10", [(0.0, 0.0, 0.0), (None, 0.0, 0.0), (0, 0, 0)])
+def test_leitura_com_todas_as_particulas_em_zero_e_zerada(pm1, pm25, pm10):
+    assert analytics.is_zero_reading(pm1, pm25, pm10)
+
+
+@pytest.mark.parametrize("pm1, pm25, pm10", [
+    (0.0, 0.0, 0.1), (0.0, 0.2, 0.0), (0.3, 0.0, 0.0),       # qualquer partícula vista desfaz o zero
+    (0.0, None, 0.0), (None, None, None),                    # sem PM2,5 não há leitura para dizer que é zero
+    (float("nan"), float("nan"), float("nan")),
+])
+def test_leitura_com_alguma_particula_ou_sem_pm25_nao_e_zerada(pm1, pm25, pm10):
+    assert not analytics.is_zero_reading(pm1, pm25, pm10)

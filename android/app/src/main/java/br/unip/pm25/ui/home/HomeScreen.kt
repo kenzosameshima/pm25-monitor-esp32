@@ -57,6 +57,7 @@ import br.unip.pm25.domain.currentStatus
 import br.unip.pm25.domain.estimatedServerNow
 import br.unip.pm25.domain.formatAge
 import br.unip.pm25.domain.hasCurrentValue
+import br.unip.pm25.domain.isZeroReading
 import br.unip.pm25.domain.readingAge
 import br.unip.pm25.ui.AlertsCard
 import br.unip.pm25.ui.ErrorPanel
@@ -212,6 +213,9 @@ private fun NoRecentDataContent(latest: LatestReading, serverNow: Instant) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LatestReadingContent(latest: LatestReading, serverNow: Instant) {
+    // Com tudo em zero não se sabe se o sensor parou de ver partículas ou se o ar está limpo: o valor aparece,
+    // mas sem a faixa que o chamaria de "Boa".
+    val zeroed = isZeroReading(latest)
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -228,7 +232,11 @@ private fun LatestReadingContent(latest: LatestReading, serverNow: Instant) {
             Text("PM2,5 · leitura ${formatAge(readingAge(latest.ts, serverNow))}",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        AirQuality.of(latest.pm25)?.let { QualityChip(it) }
+        if (!zeroed) AirQuality.of(latest.pm25)?.let { QualityChip(it) }
+    }
+    if (zeroed) {
+        Text(ZERO_READING_NOTE, style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     MetricRow {
         Metric("Temperatura", latest.temperature.formatWith("°C"))

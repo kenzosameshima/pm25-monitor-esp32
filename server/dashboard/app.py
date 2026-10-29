@@ -336,12 +336,18 @@ def status_tab() -> None:
             else:
                 # O PM2,5 abre o cartão, grande e com a escala das faixas sob ele; os outros indicadores ficam numa
                 # linha só, menores.
-                band, color = air_quality(dev["pm25"]) or (None, "off")
+                # Com tudo em zero não se sabe se o sensor parou de ver partículas ou se o ar está limpo: a leitura
+                # aparece, mas sem a faixa que a chamaria de "Boa".
+                zeroed = analytics.is_zero_reading(dev["pm1"], dev["pm25"], dev["pm10"])
+                band, color = (None, "off") if zeroed else air_quality(dev["pm25"]) or (None, "off")
                 with st.container(key=f"hero-{device}"):
                     st.metric("PM2,5", fmt(dev["pm25"], " µg/m³"), delta=band, delta_color=color, delta_arrow="off",
                               help="Faixas da CETESB para a média de 24 horas; aplicadas à leitura de um minuto, "
                                    "servem só de referência.")
-                    position = analytics.band_position(dev["pm25"])
+                    if zeroed:
+                        st.caption("Leitura zerada (PM1, PM2,5 e PM10 em 0,0): o sensor pode não estar vendo "
+                                   "partículas. Por isso o cartão fica sem faixa de qualidade do ar.")
+                    position = None if zeroed else analytics.band_position(dev["pm25"])
                     if position is not None:
                         st.html(band_scale_html(position, f"PM2,5 de {fmt(dev['pm25'], ' µg/m³')}, na faixa {band}"))
                 a, b, c = st.columns(3)

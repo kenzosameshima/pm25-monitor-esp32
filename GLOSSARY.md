@@ -38,6 +38,10 @@ _Avoid_: build, release
 Leitura que o servidor considerou implausível. Fica guardada, mas não entra nas médias horárias por padrão.
 _Avoid_: leitura suspeita, leitura ruim, flagged
 
+**Leitura zerada**:
+Leitura em que PM1, PM2,5 e PM10 chegam todos em 0,0 µg/m³. Sozinha, não diz se o sensor parou de ver partículas ou se o ar está muito limpo.
+_Avoid_: leitura suspeita (suspeita é a hora), leitura inválida
+
 ### Qualidade da coleta
 
 **Estado do nó**:

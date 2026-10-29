@@ -75,6 +75,18 @@ def band_position(pm25) -> float | None:
     return 1.0
 
 
+def is_zero_reading(pm1, pm25, pm10) -> bool:
+    """Se uma leitura tem todas as partículas que o nó enviou em zero (e ao menos o PM2,5).
+
+    É o padrão que o ADR 0004 trata como suspeito, mas numa leitura só ele não decide se o sensor parou de ver
+    partículas ou se o ar está muito limpo: por isso quem mostra a leitura não lhe dá faixa de qualidade do ar.
+    """
+    if pm25 is None or pd.isna(pm25):
+        return False
+    sent = [v for v in (pm1, pm25, pm10) if v is not None and not pd.isna(v)]
+    return all(v == 0 for v in sent)
+
+
 def production_devices(conn: sqlite3.Connection) -> list[str]:
     """Nós com leituras, sem os de teste, em ordem de nome."""
     return [r["device_id"] for r in db.device_overview(conn) if not is_test_device(r["device_id"])]
