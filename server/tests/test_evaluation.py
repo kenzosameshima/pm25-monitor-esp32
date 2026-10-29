@@ -29,7 +29,7 @@ def test_a_persistencia_sozinha_diz_so_as_horas_avaliadas():
 
 def test_o_guia_define_cada_coluna_da_tabela_no_vocabulario_do_glossario():
     guide = evaluation_guide(retroactive=False)
-    for term in ("Horas", "Persistência", "MAE", "RMSE", "Skill score"):
+    for term in ("Horas avaliadas", "Persistência", "MAE", "RMSE", "Skill score"):
         assert f"**{term}:**" in guide
     assert "um menos a razão entre o RMSE do previsor e o da persistência" in guide
     assert "retroativa" not in guide                                   # sem previsor retroativo, o assunto nem aparece

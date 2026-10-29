@@ -270,7 +270,7 @@ HEALTH_LABELS = {
     "leituras_marcadas": "Leituras marcadas",
 }
 SERIES_LABELS = {OBSERVED: "Observado", PERSISTENCE: "Persistência"}
-METRIC_LABELS = {"previsor": "Previsor", "horas": "Horas", "mae": "MAE (µg/m³)", "rmse": "RMSE (µg/m³)",
+METRIC_LABELS = {"previsor": "Previsor", "horas": "Horas avaliadas", "mae": "MAE (µg/m³)", "rmse": "RMSE (µg/m³)",
                  "skill": "Skill score"}
 # Observado em azul e o baseline em cinza; os modelos ficam com cores que não se confundem com nenhum dos dois.
 SERIES_COLORS = {"Observado": "#3b82f6", "Persistência": "#9ca3af"}
@@ -663,7 +663,7 @@ def show_evaluation_notes(table: pd.DataFrame, metrics: pd.DataFrame) -> None:
     """Em que horas a tabela de métricas foi calculada, escrito acima dela para ninguém comparar linhas de amostras
     diferentes sem saber: quando as horas são outras, é um aviso (MAE e RMSE não se comparam), com o skill score ao lado."""
     rated = table[[SERIES_LABELS[OBSERVED], *metrics["Previsor"]]].dropna()
-    if metrics["Horas"].nunique() > 1 or len(rated) != metrics["Horas"].iloc[0]:
+    if metrics["Horas avaliadas"].nunique() > 1 or len(rated) != metrics["Horas avaliadas"].iloc[0]:
         st.warning(DIFFERENT_PERIODS)
         st.caption(SKILL_NOTE)
         return
@@ -722,7 +722,7 @@ def forecast_tab(devices_all: list[str]) -> None:
     st.altair_chart(chart, width="stretch")
 
     show_evaluation_notes(table, metrics)
-    notes = metrics["Horas"].map(small_sample_note)
+    notes = metrics["Horas avaliadas"].map(small_sample_note)
     if notes.ne("").any():               # a coluna só existe quando alguma linha tem menos de um dia de horas
         metrics = metrics.assign(**{"Observação": notes})
     # O Styler escreve os números com vírgula (o formato da coluna do Streamlit só sabe o ponto).

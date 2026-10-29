@@ -119,7 +119,8 @@ def test_tabela_de_previsao_diz_que_todos_os_previsores_usam_as_mesmas_horas(app
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     metrics = at.dataframe[1].value.set_index("Previsor")
-    assert set(metrics["Horas"]) == {11}                 # a persistência também só conta as 11 horas do modelo
+    assert set(metrics["Horas avaliadas"]) == {11}       # a persistência também só conta as 11 horas do modelo
+    assert list(metrics.reset_index().columns[:2]) == ["Previsor", "Horas avaliadas"]   # o nome diz o que a contagem é
     note = [c.value for c in at.tabs[2].caption if "mesmas 11 horas" in c.value]
     assert len(note) == 1 and note[0].startswith("Todos os previsores foram avaliados nas mesmas 11 horas, de ")
     assert not at.tabs[2].warning                        # as linhas se comparam: nada a avisar
@@ -1132,7 +1133,7 @@ def test_definicoes_da_avaliacao_ficam_num_expansor_e_nao_soltas_abaixo_da_tabel
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     guide = forecast_guide(at)
-    assert all(f"**{term}:**" in guide for term in ("Horas", "Persistência", "MAE", "RMSE", "Skill score"))
+    assert all(f"**{term}:**" in guide for term in ("Horas avaliadas", "Persistência", "MAE", "RMSE", "Skill score"))
     inside = {c.value for e in at.tabs[2].expander for c in e.caption}
     outside = [c.value for c in at.tabs[2].caption if c.value not in inside]
     assert not any("MAE é o erro médio" in text or "pesa mais os erros" in text for text in outside)   # nada de definição solta

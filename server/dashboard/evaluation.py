@@ -29,7 +29,7 @@ def evaluation_guide(retroactive: bool) -> str:
     """Uma definição por coluna da tabela de avaliação, no vocabulário do glossário. A da previsão retroativa só entra
     quando a tabela tem uma, e diz o que o "-retro" do nome quer dizer para quem não conhece o nome técnico."""
     lines = [
-        "- **Horas:** quantas horas entraram nas contas da linha.",
+        "- **Horas avaliadas:** quantas horas entraram nas contas da linha.",
         "- **Persistência:** repete a média da hora anterior; é a referência que qualquer modelo precisa superar.",
         "- **MAE:** o erro médio da previsão, em µg/m³.",
         "- **RMSE:** também em µg/m³, mas pesa mais os erros grandes.",
