@@ -21,6 +21,7 @@ from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
+from dashboard.trend import period_text, trend_head_html  # noqa: E402
 
 LOCAL_TZ = "America/Sao_Paulo"
 MAX_MINUTE_DAYS = 7  # o período padrão da aba Séries (7 dias) ainda cabe em resolução de 1 minuto
@@ -76,6 +77,12 @@ PAGE_STYLE = """<style>
 .aq-ticks {position: relative; height: 1rem; margin-top: .35rem; font-size: .75rem; opacity: .75;
            font-variant-numeric: tabular-nums}
 .aq-ticks span {position: absolute; transform: translateX(-50%)}
+/* A linha acima do gráfico de 6 horas: o período e a unidade de um lado, a legenda e os avisos do outro. */
+.aq-trend-head {display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .25rem 1rem;
+                font-size: .875rem}
+.aq-period, .aq-key-off {opacity: .75}
+.aq-keys {display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem}
+.aq-key i {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem}
 </style>"""
 st.html(PAGE_STYLE)
 
@@ -263,19 +270,20 @@ def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta)
 
 def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timedelta,
                rule: float | None = None, color: str = "device_id", legend: str = "Sensor",
-               domain: list[str] | None = None, time_only: bool = False, subtitle: str | None = None) -> alt.Chart:
+               domain: list[str] | None = None, compact: bool = False) -> alt.Chart:
     """Linhas por nó, uma cor fixa para cada. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
-    fixa o eixo do tempo, e `time_only` mostra só a hora nos rótulos, com a data (`subtitle`) no título."""
+    fixa o eixo do tempo. `compact` é o gráfico das últimas 6 horas: só a hora nos rótulos e sem título nem legenda,
+    que a página escreve numa linha acima."""
     data = with_segments(data[[x, y, color]].dropna(), x, color, max_gap)
     data = data.assign(valor=data[y].map(decimal_comma))      # o tooltip do Vega escreveria o ponto decimal
     names = sorted(data[color].unique())
     sensors = color == "device_id"
     chart = alt.Chart(data).mark_line(point=len(data) <= 400).encode(
-        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%H:%M" if time_only else "%d/%m %H:%M"),
+        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%H:%M" if compact else "%d/%m %H:%M"),
                 scale=alt.Scale(domain=domain) if domain else alt.Undefined),
         y=alt.Y(f"{y}:Q", title=None, scale=alt.Scale(zero=False),
                 axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')", minExtent=Y_AXIS_WIDTH)),
-        color=alt.Color(f"{color}:N", title=legend, legend=alt.Legend(orient="top"),
+        color=alt.Color(f"{color}:N", title=legend, legend=None if compact else alt.Legend(orient="top"),
                         scale=alt.Scale(domain=names, range=[sensor_color(n) for n in names])
                         if sensors else alt.Undefined),
         detail="segmento:N",
@@ -288,10 +296,12 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
     if rule is not None:
         chart = chart + alt.Chart(pd.DataFrame({"limite": [rule]})).mark_rule(
             strokeDash=[4, 4], color="gray").encode(y="limite:Q")
-    # No Streamlit a altura inclui título, legenda e eixos: 330 deixa para a área das linhas cerca de 200 px.
-    # A data vai no próprio título: o subtítulo do Vega não segue o tema e some sobre o fundo escuro.
-    return chart.properties(height=330, description=chart_description(data, x, y, title, names),
-                            title=alt.TitleParams(f"{title} · {subtitle}" if subtitle else title, anchor="start"))
+    # No Streamlit a altura inclui título, legenda e eixos: 330 deixa para a área das linhas cerca de 200 px, e sem
+    # título nem legenda 240 deixam o mesmo tanto.
+    description = chart_description(data, x, y, title, names)
+    if compact:
+        return chart.properties(height=240, description=description)
+    return chart.properties(height=330, description=description, title=alt.TitleParams(title, anchor="start"))
 
 
 def chart_description(data: pd.DataFrame, x: str, y: str, title: str, names: list[str]) -> str:
@@ -393,17 +403,14 @@ def status_tab() -> None:
     recent = load_measurements(now - timedelta(hours=6), now + timedelta(minutes=1), tuple(status["device_id"]))
     tz = ZoneInfo(LOCAL_TZ)
     first, last = (now - timedelta(hours=6)).astimezone(tz), now.astimezone(tz)
-    days = f"{first:%d/%m}" if first.date() == last.date() else f"{first:%d/%m} a {last:%d/%m}"
-    st.markdown("#### PM2,5 nas últimas 6 horas")
+    st.markdown("#### PM2,5 · últimas 6 horas")
+    # Um nó sem leitura na janela some do gráfico: o aviso ao lado da legenda diz que ele não foi esquecido.
+    sent = sorted(set(recent["device_id"])) if not recent.empty else []
+    missing = [d for d in devices if d in by_id.index and d not in sent]
+    st.html(trend_head_html(period_text(first, last), "µg/m³", [(d, sensor_color(d)) for d in sent], missing))
     if not recent.empty:
         st.altair_chart(line_chart(recent.assign(hora=local_naive(recent["ts_sensor"])), "hora", "pm25",
-                                   VARIABLES["pm25"], pd.Timedelta(minutes=5), time_only=True, subtitle=days),
-                        width="stretch")
-    # Um nó sem leitura na janela some do gráfico e da legenda: o aviso diz que ele não foi esquecido.
-    sent = set(recent["device_id"]) if not recent.empty else set()
-    missing = [d for d in devices if d in by_id.index and d not in sent]
-    if missing:
-        st.caption(f"{', '.join(missing)}: sem leituras nas últimas 6 horas.")
+                                   VARIABLES["pm25"], pd.Timedelta(minutes=5), compact=True), width="stretch")
 
     window_start = now - timedelta(hours=24)
     health = load_health(window_start, now).rename(columns=HEALTH_LABELS)

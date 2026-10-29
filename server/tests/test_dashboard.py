@@ -312,23 +312,51 @@ def test_aviso_das_horas_suspeitas_nao_afirma_o_que_o_ar_faz_e_leva_os_criterios
     assert "falha do sensor" in text and "ar muito limpo" in text and "CETESB" in text  # a causa não está decidida
 
 
-def test_grafico_de_seis_horas_avisa_do_no_que_nao_enviou_nada(app_env):
+def trend_head(at) -> str:
+    """O HTML da linha acima do gráfico de 6 horas, com o período, a legenda e os avisos dos nós calados."""
+    return next(h.proto.body for h in at.get("html") if 'class="aq-trend-head"' in h.proto.body)
+
+
+def test_grafico_de_seis_horas_tem_titulo_curto_e_uma_linha_so_com_periodo_e_legenda(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert "#### PM2,5 · últimas 6 horas" in [m.value for m in at.markdown]
+    head = trend_head(at)
+    assert re.search(r"\d{2}(/\d{2}|–\d{2}/\d{2}| a \d{2}/\d{2}) · µg/m³", head)    # o período e a unidade
+    assert "no-01" in head and "background:#22b8cf" in head                            # a legenda, com a cor do nó
+    assert "sem leituras" not in head
+
+
+def test_grafico_de_seis_horas_nao_repete_titulo_e_legenda_dentro_do_grafico(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    spec = json.loads(at.get("vega_lite_chart")[0].proto.spec)
+    assert "title" not in spec                       # o título e o período já vêm acima do gráfico
+    colors = [layer["encoding"]["color"] for layer in spec.get("layer", [spec]) if "color" in layer.get("encoding", {})]
+    assert colors and all(c.get("legend") is None for c in colors)     # e a legenda também
+
+
+def test_cabecalho_do_grafico_explica_o_no_que_nao_enviou_nada(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     add_last_reading(app_env, "no-02", hours_ago=27)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert [c.value for c in at.caption if "sem leituras nas últimas" in c.value] == [
-        "no-02: sem leituras nas últimas 6 horas."]
+    head = trend_head(at)
+    assert "no-02 · sem leituras neste período" in head and "no-01 · sem" not in head
+    assert not any("sem leituras nas últimas" in c.value for c in at.caption)   # o aviso saiu de baixo do gráfico
 
 
-def test_grafico_de_seis_horas_nao_avisa_quando_todos_os_nos_enviaram(app_env):
+def test_cabecalho_do_grafico_nao_avisa_quando_todos_os_nos_enviaram(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert not any("sem leituras nas últimas" in c.value for c in at.caption)
+    head = trend_head(at)
+    assert "sem leituras" not in head and "no-01" in head and "no-02" in head
 
 
-def test_grafico_de_seis_horas_avisa_quando_nenhum_no_enviou(app_env):
+def test_cabecalho_do_grafico_avisa_quando_nenhum_no_enviou(app_env):
     conn = db.connect(str(app_env))
     db.init_db(conn)
     conn.close()
@@ -336,7 +364,7 @@ def test_grafico_de_seis_horas_avisa_quando_nenhum_no_enviou(app_env):
     add_last_reading(app_env, "no-02", hours_ago=27)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert any(c.value == "no-01, no-02: sem leituras nas últimas 6 horas." for c in at.caption)
+    assert "no-01, no-02 · sem leituras neste período" in trend_head(at)
 
 
 def test_aviso_das_horas_suspeitas_separa_a_contagem_por_no(app_env):
