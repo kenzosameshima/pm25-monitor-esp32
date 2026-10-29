@@ -404,7 +404,7 @@ def test_no_em_operacao_com_leitura_zerada_fica_sem_faixa_e_diz_por_que(app_env)
     assert not at.exception, at.exception
 
     pm25 = [m for m in at.metric if m.label == "PM2,5"]
-    assert pm25[1].value == "0,0 µg/m³"          # o valor segue visível: é o que o nó enviou
+    assert pm25[1].value == "0,0"                # o valor segue visível: é o que o nó enviou
     assert not pm25[1].delta                     # mas sem o selo "Boa", que um sensor parado em zero não merece
     assert len(aq_scales(at)) == 1               # a escala é só do no-01
     notes = [c.value for c in at.caption if "Leitura zerada" in c.value]
@@ -511,3 +511,49 @@ def test_cabecalho_no_celular_segue_como_esta(app_env):
     assert not at.exception, at.exception
     # Fora da regra de tela larga a margem de cima fica em 3,5rem: no celular a barra do Streamlit cobriria uma menor.
     assert "padding-top: 3.5rem" in page_style(at).split("@media")[0]
+
+
+def set_location(path: Path, device: str, location: str) -> None:
+    conn = db.connect(str(path))
+    db.set_location(conn, device, location)
+    conn.close()
+
+
+def test_cartao_junta_nome_e_local_no_titulo(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 2)))
+    set_location(app_env, "no-01", "Osasco")
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert [s.value for s in at.subheader][:2] == ["no-01 · Osasco", "no-02"]   # sem local, só o nome
+    assert "Osasco" not in [c.value for c in at.caption]                          # o local não ganha uma linha só dele
+
+
+def test_unidade_do_pm25_vai_menor_ao_lado_do_valor(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    pm25 = [m for m in at.metric if m.label == "PM2,5"][0]
+    assert re.fullmatch(r"\d+,\d", pm25.value), pm25.value        # o valor é só o número...
+    # ...e a unidade é escrita pelo estilo, menor e com peso normal, só onde há uma leitura (não no "—" do nó sem dados).
+    unit = re.search(r"st-key-hero-'\]:not\(\[class\*='st-key-hero-empty-'\]\)[^{]*::after\s*\{([^}]*)\}", page_style(at))
+    assert unit, "falta a regra que escreve a unidade ao lado do valor"
+    assert 'content: " µg/m³"' in unit.group(1) and "font-weight: 400" in unit.group(1)
+
+
+def test_cartao_do_no_em_tela_larga_tem_blocos_mais_juntos(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    rules = wide_screen_rules(at)
+    node = "[data-testid='stVerticalBlock'][class*='st-key-node-']"
+    assert rem_of(rules, node, "gap") <= 0.75                                   # 12 px entre os grupos (eram 16)
+    assert rem_of(rules, node, "padding") <= 0.75                               # e 12 px de margem interna
+    assert rem_of(rules, "[data-testid='stHeading'] h3", "font-size") <= 1.5   # o nome do nó não domina o cartão
+    # O selo da faixa fica ao lado do valor, não numa linha só dele: a grade põe o rótulo em cima e os dois embaixo.
+    grid = re.search(r"\[data-testid='stMetric'\] > div \{([^}]*)\}", rules)
+    assert grid and "display: grid" in grid.group(1), "falta a grade do PM2,5 com o selo da faixa ao lado do valor"
+    # A escala junto das métricas. O seletor leva o cartão: a regra-base da escala vem depois no CSS e venceria um empate.
+    assert rem_of(rules, "[class*='st-key-hero-'] .aq-scale", "margin-bottom") <= 0.5
+    # O Streamlit tira 16 px da altura do título para compensar o espaço que ele mesmo põe embaixo; sem esse espaço, a
+    # compensação encurtaria a caixa do título e o texto cairia sobre a linha do estado.
+    assert re.search(r"\[data-testid='stMarkdownContainer'\]\s*\{[^}]*margin-bottom:\s*0[;} ]", rules)

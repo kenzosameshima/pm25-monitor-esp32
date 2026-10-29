@@ -48,6 +48,14 @@ PAGE_STYLE = """<style>
 [data-testid='stMainBlockContainer'] {padding-top: 1.75rem}
 [data-testid='stMainBlockContainer'] [data-testid='stHeading'] h1 {font-size: 1.75rem; line-height: 1.2; padding-top: 0; padding-bottom: .25rem}
 [data-testid='stTabs'] [role='tabpanel'] {padding-top: .5rem}
+/* O cartão de um nó gastava 470 px: o nome do nó grande, 16 px entre cada bloco e 24 px entre a escala e as métricas. */
+[data-testid='stVerticalBlock'][class*='st-key-node-'] {gap: .75rem; padding: .75rem}
+[data-testid='stVerticalBlock'][class*='st-key-hero-'] {gap: .5rem}
+[class*='st-key-node-'] [data-testid='stHeading'] h3 {font-size: 1.4rem; line-height: 1.3; padding-top: 0; padding-bottom: 0}
+[class*='st-key-node-'] [data-testid='stHeading'] [data-testid='stMarkdownContainer'] {margin-bottom: 0}
+[class*='st-key-hero-'] .aq-scale {margin-bottom: .25rem}
+[class*='st-key-hero-'] [data-testid='stMetric'] > div {display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: .75rem}
+[class*='st-key-hero-'] [data-testid='stMetricLabel'] {grid-column: 1 / -1}
 }
 /* Texto auxiliar: o Streamlit o deixa a 60% de opacidade, o que dá 3,7:1 no tema claro. A 75% passa de 4,5:1
    nos dois temas e ainda fica abaixo do texto principal. */
@@ -57,6 +65,8 @@ PAGE_STYLE = """<style>
 [data-testid='stMetricValue'] {font-variant-numeric: tabular-nums}
 [class*='st-key-node-'] [data-testid='stMetricValue'] {font-size: 1.75rem}
 [class*='st-key-hero-'] [data-testid='stMetricValue'] {font-size: 3.2rem; font-weight: 600; line-height: 1.05}
+/* A unidade do PM2,5 vem menor e com peso normal ao lado do valor: dentro do próprio valor ela competiria com ele. */
+[class*='st-key-hero-']:not([class*='st-key-hero-empty-']) [data-testid='stMetricValue'] div::after {content: " µg/m³"; font-size: .4em; font-weight: 400; margin-left: .2em}
 /* Escala das faixas de qualidade do ar sob o PM2,5. */
 .aq-scale {position: relative; max-width: 24rem; margin: .1rem 0 1.5rem}
 .aq-track {display: flex; gap: 2px; height: .5rem; border-radius: .25rem; overflow: hidden}
@@ -334,20 +344,19 @@ def status_tab() -> None:
     devices = expected_devices(status)
     for col, device in zip(st.columns(len(devices)), devices):
         with col, st.container(border=True, key=f"node-{device}"):
-            st.subheader(device)
+            location = by_id.at[device, "location"] if device in by_id.index else None
+            st.subheader(f"{device} · {location}" if isinstance(location, str) else device)
             if device not in by_id.index:
                 st.caption("⚪ aguardando instalação · nenhuma leitura recebida")
                 continue
             dev = by_id.loc[device]
             minutes = None if pd.isna(dev["minutes_since"]) else dev["minutes_since"]
             when = dev["ts_sensor"].tz_convert(LOCAL_TZ).strftime("%d/%m %H:%M")
-            if isinstance(dev["location"], str):
-                st.caption(dev["location"])
             st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")
             if dev["status"] == "sem_dados":
                 # Sem envio recente, o último valor não diz como o ar está agora (um sensor parado em zero
                 # apareceria como "Boa"): o valor atual fica vazio e a última leitura, dita histórica, no expansor.
-                with st.container(key=f"hero-{device}"):
+                with st.container(key=f"hero-empty-{device}"):
                     st.metric("PM2,5", "—")
                 with st.expander("Ver a última leitura recebida"):
                     st.caption(last_reading_text(dev, when))
@@ -359,7 +368,7 @@ def status_tab() -> None:
                 zeroed = analytics.is_zero_reading(dev["pm1"], dev["pm25"], dev["pm10"])
                 band, color = (None, "off") if zeroed else air_quality(dev["pm25"]) or (None, "off")
                 with st.container(key=f"hero-{device}"):
-                    st.metric("PM2,5", fmt(dev["pm25"], " µg/m³"), delta=band, delta_color=color, delta_arrow="off",
+                    st.metric("PM2,5", fmt(dev["pm25"], ""), delta=band, delta_color=color, delta_arrow="off",
                               help="Faixas da CETESB para a média de 24 horas; aplicadas à leitura de um minuto, "
                                    "servem só de referência.")
                     if zeroed:
