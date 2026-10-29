@@ -97,6 +97,42 @@ def test_esconde_no_de_teste_e_reserva_card_do_no_cadastrado_sem_dados(app_env, 
     assert at.multiselect[0].options == ["no-01"]
 
 
+def add_last_reading(path: Path, device: str, hours_ago: float, **values) -> None:
+    """Uma única leitura de `device`, de `hours_ago` horas atrás, com os valores dados."""
+    ts = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).replace(second=0, microsecond=0)
+    conn = db.connect(str(path))
+    db.insert_batch(conn, device, [{"device_id": device, "boot_id": 1, "seq": 0, "uptime_s": 0, "schema_version": "1",
+                                    "quality": "ok", "ts_sensor": db.iso(ts), "ts_received": db.iso(ts),
+                                    **{**synthetic(ts, {}), **values}}], ts)
+    conn.close()
+
+
+def test_no_sem_dados_nao_mostra_a_ultima_leitura_como_se_fosse_atual(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27, pm25=0.0, pm10=0.0)  # o nó parou com a leitura em zero
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+
+    pm25 = [m for m in at.metric if m.label == "PM2,5"]
+    assert pm25[1].value == "—"                  # no-02: nem 0.0 µg/m³ nem a faixa "Boa"
+    assert not pm25[1].delta
+    assert len(at.metric) == 6                   # os 5 do no-01 e só o PM2,5 do no-02
+    assert any("sem dados" in c.value for c in at.caption)
+
+    last = at.expander[0]                        # a última leitura segue acessível, dita como histórico
+    assert last.label == "Ver a última leitura recebida"
+    text = " ".join(c.value for c in last.caption)
+    assert "histórico" in text and "0.0 µg/m³" in text
+
+
+def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert len(at.metric) == 5
+    assert len(at.expander) == 0
+
+
 def add_dead_hours(path: Path, device: str, hours_ago: list[int]) -> None:
     """Uma hora cheia de leituras com PM1, PM2,5 e PM10 em zero, para cada `hours_ago` (horas antes da hora atual)."""
     top = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)

@@ -135,6 +135,14 @@ def ago(minutes: float | None) -> str:
     return f"há {minutes / 1440:.0f} dias"
 
 
+def last_reading_text(dev: pd.Series, when: str) -> str:
+    """A última leitura de um nó sem dados recentes, dita como histórico para não passar por valor atual."""
+    values = " · ".join([f"PM2,5 {fmt(dev['pm25'], ' µg/m³')}", f"PM10 {fmt(dev['pm10'], ' µg/m³')}",
+                         fmt(dev["temperature"], " °C"), fmt(dev["humidity"], "%"), fmt(dev["rssi"], " dBm", 0)])
+    note = "" if dev["quality"] == "ok" else f" O servidor a marcou como implausível ({dev['quality']})."
+    return f"Leitura de {when}, histórico (não é o valor atual): {values}.{note}"
+
+
 STATUS_LABELS = {"em_operacao": "🟢 em operação", "atrasado": "🟡 atrasado", "sem_dados": "🔴 sem dados"}
 HEALTH_LABELS = {
     "device_id": "Sensor",
@@ -215,6 +223,13 @@ def status_tab() -> None:
             st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")
             if isinstance(dev["firmware"], str):
                 st.caption(f"Firmware: {dev['firmware']}")
+            if dev["status"] == "sem_dados":
+                # Sem envio recente, o último valor não diz como o ar está agora (um sensor parado em zero
+                # apareceria como "Boa"): o valor atual fica vazio e a última leitura, dita histórica, no expansor.
+                st.metric("PM2,5", "—")
+                with st.expander("Ver a última leitura recebida"):
+                    st.caption(last_reading_text(dev, when))
+                continue
             # Uma linha de colunas por grupo: a faixa sob o PM2,5 não desalinha a linha de baixo.
             a, b = st.columns(2)
             band, color = air_quality(dev["pm25"]) or (None, "off")
