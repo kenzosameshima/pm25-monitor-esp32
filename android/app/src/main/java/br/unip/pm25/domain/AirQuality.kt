@@ -33,3 +33,26 @@ fun isZeroReading(reading: LatestReading): Boolean {
     if (pm25 == null || pm25.isNaN()) return false
     return listOfNotNull(reading.pm1, pm25, reading.pm10).all { it == 0.0 }
 }
+
+/**
+ * Onde um PM2,5 cai numa escala de 0 a 1 que dá a cada faixa o mesmo comprimento. Dentro de cada faixa a posição é
+ * proporcional ao valor; a última não tem teto, então a escala a mostra até o dobro do seu limite inferior (de 125
+ * a 250) e o que passa disso fica no fim. É o mesmo cálculo do servidor (`analytics.band_position`), para o
+ * dashboard e o app desenharem a mesma escala. Null sem valor válido.
+ */
+fun bandPosition(pm25: Double?): Double? {
+    if (pm25 == null || pm25.isNaN() || pm25 < 0) return null
+    val limits = AirQuality.entries.dropLast(1).map { it.upperBound }
+    val starts = listOf(0.0) + limits
+    val ends = limits + 2 * limits.last()
+    for (i in ends.indices) {
+        if (pm25 <= ends[i]) return (i + (pm25 - starts[i]) / (ends[i] - starts[i])) / ends.size
+    }
+    return 1.0
+}
+
+/** De onde a onde vai a faixa, para quem não vê a escala: "de 25 a 50 µg/m³"; a última não tem teto. */
+fun AirQuality.rangeText(): String {
+    val lower = if (ordinal == 0) 0 else AirQuality.entries[ordinal - 1].upperBound.toInt()
+    return if (upperBound.isInfinite()) "acima de $lower µg/m³" else "de $lower a ${upperBound.toInt()} µg/m³"
+}

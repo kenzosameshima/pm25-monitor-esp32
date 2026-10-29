@@ -60,6 +60,7 @@ import br.unip.pm25.domain.hasCurrentValue
 import br.unip.pm25.domain.isZeroReading
 import br.unip.pm25.domain.readingAge
 import br.unip.pm25.ui.AlertsCard
+import br.unip.pm25.ui.BandScale
 import br.unip.pm25.ui.ErrorPanel
 import br.unip.pm25.ui.Metric
 import br.unip.pm25.ui.MetricRow
@@ -233,6 +234,10 @@ private fun LatestReadingContent(latest: LatestReading, serverNow: Instant) {
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (!zeroed) AirQuality.of(latest.pm25)?.let { QualityChip(it) }
+    }
+    latest.pm25?.let { pm25 ->
+        val band = AirQuality.of(pm25)
+        if (!zeroed && band != null) BandScale(pm25, band)
     }
     if (zeroed) {
         Text(zeroReadingNote(latest), style = MaterialTheme.typography.bodySmall,
