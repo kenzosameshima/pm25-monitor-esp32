@@ -3,6 +3,7 @@ package br.unip.pm25.domain
 import br.unip.pm25.data.DeviceList
 import br.unip.pm25.data.DeviceState
 import br.unip.pm25.data.DeviceStatus
+import br.unip.pm25.data.LatestReading
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.double
@@ -96,5 +97,29 @@ class FreshnessTest {
         assertEquals("há 5 min", formatAge(Duration.ofMinutes(5)))
         assertEquals("há 2 h", formatAge(Duration.ofMinutes(150)))
         assertEquals("há 3 dias", formatAge(Duration.ofDays(3)))
+    }
+}
+
+class ZeroReadingTest {
+    private val ts = Instant.parse("2026-10-14T12:00:00Z")
+
+    @Test
+    fun `leitura com todas as particulas em zero e zerada`() {
+        assertTrue(isZeroReading(LatestReading(ts, pm1 = 0.0, pm25 = 0.0, pm10 = 0.0)))
+        assertTrue(isZeroReading(LatestReading(ts, pm25 = 0.0, pm10 = 0.0)))  // PM1 que o nó não mandou não conta
+    }
+
+    @Test
+    fun `qualquer particula vista desfaz o zero`() {
+        assertFalse(isZeroReading(LatestReading(ts, pm1 = 0.0, pm25 = 0.0, pm10 = 0.1)))
+        assertFalse(isZeroReading(LatestReading(ts, pm1 = 0.0, pm25 = 0.2, pm10 = 0.0)))
+        assertFalse(isZeroReading(LatestReading(ts, pm1 = 0.3, pm25 = 0.0, pm10 = 0.0)))
+    }
+
+    @Test
+    fun `sem pm25 nao ha leitura para dizer que e zero`() {
+        assertFalse(isZeroReading(LatestReading(ts, pm1 = 0.0, pm25 = null, pm10 = 0.0)))
+        assertFalse(isZeroReading(LatestReading(ts)))
+        assertFalse(isZeroReading(LatestReading(ts, pm25 = Double.NaN, pm10 = 0.0)))
     }
 }

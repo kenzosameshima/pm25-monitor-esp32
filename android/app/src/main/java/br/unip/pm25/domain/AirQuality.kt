@@ -1,5 +1,7 @@
 package br.unip.pm25.domain
 
+import br.unip.pm25.data.LatestReading
+
 /**
  * Faixas de qualidade do ar da CETESB para o PM2,5, em µg/m³.
  *
@@ -20,4 +22,14 @@ enum class AirQuality(val label: String, val upperBound: Double) {
             return entries.first { pm25 <= it.upperBound }
         }
     }
+}
+
+/**
+ * Se uma leitura chegou com todas as partículas que o nó enviou em zero (e ao menos o PM2,5). Sozinha ela não
+ * diz se o sensor parou de ver partículas ou se o ar está muito limpo, então quem a mostra não lhe dá faixa.
+ */
+fun isZeroReading(reading: LatestReading): Boolean {
+    val pm25 = reading.pm25
+    if (pm25 == null || pm25.isNaN()) return false
+    return listOfNotNull(reading.pm1, pm25, reading.pm10).all { it == 0.0 }
 }

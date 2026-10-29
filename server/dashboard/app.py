@@ -183,6 +183,14 @@ def last_reading_text(dev: pd.Series, when: str) -> str:
     return f"Leitura de {when}, histórico (não é o valor atual): {values}.{note}"
 
 
+def zero_reading_note(pm1, pm25, pm10) -> str:
+    """Aviso do cartão de um nó em operação cuja leitura chegou toda em zero, citando só o que o nó enviou."""
+    names = [name for name, value in (("PM1", pm1), ("PM2,5", pm25), ("PM10", pm10)) if pd.notna(value)]
+    listed = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} e {names[-1]}"
+    return (f"Leitura zerada ({listed} em 0,0): o sensor pode não estar vendo partículas. "
+            "Por isso o cartão fica sem faixa de qualidade do ar.")
+
+
 STATUS_LABELS = {"em_operacao": "🟢 em operação", "atrasado": "🟡 atrasado", "sem_dados": "🔴 sem dados"}
 HEALTH_LABELS = {
     "device_id": "Sensor",
@@ -336,16 +344,22 @@ def status_tab() -> None:
             else:
                 # O PM2,5 abre o cartão, grande e com a escala das faixas sob ele; os outros indicadores ficam numa
                 # linha só, menores.
-                band, color = air_quality(dev["pm25"]) or (None, "off")
+                # Com tudo em zero não se sabe se o sensor parou de ver partículas ou se o ar está limpo: a leitura
+                # aparece, mas sem a faixa que a chamaria de "Boa".
+                zeroed = analytics.is_zero_reading(dev["pm1"], dev["pm25"], dev["pm10"])
+                band, color = (None, "off") if zeroed else air_quality(dev["pm25"]) or (None, "off")
                 with st.container(key=f"hero-{device}"):
                     st.metric("PM2,5", fmt(dev["pm25"], " µg/m³"), delta=band, delta_color=color, delta_arrow="off",
                               help="Faixas da CETESB para a média de 24 horas; aplicadas à leitura de um minuto, "
                                    "servem só de referência.")
-                    position = analytics.band_position(dev["pm25"])
+                    if zeroed:
+                        st.caption(zero_reading_note(dev["pm1"], dev["pm25"], dev["pm10"]))
+                    position = None if zeroed else analytics.band_position(dev["pm25"])
                     if position is not None:
                         st.html(band_scale_html(position, f"PM2,5 de {fmt(dev['pm25'], ' µg/m³')}, na faixa {band}"))
                 a, b, c = st.columns(3)
-                a.metric("PM10", fmt(dev["pm10"], " µg/m³"))
+                # A unidade vai no rótulo: "50,9 µg/m³" não cabe numa coluna de um terço do cartão e era cortado.
+                a.metric("PM10 (µg/m³)", fmt(dev["pm10"], ""))
                 b.metric("Temperatura", fmt(dev["temperature"], " °C"))
                 c.metric("Umidade", fmt(dev["humidity"], "%"))
                 # O sinal e o firmware dizem como o nó está, não como está o ar: ficam no rodapé do cartão.

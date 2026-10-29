@@ -71,7 +71,7 @@ def test_dashboard_renderiza_as_tres_abas(app_env):
     assert len(at.metric) == 8  # 4 indicadores por sensor; o sinal Wi-Fi vai numa linha à parte
     assert at.metric[0].label == "PM2,5"
     assert at.metric[0].delta in {"Boa", "Moderada", "Ruim", "Muito ruim", "Péssima"}  # faixa da CETESB
-    assert at.metric[1].label == "PM10"
+    assert at.metric[1].label == "PM10 (µg/m³)"
     assert not any("implausível" in c.value for c in at.caption)
 
     # tabela de saúde da coleta: o nó 2 teve uma hora sem dados e um reinício
@@ -205,7 +205,7 @@ def test_cartao_do_no_poe_o_sinal_wifi_numa_linha_a_parte(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert [m.label for m in at.metric] == ["PM2,5", "PM10", "Temperatura", "Umidade"]
+    assert [m.label for m in at.metric] == ["PM2,5", "PM10 (µg/m³)", "Temperatura", "Umidade"]
     wifi = [c.value for c in at.caption if c.value.startswith("Sinal Wi-Fi")]
     assert len(wifi) == 1 and re.fullmatch(r"Sinal Wi-Fi: -?\d+ dBm", wifi[0])
 
@@ -394,3 +394,48 @@ def test_troca_para_resolucao_de_um_minuto(app_env):
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     at.radio[0].set_value("1 minuto").run()
     assert not at.exception, at.exception
+
+
+def test_no_em_operacao_com_leitura_zerada_fica_sem_faixa_e_diz_por_que(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=0.02, pm1=0.0, pm25=0.0, pm10=0.0)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+
+    pm25 = [m for m in at.metric if m.label == "PM2,5"]
+    assert pm25[1].value == "0,0 µg/m³"          # o valor segue visível: é o que o nó enviou
+    assert not pm25[1].delta                     # mas sem o selo "Boa", que um sensor parado em zero não merece
+    assert len(aq_scales(at)) == 1               # a escala é só do no-01
+    notes = [c.value for c in at.caption if "Leitura zerada" in c.value]
+    assert len(notes) == 1
+    assert "PM1, PM2,5 e PM10" in notes[0] and "pode não estar vendo partículas" in notes[0]
+    assert "sem faixa" in notes[0]
+
+
+def test_leitura_com_particulas_nao_traz_o_aviso_de_leitura_zerada(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert not [c for c in at.caption if "zerada" in c.value]
+    assert [m for m in at.metric if m.label == "PM2,5"][0].delta
+
+
+def test_pm10_leva_a_unidade_no_rotulo_para_o_valor_caber_na_coluna_estreita(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    pm10 = next(m for m in at.metric if m.label.startswith("PM10"))
+    assert re.fullmatch(r"\d+,\d", pm10.value), pm10.value   # "50,9 µg/m³" ficava cortado num cartão de meia tela
+
+
+@pytest.mark.parametrize("values, named", [
+    ({"pm1": None, "pm25": 0.0, "pm10": 0.0}, "(PM2,5 e PM10 em 0,0)"),
+    ({"pm1": 0.0, "pm25": 0.0, "pm10": None}, "(PM1 e PM2,5 em 0,0)"),
+])
+def test_nota_da_leitura_zerada_cita_so_as_particulas_que_o_no_enviou(app_env, values, named):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=0.02, **values)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    notes = [c.value for c in at.caption if "Leitura zerada" in c.value]
+    assert len(notes) == 1 and notes[0].startswith(f"Leitura zerada {named}:"), notes
