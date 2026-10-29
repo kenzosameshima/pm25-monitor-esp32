@@ -21,7 +21,8 @@ from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from dashboard.duration import duration_text  # noqa: E402
-from dashboard.evaluation import evaluated_text, evaluation_guide, notice_html, small_sample_note  # noqa: E402
+from dashboard.evaluation import (evaluated_text, evaluation_guide, notice_html, pending_band,  # noqa: E402
+                                  small_sample_note)
 from dashboard.last_reading import last_reading_html  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
 from dashboard.time_axis import day_ticks  # noqa: E402
@@ -110,6 +111,7 @@ PAGE_STYLE = """<style>
 .aq-note-detail {opacity: .75}
 .aq-keys {display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem}
 .aq-key i {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem}
+.aq-key i.aq-pending {border-radius: 2px; background: color-mix(in srgb, #8b93a1 25%, transparent)}
 .aq-key i.aq-blank {box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 55%, transparent)}
 /* A última leitura de um nó sem dados, no expansor: o aviso, os valores em grade sobre um fundo próprio e o sinal. */
 .aq-last {display: grid; gap: .5rem}
@@ -280,6 +282,8 @@ METRIC_LABELS = {"previsor": "Previsor", "horas": "Horas avaliadas", "mae": "MAE
 # Observado em azul e o baseline em cinza; os modelos ficam com cores que não se confundem com nenhum dos dois.
 SERIES_COLORS = {"Observado": "#3b82f6", "Persistência": "#9ca3af"}
 MODEL_COLORS = ["#f97316", "#10b981", "#a855f7", "#ec4899"]
+# O trecho do gráfico de previsão que ainda não tem observação: uma faixa cinza clara atrás das linhas.
+PENDING_COLOR, PENDING_OPACITY = "#8b93a1", 0.25
 
 BAND_COLORS = {"Boa": "green", "Moderada": "yellow", "Ruim": "orange", "Muito ruim": "red", "Péssima": "violet"}
 
@@ -710,8 +714,9 @@ def forecast_tab(devices_all: list[str]) -> None:
     long = with_segments(long, "hora_local", "serie", pd.Timedelta(hours=1))
     models = [c for c in table.columns if c not in SERIES_COLORS]
     colors = SERIES_COLORS | dict(zip(models, MODEL_COLORS * len(models)))
-    chart = alt.Chart(long).mark_line(point=True).encode(
-        x=alt.X("hora_local:T", title=None, axis=alt.Axis(format="%d/%m %H:%M")),
+    time_axis_labels = alt.Axis(format="%d/%m %H:%M")
+    lines = alt.Chart(long).mark_line(point=True).encode(
+        x=alt.X("hora_local:T", title=None, axis=time_axis_labels),
         y=alt.Y("pm25:Q", title=None, scale=alt.Scale(zero=False),
                 axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')")),
         color=alt.Color("serie:N", title=None, legend=None,
@@ -720,10 +725,21 @@ def forecast_tab(devices_all: list[str]) -> None:
         strokeDash=alt.condition(alt.datum.serie == "Observado", alt.value([1, 0]), alt.value([5, 4])),
         tooltip=[alt.Tooltip("hora_local:T", title="Hora", format="%d/%m %H:%M"), alt.Tooltip("serie:N", title="Série"),
                  alt.Tooltip("valor:N", title="PM2,5")],
-    ).properties(height=320, description=f"Gráfico de linhas do PM2,5 por hora: {', '.join(colors)}.")
+    )
     first, last = long["hora_local"].min(), long["hora_local"].max()
+    # As previsões depois da última hora observada ainda não têm com o que ser comparadas: uma faixa clara atrás delas
+    # separa o que já dá para avaliar do que está pendente.
+    band = pending_band(long.loc[long["serie"] == "Observado", "hora_local"].max().to_pydatetime(), last.to_pydatetime())
+    layers = lines
+    if band is not None:
+        span = alt.Data(values=[{"inicio": band[0].isoformat(), "fim": band[1].isoformat()}])
+        shade = alt.Chart(span).mark_rect(color=PENDING_COLOR, opacity=PENDING_OPACITY).encode(
+            x=alt.X("inicio:T", title=None, axis=time_axis_labels), x2="fim:T")
+        layers = shade + lines
+    chart = layers.properties(height=320, description=f"Gráfico de linhas do PM2,5 por hora: {', '.join(colors)}.")
     st.html(trend_head_html(f"{VARIABLES['pm25']} · previsão para a hora seguinte", list(colors.items()),
-                            title=True, subtitle=f"{first:%d/%m %H:%M} a {last:%d/%m %H:%M} · horário de Brasília"))
+                            title=True, subtitle=f"{first:%d/%m %H:%M} a {last:%d/%m %H:%M} · horário de Brasília",
+                            pending="Aguardando observação" if band is not None else None))
     st.altair_chart(chart, width="stretch")
 
     show_evaluation_notes(table, metrics)

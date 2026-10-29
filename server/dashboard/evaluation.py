@@ -1,6 +1,6 @@
 """Os textos da avaliação de previsões: quantas horas entraram nas contas e quando a amostra é pequena demais."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import escape
 
 # Menos que um dia de horas: o ciclo diário do PM2,5 nem fecha. É um aviso de tela, não um teste estatístico.
@@ -26,6 +26,16 @@ def notice_html(headline: str, detail: str) -> str:
     (o estilo é `.aq-note`: fundo quase transparente, filete e texto pequeno)."""
     return (f'<div class="aq-note" role="note"><span>{escape(headline)}</span>'
             f'<span class="aq-note-detail">{escape(detail)}</span></div>')
+
+
+def pending_band(last_observed: datetime, last_plotted: datetime) -> tuple[datetime, datetime] | None:
+    """O trecho do gráfico que tem previsão e ainda não tem observação, como (início, fim). Cada hora é um ponto no
+    começo dela: a faixa vai do ponto médio entre a última hora observada e a seguinte até meia hora depois da última
+    desenhada, e cada ponto pendente fica no meio de um pedaço dela. None se tudo o que está desenhado já foi observado."""
+    if last_plotted <= last_observed:
+        return None
+    half = timedelta(minutes=30)
+    return last_observed + half, last_plotted + half
 
 
 def small_sample_note(hours: int) -> str:

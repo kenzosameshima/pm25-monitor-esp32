@@ -1190,6 +1190,21 @@ def forecast_spec(at) -> dict:
     return json.loads(at.tabs[2].get("vega_lite_chart")[0].proto.spec)
 
 
+def mark_type(layer: dict) -> str:
+    return layer["mark"]["type"] if isinstance(layer["mark"], dict) else layer["mark"]
+
+
+def forecast_line(at) -> dict:
+    """A camada das linhas do gráfico de previsão (a outra é a faixa do trecho sem observação)."""
+    return next(layer for layer in forecast_spec(at)["layer"] if mark_type(layer) == "line")
+
+
+def forecast_rows(at) -> "pa.Table":
+    """Os pontos do gráfico de previsão, um por série e hora."""
+    dataset = at.tabs[2].get("vega_lite_chart")[0].proto.datasets[0]
+    return pa.ipc.open_stream(dataset.data.data).read_all().to_pandas()
+
+
 def test_grafico_de_previsao_tem_cabecalho_com_titulo_periodo_fuso_e_legenda_numa_linha(app_env):
     populate(app_env)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
@@ -1206,11 +1221,28 @@ def test_grafico_de_previsao_nao_repete_titulo_nem_legenda_e_mantem_observado_co
     populate(app_env)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    spec = forecast_spec(at)
-    assert spec["encoding"]["color"].get("legend", "padrão") is None                 # a legenda vai na linha de cima
-    assert spec["encoding"]["y"].get("title", "padrão") is None                      # e a unidade no título
-    dash = spec["encoding"]["strokeDash"]["condition"]
-    assert dash["value"] == [1, 0] and spec["encoding"]["strokeDash"]["value"] == [5, 4]   # observado contínuo, o resto tracejado
+    encoding = forecast_line(at)["encoding"]
+    assert encoding["color"].get("legend", "padrão") is None                         # a legenda vai na linha de cima
+    assert encoding["y"].get("title", "padrão") is None                              # e a unidade no título
+    dash = encoding["strokeDash"]["condition"]
+    assert dash["value"] == [1, 0] and encoding["strokeDash"]["value"] == [5, 4]     # observado contínuo, o resto tracejado
+
+
+def test_trecho_sem_observacao_ganha_uma_faixa_atras_das_linhas_e_uma_amostra_na_legenda(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    layers = forecast_spec(at)["layer"]
+    assert [mark_type(layer) for layer in layers] == ["rect", "line"]               # a faixa vem primeiro: fica atrás das linhas
+    rows = forecast_rows(at)
+    last_observed = rows.loc[rows["serie"] == "Observado", "hora_local"].max().to_pydatetime()
+    last_plotted = rows["hora_local"].max().to_pydatetime()
+    assert last_plotted > last_observed                                              # há mesmo previsão sem observação
+    band = layers[0]["data"]["values"][0]
+    assert datetime.fromisoformat(band["inicio"]) == last_observed + timedelta(minutes=30)
+    assert datetime.fromisoformat(band["fim"]) == last_plotted + timedelta(minutes=30)
+    assert "tooltip" not in layers[0]["encoding"]                                    # a faixa não rouba o balão das linhas
+    assert '<i class="aq-pending" aria-hidden="true"></i>Aguardando observação</span>' in forecast_head(at)
 
 
 def page_style(at) -> str:

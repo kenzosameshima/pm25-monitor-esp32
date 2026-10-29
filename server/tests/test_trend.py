@@ -55,6 +55,16 @@ def test_sem_segunda_linha_o_cabecalho_nao_traz_a_marca():
     assert "aq-sub" not in trend_head_html("PM2,5", [("no-01", "#22b8cf")])
 
 
+def test_o_trecho_pendente_vem_explicado_ao_lado_das_series_com_uma_amostra_da_faixa():
+    html = trend_head_html("PM2,5", [("Observado", "#3b82f6")], title=True, pending="Aguardando observação")
+    assert '<i class="aq-pending" aria-hidden="true"></i>Aguardando observação</span>' in html
+    assert html.count("background:") == 1                             # a amostra da faixa leva a cor pelo estilo, não por linha
+
+
+def test_sem_trecho_pendente_a_legenda_nao_traz_a_amostra():
+    assert "aq-pending" not in trend_head_html("PM2,5", [("no-01", "#22b8cf")])
+
+
 def test_no_sem_leituras_vem_explicado_ao_lado_da_legenda():
     html = trend_head_html("29/10 · µg/m³", [("no-01", "#22b8cf")], ["no-02"])
     assert "no-02 · sem leituras neste período" in html

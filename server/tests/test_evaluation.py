@@ -4,7 +4,8 @@ from datetime import datetime
 
 import pytest
 
-from dashboard.evaluation import SMALL_SAMPLE_HOURS, evaluated_text, evaluation_guide, hours_text, notice_html, small_sample_note
+from dashboard.evaluation import (SMALL_SAMPLE_HOURS, evaluated_text, evaluation_guide, hours_text, notice_html,
+                                  pending_band, small_sample_note)
 
 FIRST, LAST = datetime(2026, 10, 28, 20), datetime(2026, 10, 29, 6)
 
@@ -25,6 +26,17 @@ def test_uma_hora_so_vira_a_mesma_hora_com_a_data_dela():
 def test_a_persistencia_sozinha_diz_so_as_horas_avaliadas():
     assert evaluated_text(48, 1, FIRST, LAST) == "Avaliada em 48 horas, de 28/10 20:00 a 29/10 06:00."
     assert evaluated_text(1, 1, FIRST, FIRST) == "Avaliada em 1 hora (28/10 20:00)."
+
+
+def test_a_faixa_sem_observacao_cobre_as_horas_depois_da_ultima_observada_de_ponta_a_ponta():
+    # Cada hora é um ponto no começo dela: a faixa começa no ponto médio entre a última hora observada e a seguinte e
+    # termina meia hora depois da última desenhada, e cada ponto pendente fica no meio de um pedaço dela.
+    assert pending_band(datetime(2026, 10, 29, 10), datetime(2026, 10, 29, 12)) == (
+        datetime(2026, 10, 29, 10, 30), datetime(2026, 10, 29, 12, 30))
+
+
+def test_sem_nada_alem_da_ultima_observacao_nao_ha_faixa():
+    assert pending_band(datetime(2026, 10, 29, 10), datetime(2026, 10, 29, 10)) is None
 
 
 def test_o_aviso_leva_a_frase_principal_e_o_detalhe_no_mesmo_bloco():
