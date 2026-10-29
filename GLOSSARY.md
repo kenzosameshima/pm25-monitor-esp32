@@ -79,7 +79,7 @@ Hora com leituras suficientes em que o sensor quase não viu partículas: pelo m
 _Avoid_: hora zerada, hora inválida (inválida é a de poucas leituras)
 
 **Hora sem média**:
-Hora que não é válida, por uma de três causas: nenhuma leitura, poucas leituras (menos de 75% dos minutos) ou suspeita. É a que fica em branco nos gráficos, e o dashboard diz a causa de cada uma.
+Hora que não é válida, por uma de três causas: nenhuma leitura, poucas leituras (menos de 75% dos minutos) ou suspeita. É a que fica em branco nos gráficos; o dashboard diz a causa de cada uma e o app, quantas há de cada causa.
 _Avoid_: hora perdida, hora ruim
 
 **Média horária**:
