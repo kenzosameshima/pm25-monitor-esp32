@@ -513,6 +513,54 @@ def series_flow(at) -> list[tuple[str, str]]:
     return flow
 
 
+STRIP_TITLE = "Qualidade da coleta por hora"
+
+
+def test_faixa_das_horas_sem_media_tem_titulo_legenda_das_causas_e_diz_o_que_e_o_branco(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    flow = series_flow(at)
+    title = flow.index(("linha", STRIP_TITLE))
+    assert flow[title + 1][0] == "grafico" and flow[title + 1][1].startswith("Faixa das horas sem média")  # colado nela
+    head = next(h for h in chart_heads(at) if STRIP_TITLE in h)
+    assert 'class="aq-label aq-title"' in head                                       # com o destaque dos outros títulos
+    assert "</i>sem leituras</span>" in head and "background:#8b93a1" in head       # cada causa, com a cor da faixa
+    assert "</i>suspeita</span>" in head and "background:#e2b53b" in head
+    assert "em branco: hora válida</span>" in head                                   # e o que o espaço vazio quer dizer
+
+
+def test_faixa_das_horas_sem_media_nao_repete_a_legenda_dentro_do_grafico(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    specs = [json.loads(c.proto.spec) for c in at.get("vega_lite_chart")]
+    strip = next(s for s in specs if s["description"].startswith("Faixa das horas sem média"))
+    assert strip["encoding"]["color"].get("legend", "padrão") is None             # a legenda vai na linha de cima
+
+
+def test_sem_a_faixa_das_horas_sem_media_nao_ha_titulo_dela(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.segmented_control[1].set_value("1 minuto").run()                            # a faixa só existe na média horária
+    assert not at.exception, at.exception
+    assert ("linha", STRIP_TITLE) not in series_flow(at)
+
+
+def test_expansor_diz_que_o_branco_da_faixa_tambem_e_antes_da_primeira_leitura_e_a_hora_em_andamento(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    text = hours_details(at)
+    # A faixa só pinta as horas sem média, e o dashboard só conta as horas entre a primeira e a última leitura de cada
+    # sensor: o branco nem sempre é hora válida, e a legenda curta não pode prometer isso sem a exceção por perto.
+    assert "em branco" in text and "antes da primeira leitura" in text and "hora em andamento" in text
+
+
 def test_explicacao_da_umidade_fica_logo_abaixo_do_grafico_de_umidade(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
@@ -546,9 +594,10 @@ def test_cada_grafico_da_aba_series_tem_a_variavel_e_a_legenda_numa_linha(app_en
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     heads = chart_heads(at)
-    assert len(heads) == 3                                          # o de 6 horas, PM2,5 e umidade
-    assert "PM2,5 (µg/m³)" in heads[1] and "Umidade relativa (%)" in heads[2]
-    for head in heads[1:]:
+    assert len(heads) == 4                          # o de 6 horas, PM2,5, a faixa das horas sem média e a umidade
+    variables = [head for head in heads[1:] if STRIP_TITLE not in head]
+    assert "PM2,5 (µg/m³)" in variables[0] and "Umidade relativa (%)" in variables[1]
+    for head in variables:
         assert "background:#22b8cf" in head and "background:#e0529c" in head      # cada sensor, com a cor da sua linha
         assert "</i>no-01</span>" in head and "</i>no-02</span>" in head
 

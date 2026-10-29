@@ -32,6 +32,18 @@ def test_o_titulo_de_um_grafico_leva_a_marca_de_destaque_e_a_nota_de_apoio_nao()
     assert '<span class="aq-label aq-title">PM2,5 (µg/m³)</span>' in title
 
 
+def test_o_espaco_em_branco_vem_explicado_ao_lado_das_cores():
+    html = trend_head_html("Qualidade da coleta por hora", [("sem leituras", "#8b93a1")], title=True,
+                           blank="em branco: hora válida")
+    assert "em branco: hora válida</span>" in html
+    assert '<i class="aq-blank" aria-hidden="true"></i>' in html      # a marca do branco é uma bolinha vazada
+    assert html.count("background:") == 1                             # e só a causa tem cor: o branco é o que sobra
+
+
+def test_sem_explicacao_do_branco_a_legenda_nao_traz_a_marca():
+    assert "aq-blank" not in trend_head_html("PM2,5", [("no-01", "#22b8cf")])
+
+
 def test_no_sem_leituras_vem_explicado_ao_lado_da_legenda():
     html = trend_head_html("29/10 · µg/m³", [("no-01", "#22b8cf")], ["no-02"])
     assert "no-02 · sem leituras neste período" in html

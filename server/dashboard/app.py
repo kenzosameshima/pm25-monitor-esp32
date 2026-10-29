@@ -102,6 +102,7 @@ PAGE_STYLE = """<style>
 .aq-label.aq-title {font-size: 1rem; font-weight: 600; opacity: 1}
 .aq-keys {display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem}
 .aq-key i {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem}
+.aq-key i.aq-blank {box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 55%, transparent)}
 /* A última leitura de um nó sem dados, no expansor: o aviso, os valores em grade sobre um fundo próprio e o sinal. */
 .aq-last {display: grid; gap: .5rem}
 .aq-last-title {font-weight: 600}
@@ -174,6 +175,12 @@ def suspect_criteria() -> str:
             "ainda precisa ser conferida contra a estação da CETESB.")
 
 
+# O branco da faixa é "hora válida" só entre a primeira e a última leitura de cada sensor (é o que as horas sem média
+# contam), e a hora que ainda não acabou também fica de fora: a legenda curta diz o principal e isto, a exceção.
+BLANK_STRIP_NOTE = ("Na faixa, o espaço em branco é hora válida, com média. Ficam em branco também as horas antes da "
+                    "primeira leitura de cada sensor no período e a hora em andamento.")
+
+
 def show_hour_notes(exclusions: pd.DataFrame) -> None:
     """O resumo das horas sem média e, num expansor só, a regra das médias, o detalhe por sensor e o critério das
     suspeitas: cada número aparece uma vez, e o que explica o número fica a um clique."""
@@ -183,6 +190,7 @@ def show_hour_notes(exclusions: pd.DataFrame) -> None:
         st.caption(f"A média de uma hora só vale com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura "
                    f"({MIN_READINGS_PER_HOUR / 60:.0%}).")
         if not exclusions.empty:
+            st.caption(BLANK_STRIP_NOTE)
             st.caption(exclusion_details(exclusions))
             if (exclusions["causa"] == analytics.SUSPECT_HOUR).any():
                 st.caption(suspect_criteria())
@@ -388,14 +396,15 @@ def exclusion_details(exclusions: pd.DataFrame) -> str:
 
 
 def exclusion_strip(exclusions: pd.DataFrame, domain: list[str]) -> alt.Chart:
-    """Uma faixa por nó com as horas sem média, cada causa numa cor, alinhada ao eixo dos gráficos."""
+    """Uma faixa por nó com as horas sem média, cada causa numa cor, alinhada ao eixo dos gráficos. A legenda das causas
+    fica na linha de cima (`show_exclusion_strip`), como a dos gráficos de linhas."""
     hours = exclusions.assign(hora_local=local_naive(exclusions["hora"]))
     hours["fim_local"] = hours["hora_local"] + pd.Timedelta(hours=1)
     return alt.Chart(hours).mark_rect().encode(
         x=alt.X("hora_local:T", title=None, scale=alt.Scale(domain=domain), axis=alt.Axis(format="%d/%m %H:%M")),
         x2="fim_local:T",
         y=alt.Y("device_id:N", title=None, axis=alt.Axis(minExtent=Y_AXIS_WIDTH)),
-        color=alt.Color("causa:N", title=None, legend=alt.Legend(orient="top", direction="horizontal"),
+        color=alt.Color("causa:N", title=None, legend=None,
                         scale=alt.Scale(domain=list(EXCLUSION_COLORS), range=list(EXCLUSION_COLORS.values()))),
         tooltip=[alt.Tooltip("hora_local:T", title="Hora", format="%d/%m %H:%M"),
                  alt.Tooltip("device_id:N", title="Sensor"), alt.Tooltip("causa:N", title="Causa")],
@@ -403,6 +412,15 @@ def exclusion_strip(exclusions: pd.DataFrame, domain: list[str]) -> alt.Chart:
         height=alt.Step(26),
         description=(f"Faixa das horas sem média, uma linha por sensor ({', '.join(sorted(hours['device_id'].unique()))}), "
                      f"com a causa de cada hora. {exclusion_note(exclusions)}"))
+
+
+def show_exclusion_strip(exclusions: pd.DataFrame, domain: list[str]) -> None:
+    """A faixa das horas sem média com o título, as causas que ela mostra e o que o espaço em branco quer dizer."""
+    present = set(exclusions["causa"])
+    st.html(trend_head_html("Qualidade da coleta por hora",
+                            [(cause, color) for cause, color in EXCLUSION_COLORS.items() if cause in present],
+                            title=True, blank="em branco: hora válida"))
+    st.altair_chart(exclusion_strip(exclusions, domain), width="stretch")
 
 
 # ---------------------------------------------------------------- abas
@@ -548,7 +566,7 @@ def series_tab(devices_all: list[str]) -> None:
     tz = ZoneInfo(LOCAL_TZ)
     start = datetime.combine(period[0], time(), tz).astimezone(timezone.utc)
     end = datetime.combine(period[1] + timedelta(days=1), time(), tz).astimezone(timezone.utc)
-    strip = None
+    exclusions = None
     domain = None
     if resolution == "Média horária":
         hourly = load_hourly(start, end, tuple(devices), only_ok)
@@ -558,13 +576,11 @@ def series_tab(devices_all: list[str]) -> None:
         domain = [start.astimezone(tz).replace(tzinfo=None).isoformat(),
                   until.astimezone(tz).replace(tzinfo=None).isoformat()]
         exclusions = analytics.hour_exclusions(hourly.rename(columns={"minutos": "n"}), until=until)
-        if not exclusions.empty:
-            strip = exclusion_strip(exclusions, domain)
         if data.empty:
             st.info(f"Sem horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura no período escolhido.")
             show_hour_notes(exclusions)
-            if strip is not None:
-                st.altair_chart(strip, width="stretch")
+            if not exclusions.empty:
+                show_exclusion_strip(exclusions, domain)
             return
         data["hora_local"] = local_naive(data["hora"])
         show_hour_notes(exclusions)
@@ -592,8 +608,9 @@ def series_tab(devices_all: list[str]) -> None:
                                    rule_label=f"{rule:.0f}%" if rule else None, headless=True), width="stretch")
         if var == "humidity" and data["humidity"].notna().any():    # a explicação fica junto do gráfico a que se refere
             st.caption(humidity_note(data))
-        if i == 0 and strip is not None:      # a faixa vale para todas as variáveis: as horas sem média são as mesmas
-            st.altair_chart(strip, width="stretch")
+        # A faixa vale para todas as variáveis: as horas sem média são as mesmas.
+        if i == 0 and exclusions is not None and not exclusions.empty:
+            show_exclusion_strip(exclusions, domain)
 
     # O botão entra no fim da linha dos filtros, lá em cima, e só existe quando há dados a exportar.
     export = data.drop(columns=["hora_local"])
