@@ -1117,6 +1117,48 @@ def test_com_muitos_sensores_o_seletor_continua_lista(app_env):          # a lar
     assert tab.selectbox[0].label == "Sensor" and len(tab.selectbox[0].options) == 5
 
 
+GUIDE = "Como interpretar a avaliação"
+
+
+def forecast_guide(at) -> str:
+    """O texto do expansor da aba Previsto × observado."""
+    boxes = [e for e in at.tabs[2].expander if e.label == GUIDE]
+    assert len(boxes) == 1, [e.label for e in at.tabs[2].expander]
+    return " ".join(c.value for c in boxes[0].caption)
+
+
+def test_definicoes_da_avaliacao_ficam_num_expansor_e_nao_soltas_abaixo_da_tabela(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    guide = forecast_guide(at)
+    assert all(f"**{term}:**" in guide for term in ("Horas", "Persistência", "MAE", "RMSE", "Skill score"))
+    inside = {c.value for e in at.tabs[2].expander for c in e.caption}
+    outside = [c.value for c in at.tabs[2].caption if c.value not in inside]
+    assert not any("MAE é o erro médio" in text or "pesa mais os erros" in text for text in outside)   # nada de definição solta
+    items = tab_items(at.tabs[2])
+    assert [kind for kind, _ in items][-1] == "expander"                       # o expansor fecha a aba, depois da tabela
+
+
+def test_guia_so_fala_de_previsao_retroativa_quando_a_tabela_tem_uma(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert "retroativa" not in forecast_guide(at)
+    add_model_forecasts(app_env, "ridge", "v0-retro", [3])
+    st.cache_data.clear()
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert "retroativa" in forecast_guide(at) and "-retro" in forecast_guide(at)
+
+
+def test_sem_pares_para_avaliar_nao_ha_guia_de_interpretacao(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_full_hours(app_env, "no-02", [30, 20])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    choose_forecast_sensor(at, "no-02")
+    assert not any(e.label == GUIDE for e in at.tabs[2].expander)             # não há resultado para interpretar
+
+
 def forecast_head(at) -> str:
     """O HTML da linha acima do gráfico da aba Previsto × observado."""
     return next(h.proto.body for h in at.tabs[2].get("html") if 'class="aq-trend-head"' in h.proto.body)

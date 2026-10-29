@@ -23,3 +23,20 @@ def evaluated_text(hours: int, previsors: int, first: datetime, last: datetime) 
 def small_sample_note(hours: int) -> str:
     """O aviso de uma linha avaliada em poucas horas; vazio quando a amostra tem um dia ou mais."""
     return f"Amostra de apenas {hours_text(hours)}" if hours < SMALL_SAMPLE_HOURS else ""
+
+
+def evaluation_guide(retroactive: bool) -> str:
+    """Uma definição por coluna da tabela de avaliação, no vocabulário do glossário. A da previsão retroativa só entra
+    quando a tabela tem uma, e diz o que o "-retro" do nome quer dizer para quem não conhece o nome técnico."""
+    lines = [
+        "- **Horas:** quantas horas entraram nas contas da linha.",
+        "- **Persistência:** repete a média da hora anterior; é a referência que qualquer modelo precisa superar.",
+        "- **MAE:** o erro médio da previsão, em µg/m³.",
+        "- **RMSE:** também em µg/m³, mas pesa mais os erros grandes.",
+        "- **Skill score:** um menos a razão entre o RMSE do previsor e o da persistência, nas mesmas horas. Acima de "
+        "zero, o previsor acerta mais que repetir a hora anterior.",
+    ]
+    if retroactive:
+        lines.append("- **Previsão retroativa (“-retro” no nome):** recalculada depois do fato, só com as leituras "
+                     "anteriores à hora-alvo. Fica numa versão à parte e não vale como validação prospectiva.")
+    return "\n".join(lines)

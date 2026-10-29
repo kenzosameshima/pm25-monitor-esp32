@@ -21,7 +21,7 @@ from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from dashboard.duration import duration_text  # noqa: E402
-from dashboard.evaluation import evaluated_text, small_sample_note  # noqa: E402
+from dashboard.evaluation import evaluated_text, evaluation_guide, small_sample_note  # noqa: E402
 from dashboard.last_reading import last_reading_html  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
 from dashboard.time_axis import day_ticks  # noqa: E402
@@ -727,9 +727,8 @@ def forecast_tab(devices_all: list[str]) -> None:
         metrics = metrics.assign(**{"Observação": notes})
     # O Styler escreve os números com vírgula (o formato da coluna do Streamlit só sabe o ponto).
     st.dataframe(metrics.style.format(decimal=",", precision=2, na_rep="—"), hide_index=True)
-    st.caption("Persistência repete a média da hora anterior e é a referência que qualquer modelo precisa superar. "
-               "MAE é o erro médio e RMSE pesa mais os erros grandes. O skill score compara o RMSE do previsor com "
-               "o da persistência nas mesmas horas: acima de zero, o modelo acerta mais que repetir a hora anterior.")
+    with st.expander("Como interpretar a avaliação"):
+        st.caption(evaluation_guide(retroactive=bool(metrics["Previsor"].str.endswith("-retro").any())))
 
 
 # ---------------------------------------------------------------- página

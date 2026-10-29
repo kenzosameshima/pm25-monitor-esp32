@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from dashboard.evaluation import SMALL_SAMPLE_HOURS, evaluated_text, hours_text, small_sample_note
+from dashboard.evaluation import SMALL_SAMPLE_HOURS, evaluated_text, evaluation_guide, hours_text, small_sample_note
 
 FIRST, LAST = datetime(2026, 10, 28, 20), datetime(2026, 10, 29, 6)
 
@@ -25,6 +25,20 @@ def test_uma_hora_so_vira_a_mesma_hora_com_a_data_dela():
 def test_a_persistencia_sozinha_diz_so_as_horas_avaliadas():
     assert evaluated_text(48, 1, FIRST, LAST) == "Avaliada em 48 horas, de 28/10 20:00 a 29/10 06:00."
     assert evaluated_text(1, 1, FIRST, FIRST) == "Avaliada em 1 hora (28/10 20:00)."
+
+
+def test_o_guia_define_cada_coluna_da_tabela_no_vocabulario_do_glossario():
+    guide = evaluation_guide(retroactive=False)
+    for term in ("Horas", "Persistência", "MAE", "RMSE", "Skill score"):
+        assert f"**{term}:**" in guide
+    assert "um menos a razão entre o RMSE do previsor e o da persistência" in guide
+    assert "retroativa" not in guide                                   # sem previsor retroativo, o assunto nem aparece
+
+
+def test_o_guia_explica_o_retro_sem_depender_do_nome_tecnico():
+    guide = evaluation_guide(retroactive=True)
+    assert "retroativa" in guide and "-retro" in guide                 # o nome técnico aparece só para ligar à tabela
+    assert "depois do fato" in guide and "não vale como validação prospectiva" in guide
 
 
 @pytest.mark.parametrize("hours, note", [
