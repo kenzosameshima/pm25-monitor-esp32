@@ -23,6 +23,7 @@ from app.config import get_settings  # noqa: E402
 from dashboard.duration import duration_text  # noqa: E402
 from dashboard.last_reading import last_reading_html  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
+from dashboard.time_axis import day_ticks  # noqa: E402
 from dashboard.trend import period_text, trend_head_html  # noqa: E402
 
 LOCAL_TZ = "America/Sao_Paulo"
@@ -95,12 +96,14 @@ PAGE_STYLE = """<style>
 .aq-ticks {position: relative; height: 1rem; margin-top: .35rem; font-size: .75rem; opacity: .75;
            font-variant-numeric: tabular-nums}
 .aq-ticks span {position: absolute; transform: translateX(-50%)}
-/* A linha acima do gráfico de 6 horas: o período e a unidade de um lado, a legenda e os avisos do outro. */
+/* A linha acima de um gráfico de linhas: o período e a unidade (ou a variável) de um lado, a legenda e os avisos do outro. */
 .aq-trend-head {display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .25rem 1rem;
                 font-size: .875rem}
-.aq-period, .aq-key-off {opacity: .75}
+.aq-label, .aq-key-off {opacity: .75}
+.aq-label.aq-title {font-size: 1rem; font-weight: 600; opacity: 1}
 .aq-keys {display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem}
 .aq-key i {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem}
+.aq-key i.aq-blank {box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 55%, transparent)}
 /* A última leitura de um nó sem dados, no expansor: o aviso, os valores em grade sobre um fundo próprio e o sinal. */
 .aq-last {display: grid; gap: .5rem}
 .aq-last-title {font-weight: 600}
@@ -109,6 +112,12 @@ PAGE_STYLE = """<style>
                border-radius: .5rem; background: color-mix(in srgb, currentColor 6%, transparent)}
 .aq-last-label {display: block; font-size: .875rem; opacity: .75}
 .aq-last-value {display: block; font-size: 1.4rem; font-variant-numeric: tabular-nums}
+/* A linha dos filtros da aba Séries está alinhada pela base: o checkbox (24 px), o botão de exportar (40 px) e a caixa
+   de datas (40 px) ganham a altura dos botões de escolha (32 px), e os centros ficam na mesma linha. */
+.st-key-series-filters [data-testid='stCheckbox'] {min-height: 2rem; display: flex; align-items: center}
+.st-key-series-filters [data-testid='stDownloadButton'] button {min-height: 2rem; height: 2rem; padding-block: 0}
+.st-key-series-filters [data-testid='stDateInputField'] {min-height: 2rem; height: 2rem}
+.st-key-series-filters [data-testid='stDateInputFieldsScroller'] {min-height: 0; height: 100%}
 </style>"""
 st.html(PAGE_STYLE)
 
@@ -163,20 +172,6 @@ def load_hourly(start: datetime, end: datetime, devices: tuple, only_ok: bool) -
     return hourly.rename(columns={"n": "minutos"})
 
 
-def suspect_hours_by_node(hourly: pd.DataFrame) -> dict[str, int]:
-    """Quantas horas suspeitas cada nó tem na série horária, só dos nós que têm alguma."""
-    counts = hourly[hourly["suspeita"].astype(bool)].groupby("device_id").size()
-    return {str(device): int(n) for device, n in counts.items()}
-
-
-def suspect_note(by_node: dict[str, int]) -> str:
-    """Aviso de quantas horas a regra de sensor sem partículas deixou de fora da série horária, por nó."""
-    hours = sum(by_node.values())
-    verb = "hora suspeita ficou" if hours == 1 else "horas suspeitas ficaram"
-    nodes = ", ".join(f"{device}: {n}" for device, n in sorted(by_node.items()))
-    return f"{hours} {verb} de fora ({nodes}). O sensor quase não viu partículas nessas horas."
-
-
 def suspect_criteria() -> str:
     """A regra das horas suspeitas e o que ela não decide, para quem quer saber por que uma hora ficou de fora."""
     low = f"{analytics.SUSPECT_LOW_PM25:.1f}".replace(".", ",")
@@ -187,10 +182,25 @@ def suspect_criteria() -> str:
             "ainda precisa ser conferida contra a estação da CETESB.")
 
 
-def show_suspect_note(by_node: dict[str, int]) -> None:
-    st.caption(suspect_note(by_node))
-    with st.expander("Critério das horas suspeitas"):
-        st.caption(suspect_criteria())
+# O branco da faixa é "hora válida" só entre a primeira e a última leitura de cada sensor (é o que as horas sem média
+# contam), e a hora que ainda não acabou também fica de fora: a legenda curta diz o principal e isto, a exceção.
+BLANK_STRIP_NOTE = ("Na faixa, o espaço em branco é hora válida, com média. Ficam em branco também as horas antes da "
+                    "primeira leitura de cada sensor no período e a hora em andamento.")
+
+
+def show_hour_notes(exclusions: pd.DataFrame) -> None:
+    """O resumo das horas sem média e, num expansor só, a regra das médias, o detalhe por sensor e o critério das
+    suspeitas: cada número aparece uma vez, e o que explica o número fica a um clique."""
+    if not exclusions.empty:
+        st.caption(exclusion_note(exclusions))
+    with st.expander("Critérios e detalhamento por sensor"):
+        st.caption(f"A média de uma hora só vale com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura "
+                   f"({MIN_READINGS_PER_HOUR / 60:.0%}).")
+        if not exclusions.empty:
+            st.caption(BLANK_STRIP_NOTE)
+            st.caption(exclusion_details(exclusions))
+            if (exclusions["causa"] == analytics.SUSPECT_HOUR).any():
+                st.caption(suspect_criteria())
 
 
 @st.cache_data(ttl=60)
@@ -297,28 +307,43 @@ def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta)
     return d
 
 
+def time_axis(first: datetime, last: datetime) -> alt.Axis:
+    """O eixo do tempo de um gráfico de vários dias: a data de cada dia, na meia-noite, e nada mais; a hora exata fica no
+    balão do ponto. Num período curto, em que a data sozinha marcaria só um ou dois dias, o rótulo leva data e hora."""
+    ticks = [] if pd.isna(first) or pd.isna(last) else day_ticks(first, last)
+    if not ticks:
+        return alt.Axis(format="%d/%m %H:%M")
+    return alt.Axis(format="%d/%m", values=[alt.DateTime(year=t.year, month=t.month, date=t.day) for t in ticks])
+
+
 def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timedelta,
-               rule: float | None = None, color: str = "device_id", legend: str = "Sensor",
-               domain: list[str] | None = None, compact: bool = False) -> alt.Chart:
+               rule: float | None = None, rule_label: str | None = None, color: str = "device_id",
+               legend: str = "Sensor", domain: list[str] | None = None, compact: bool = False,
+               headless: bool = False) -> alt.Chart:
     """Linhas por nó, uma cor fixa para cada. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
-    fixa o eixo do tempo. `compact` é o gráfico das últimas 6 horas: só a hora nos rótulos e sem título nem legenda,
-    que a página escreve numa linha acima. Ele leva uma linha fina de 30 em 30 minutos no eixo e mostra o ponto
-    só sob o mouse (o do tooltip), menos os das leituras isoladas, que sem vizinhas não formariam linha."""
+    fixa o eixo do tempo. `headless` tira o título e a legenda de dentro do gráfico: a página os escreve numa linha
+    acima e a área das linhas fica do mesmo tamanho. `compact` é o gráfico das últimas 6 horas: só a hora nos
+    rótulos, uma linha fina com marcas de 30 em 30 minutos no eixo e o ponto só sob o mouse (o do tooltip), menos os
+    das leituras isoladas, que sem vizinhas não formariam linha."""
     data = with_segments(data[[x, y, color]].dropna(), x, color, max_gap)
     data = data.assign(valor=data[y].map(decimal_comma))      # o tooltip do Vega escreveria o ponto decimal
     names = sorted(data[color].unique())
     sensors = color == "device_id"
     if compact:                                               # uma leitura sem vizinha a menos de `max_gap` não forma linha
         data = data.assign(isolado=data.groupby("segmento")[x].transform("size") == 1)
-    # Doze marcas em 6 horas: uma a cada 30 minutos. O intervalo explícito (`TimeIntervalStep`) deixa o gráfico em
-    # branco no Streamlit; a contagem numérica não.
-    ticks = 12 if compact else alt.Undefined
+    if compact:
+        # Doze marcas em 6 horas: uma a cada 30 minutos. O intervalo explícito (`TimeIntervalStep`) deixa o gráfico em
+        # branco no Streamlit; a contagem numérica não.
+        axis = alt.Axis(format="%H:%M", tickCount=12)
+    else:
+        first, last = map(datetime.fromisoformat, domain) if domain else (data[x].min(), data[x].max())
+        axis = time_axis(first, last)
     base = alt.Chart(data).encode(
-        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%H:%M" if compact else "%d/%m %H:%M", tickCount=ticks),
+        x=alt.X(f"{x}:T", title=None, axis=axis,
                 scale=alt.Scale(domain=domain) if domain else alt.Undefined),
         y=alt.Y(f"{y}:Q", title=None, scale=alt.Scale(zero=False),
                 axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')", minExtent=Y_AXIS_WIDTH)),
-        color=alt.Color(f"{color}:N", title=legend, legend=None if compact else alt.Legend(orient="top"),
+        color=alt.Color(f"{color}:N", title=legend, legend=None if headless else alt.Legend(orient="top"),
                         scale=alt.Scale(domain=names, range=[sensor_color(n) for n in names])
                         if sensors else alt.Undefined),
         detail="segmento:N",
@@ -338,14 +363,25 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
     else:
         chart = base.mark_line(point=len(data) <= 400)
     if rule is not None:
-        chart = chart + alt.Chart(pd.DataFrame({"limite": [rule]})).mark_rule(
-            strokeDash=[4, 4], color="gray").encode(y="limite:Q")
+        limit = alt.Chart(pd.DataFrame({"limite": [rule]}))
+        chart = chart + limit.mark_rule(strokeDash=[4, 4], color="gray").encode(y="limite:Q")
+        if rule_label:                          # o nome da linha tracejada, no canto esquerdo e logo acima dela
+            chart = chart + limit.mark_text(align="left", baseline="bottom", dx=4, dy=-3, color="gray").encode(
+                x=alt.value(0), y="limite:Q", text=alt.value(rule_label))
     # No Streamlit a altura inclui título, legenda e eixos: 330 deixa para a área das linhas cerca de 200 px, e sem
     # título nem legenda 240 deixam o mesmo tanto.
     description = chart_description(data, x, y, title, names)
-    if compact:
+    if headless:
         return chart.properties(height=240, description=description)
     return chart.properties(height=330, description=description, title=alt.TitleParams(title, anchor="start"))
+
+
+def humidity_note(data: pd.DataFrame) -> str:
+    """Quanto dos registros de cada nó passou do limite de umidade, e por que isso importa para o PM2,5."""
+    share = data.groupby("device_id")["humidity"].apply(lambda s: (s > HIGH_HUMIDITY).mean())
+    parts = ", ".join(f"{dev}: {p:.0%}" for dev, p in share.items())
+    return (f"Registros com umidade acima de {HIGH_HUMIDITY:.0f}% ({parts}) podem ter PM2,5 "
+            "superestimado pela absorção de água nas partículas.")
 
 
 def chart_description(data: pd.DataFrame, x: str, y: str, title: str, names: list[str]) -> str:
@@ -356,25 +392,40 @@ def chart_description(data: pd.DataFrame, x: str, y: str, title: str, names: lis
             f"{data[x].max():%d/%m %H:%M}; valores de {decimal_comma(data[y].min())} a {decimal_comma(data[y].max())}.")
 
 
-def exclusion_note(exclusions: pd.DataFrame) -> str:
-    """Quantas horas ficaram sem média em cada causa, para quem quer o número além da faixa colorida."""
+def cause_counts(exclusions: pd.DataFrame) -> str:
+    """As horas de `exclusions` contadas por causa: "96 sem leituras, 9 com poucas leituras e 54 suspeitas"."""
     count = exclusions["causa"].value_counts()
     wording = {analytics.NO_READINGS: lambda n: f"{n} sem leituras",
                analytics.FEW_READINGS: lambda n: f"{n} com poucas leituras",
                analytics.SUSPECT_HOUR: lambda n: f"{n} {'suspeita' if n == 1 else 'suspeitas'}"}
     parts = [say(int(count[cause])) for cause, say in wording.items() if count.get(cause, 0)]
-    return "Horas sem média: " + (parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " e " + parts[-1]) + "."
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " e " + parts[-1]
+
+
+def exclusion_note(exclusions: pd.DataFrame) -> str:
+    """Quantas horas ficaram sem média em cada causa, para quem quer o número além da faixa colorida. Com mais de um
+    sensor, são horas de sensores diferentes somadas, e o texto diz isso."""
+    label = "Horas sem média (soma dos sensores)" if exclusions["device_id"].nunique() > 1 else "Horas sem média"
+    return f"{label}: {cause_counts(exclusions)}."
+
+
+def exclusion_details(exclusions: pd.DataFrame) -> str:
+    """Uma linha por sensor com as horas sem média de cada causa."""
+    lines = [f"- **{device}:** {cause_counts(group)}." for device, group in exclusions.groupby("device_id")]
+    return "Por sensor:" + "\n" + "\n".join(lines)
 
 
 def exclusion_strip(exclusions: pd.DataFrame, domain: list[str]) -> alt.Chart:
-    """Uma faixa por nó com as horas sem média, cada causa numa cor, alinhada ao eixo dos gráficos."""
+    """Uma faixa por nó com as horas sem média, cada causa numa cor, alinhada ao eixo dos gráficos. A legenda das causas
+    fica na linha de cima (`show_exclusion_strip`), como a dos gráficos de linhas."""
     hours = exclusions.assign(hora_local=local_naive(exclusions["hora"]))
     hours["fim_local"] = hours["hora_local"] + pd.Timedelta(hours=1)
     return alt.Chart(hours).mark_rect().encode(
-        x=alt.X("hora_local:T", title=None, scale=alt.Scale(domain=domain), axis=alt.Axis(format="%d/%m %H:%M")),
+        x=alt.X("hora_local:T", title=None, scale=alt.Scale(domain=domain),
+                axis=time_axis(*map(datetime.fromisoformat, domain))),
         x2="fim_local:T",
         y=alt.Y("device_id:N", title=None, axis=alt.Axis(minExtent=Y_AXIS_WIDTH)),
-        color=alt.Color("causa:N", title=None, legend=alt.Legend(orient="top", direction="horizontal"),
+        color=alt.Color("causa:N", title=None, legend=None,
                         scale=alt.Scale(domain=list(EXCLUSION_COLORS), range=list(EXCLUSION_COLORS.values()))),
         tooltip=[alt.Tooltip("hora_local:T", title="Hora", format="%d/%m %H:%M"),
                  alt.Tooltip("device_id:N", title="Sensor"), alt.Tooltip("causa:N", title="Causa")],
@@ -382,6 +433,15 @@ def exclusion_strip(exclusions: pd.DataFrame, domain: list[str]) -> alt.Chart:
         height=alt.Step(26),
         description=(f"Faixa das horas sem média, uma linha por sensor ({', '.join(sorted(hours['device_id'].unique()))}), "
                      f"com a causa de cada hora. {exclusion_note(exclusions)}"))
+
+
+def show_exclusion_strip(exclusions: pd.DataFrame, domain: list[str]) -> None:
+    """A faixa das horas sem média com o título, as causas que ela mostra e o que o espaço em branco quer dizer."""
+    present = set(exclusions["causa"])
+    st.html(trend_head_html("Qualidade da coleta por hora",
+                            [(cause, color) for cause, color in EXCLUSION_COLORS.items() if cause in present],
+                            title=True, blank="em branco: hora válida"))
+    st.altair_chart(exclusion_strip(exclusions, domain), width="stretch")
 
 
 # ---------------------------------------------------------------- abas
@@ -454,10 +514,11 @@ def status_tab() -> None:
     # Um nó sem leitura na janela some do gráfico: o aviso ao lado da legenda diz que ele não foi esquecido.
     sent = sorted(set(recent["device_id"])) if not recent.empty else []
     missing = [d for d in devices if d in by_id.index and d not in sent]
-    st.html(trend_head_html(period_text(first, last), "µg/m³", [(d, sensor_color(d)) for d in sent], missing))
+    st.html(trend_head_html(f"{period_text(first, last)} · µg/m³", [(d, sensor_color(d)) for d in sent], missing))
     if not recent.empty:
         st.altair_chart(line_chart(recent.assign(hora=local_naive(recent["ts_sensor"])), "hora", "pm25",
-                                   VARIABLES["pm25"], pd.Timedelta(minutes=5), compact=True), width="stretch")
+                                   VARIABLES["pm25"], pd.Timedelta(minutes=5), compact=True, headless=True),
+                        width="stretch")
 
     window_start = now - timedelta(hours=24)
     health = load_health(window_start, now).rename(columns=HEALTH_LABELS)
@@ -495,17 +556,26 @@ def status_tab() -> None:
 
 def series_tab(devices_all: list[str]) -> None:
     today = datetime.now(ZoneInfo(LOCAL_TZ)).date()
-    c1, c2, c3 = st.columns([2, 2, 1])
+    # Duas linhas: o que olhar (sensores e variáveis, cada um em metade da largura) e o recorte dos dados (período,
+    # resolução e leituras marcadas, mais a exportação do que eles mostram). A segunda é uma linha que dá a cada controle
+    # o que o conteúdo pede e quebra se não couber: em colunas de largura fixa, o botão "1 minuto" e o rótulo do filtro
+    # apareciam cortados numa janela de 1024 px. Alinhada pela base, a caixa de datas do período personalizado não solta
+    # os demais controles.
+    c1, c2 = st.columns(2)
     devices = c1.multiselect("Sensores", devices_all, default=devices_all)
-    choice = c2.segmented_control("Período", [*PERIOD_PRESETS, "Personalizado"], default="7 dias") or "7 dias"
+    variables = c2.multiselect("Variáveis", list(VARIABLES), default=["pm25", "humidity"], format_func=VARIABLES.get)
+    row = st.container(horizontal=True, vertical_alignment="bottom", gap="medium", key="series-filters")
+    choice = row.segmented_control("Período", [*PERIOD_PRESETS, "Personalizado"], default="7 dias") or "7 dias"
     if choice == "Personalizado":
-        period = c2.date_input("Datas", value=(today - timedelta(days=6), today), max_value=today,
-                               format="DD/MM/YYYY")
+        period = row.date_input("Datas", value=(today - timedelta(days=6), today), max_value=today,
+                                format="DD/MM/YYYY", width=260)
     else:
         period = (today - timedelta(days=PERIOD_PRESETS[choice] - 1), today)
-    resolution = c3.radio("Resolução", ["Média horária", "1 minuto"])
-    variables = st.multiselect("Variáveis", list(VARIABLES), default=["pm25", "humidity"], format_func=VARIABLES.get)
-    only_ok = st.checkbox("Ocultar leituras marcadas como implausíveis", value=True)
+    resolution = (row.segmented_control("Resolução", ["Média horária", "1 minuto"], default="Média horária")
+                  or "Média horária")
+    only_ok = row.checkbox("Ocultar leituras marcadas", value=True,
+                           help="Leituras que o servidor marcou como implausíveis: valor fora da faixa física ou horário "
+                                "impossível. Ficam guardadas; desmarque para incluí-las nos gráficos.")
 
     if not isinstance(period, tuple) or len(period) != 2:
         st.info("Escolha a data inicial e a final.")
@@ -517,33 +587,24 @@ def series_tab(devices_all: list[str]) -> None:
     tz = ZoneInfo(LOCAL_TZ)
     start = datetime.combine(period[0], time(), tz).astimezone(timezone.utc)
     end = datetime.combine(period[1] + timedelta(days=1), time(), tz).astimezone(timezone.utc)
-    strip = None
+    exclusions = None
     domain = None
     if resolution == "Média horária":
         hourly = load_hourly(start, end, tuple(devices), only_ok)
         data = hourly.dropna(subset=["pm25"]).drop(columns=["suspeita"])
-        suspect = suspect_hours_by_node(hourly)
         # O eixo vai do início do período até agora; um nó que parou aparece sem leituras até lá.
         until = min(end, now_utc())
         domain = [start.astimezone(tz).replace(tzinfo=None).isoformat(),
                   until.astimezone(tz).replace(tzinfo=None).isoformat()]
         exclusions = analytics.hour_exclusions(hourly.rename(columns={"minutos": "n"}), until=until)
-        if not exclusions.empty:
-            strip = exclusion_strip(exclusions, domain)
         if data.empty:
             st.info(f"Sem horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura no período escolhido.")
-            if suspect:
-                show_suspect_note(suspect)
-            if strip is not None:
-                st.caption(exclusion_note(exclusions))
-                st.altair_chart(strip, width="stretch")
+            show_hour_notes(exclusions)
+            if not exclusions.empty:
+                show_exclusion_strip(exclusions, domain)
             return
         data["hora_local"] = local_naive(data["hora"])
-        st.caption(f"Médias de horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura (75%).")
-        if suspect:
-            show_suspect_note(suspect)
-        if strip is not None:
-            st.caption(exclusion_note(exclusions))
+        show_hour_notes(exclusions)
         max_gap = pd.Timedelta(hours=1)
     else:
         # Cada minuto vira um ponto no navegador: períodos longos travariam a página.
@@ -562,20 +623,21 @@ def series_tab(devices_all: list[str]) -> None:
 
     for i, var in enumerate(variables):
         rule = HIGH_HUMIDITY if var == "humidity" else None
-        st.altair_chart(line_chart(data, "hora_local", var, VARIABLES[var], max_gap, rule=rule, domain=domain),
-                        width="stretch")
-        if i == 0 and strip is not None:      # a faixa vale para todas as variáveis: as horas sem média são as mesmas
-            st.altair_chart(strip, width="stretch")
+        nodes = sorted(data.loc[data[var].notna(), "device_id"].unique())
+        st.html(trend_head_html(VARIABLES[var], [(n, sensor_color(n)) for n in nodes], title=True))
+        st.altair_chart(line_chart(data, "hora_local", var, VARIABLES[var], max_gap, rule=rule, domain=domain,
+                                   rule_label=f"{rule:.0f}%" if rule else None, headless=True), width="stretch")
+        if var == "humidity" and data["humidity"].notna().any():    # a explicação fica junto do gráfico a que se refere
+            st.caption(humidity_note(data))
+        # A faixa vale para todas as variáveis: as horas sem média são as mesmas.
+        if i == 0 and exclusions is not None and not exclusions.empty:
+            show_exclusion_strip(exclusions, domain)
 
-    if "humidity" in data and data["humidity"].notna().any():
-        share = (data.groupby("device_id")["humidity"].apply(lambda s: (s > HIGH_HUMIDITY).mean()))
-        parts = ", ".join(f"{dev}: {p:.0%}" for dev, p in share.items())
-        st.caption(f"Registros com umidade acima de {HIGH_HUMIDITY:.0f}% ({parts}) podem ter PM2,5 "
-                   "superestimado pela absorção de água nas partículas.")
-
+    # O botão entra no fim da linha dos filtros, lá em cima, e só existe quando há dados a exportar.
     export = data.drop(columns=["hora_local"])
-    st.download_button("Baixar dados (CSV)", export.to_csv(index=False).encode("utf-8"),
-                       file_name=f"pm25_{period[0]}_{period[1]}.csv", mime="text/csv")
+    row.download_button("Exportar CSV", export.to_csv(index=False).encode("utf-8"),
+                        file_name=f"pm25_{period[0]}_{period[1]}.csv", mime="text/csv",
+                        help="Baixa os dados dos gráficos, no período e na resolução escolhidos.")
 
 
 def evaluation_note(table: pd.DataFrame, metrics: pd.DataFrame) -> str:

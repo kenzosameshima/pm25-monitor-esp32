@@ -2,8 +2,9 @@
 
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pyarrow as pa
 import pytest
@@ -217,7 +218,7 @@ def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     assert len(at.metric) == 4
-    assert [e.label for e in at.expander] == ["Como interpretar os indicadores"]   # o cartão não tem expansor próprio
+    assert "Última leitura recebida" not in [e.label for e in at.expander]       # o cartão não tem expansor próprio
 
 
 def aq_scales(at) -> list[str]:
@@ -274,6 +275,99 @@ def test_numeros_do_painel_usam_virgula_decimal(app_env):
     assert len(stale) == 1 and re.search(r"último envio há \d+,\d h", stale[0]), stale
 
 
+def control_labels(el) -> list[str]:
+    """Os rótulos dos controles de um elemento da aba, na ordem em que aparecem, dentro de colunas ou não."""
+    if el.type in ("multiselect", "button_group", "checkbox", "download_button", "date_input"):
+        return [el.label]
+    return [label for child in getattr(el, "children", {}).values() for label in control_labels(child)]
+
+
+def series_rows(at) -> list[list[str]]:
+    """Os rótulos dos controles do topo da aba Séries, uma lista por linha."""
+    rows = []
+    for key in sorted(at.tabs[1].children):
+        el = at.tabs[1].children[key]
+        if el.type != "flex_container":
+            break                                   # o primeiro aviso ou gráfico encerra os controles
+        rows.append(control_labels(el))
+    return rows
+
+
+def test_filtros_da_aba_series_ficam_em_duas_linhas(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    rows = series_rows(at)
+    assert rows[0] == ["Sensores", "Variáveis"]                                 # quem e o quê, lado a lado
+    assert rows[1][:3] == ["Período", "Resolução", "Ocultar leituras marcadas"]   # o recorte dos dados, em outra linha
+    assert len(rows) == 2
+
+
+def test_segunda_linha_de_filtros_quebra_em_vez_de_cortar_os_controles(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    row = at.tabs[1].children[sorted(at.tabs[1].children)[1]]
+    # Cada controle ocupa o que o seu conteúdo pede e, se a linha não couber, o último desce: com colunas de largura
+    # fixa, o botão "1 minuto" e o rótulo do filtro apareciam cortados numa janela de 1024 px.
+    assert "direction: HORIZONTAL" in str(row.proto) and "wrap: true" in str(row.proto)
+    assert not any(child.type == "column" for child in row.children.values())      # os controles, sem colunas de largura fixa
+
+
+def test_checkbox_e_botao_de_exportar_ficam_na_mesma_faixa_dos_botoes_de_escolha(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    row = at.tabs[1].children[sorted(at.tabs[1].children)[1]]
+    assert row.key == "series-filters"                              # o estilo precisa achar a linha dos filtros
+    css = page_style(at)
+    # Os botões de escolha têm 32 px de altura. O botão de exportar tinha 40 e o checkbox 24: com a linha alinhada pela
+    # base, os centros dos três ficavam 4 px fora um do outro, e a linha parecia torta.
+    checkbox = re.search(r"[.]st-key-series-filters \[data-testid='stCheckbox'\]\s*[{]([^}]*)[}]", css)
+    assert checkbox and "min-height: 2rem" in checkbox.group(1) and "align-items: center" in checkbox.group(1)
+    export = re.search(r"[.]st-key-series-filters \[data-testid='stDownloadButton'\] button\s*[{]([^}]*)[}]", css)
+    assert export and "min-height: 2rem" in export.group(1) and re.search(r"(?<![-\w])height: 2rem", export.group(1))
+    dates = re.search(r"[.]st-key-series-filters \[data-testid='stDateInputField'\]\s*[{]([^}]*)[}]", css)   # as datas, no
+    assert dates and "height: 2rem" in dates.group(1)                                                       # personalizado
+
+
+def test_exportacao_fica_na_linha_dos_filtros_e_nao_depois_dos_graficos(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert series_rows(at)[1][-1] == "Exportar CSV"                  # perto dos filtros que definem o que se exporta
+    assert len(at.get("download_button")) == 1                       # e só ali: o botão do fim da página saiu
+
+
+def test_sem_dados_para_mostrar_nao_ha_o_que_exportar(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.multiselect[0].set_value([]).run()                            # nenhum sensor escolhido
+    assert not at.exception, at.exception
+    assert len(at.get("download_button")) == 0
+
+
+def test_resolucao_vira_botoes_e_sem_escolha_fica_a_media_horaria(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    resolution = at.segmented_control[1]
+    assert resolution.label == "Resolução" and list(resolution.options) == ["Média horária", "1 minuto"]
+    assert resolution.value == "Média horária" and len(at.radio) == 0
+    resolution.set_value(None).run()                                     # os botões deixam desmarcar
+    assert not at.exception, at.exception
+    assert any(c.value.startswith("Horas sem média") or "minutos de leitura" in c.value for c in at.caption)
+
+
+def test_filtro_das_leituras_marcadas_tem_nome_curto_e_explica_no_balao(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    only_ok = at.checkbox[0]
+    assert only_ok.label == "Ocultar leituras marcadas" and only_ok.value is True
+    assert "implausíveis" in only_ok.help                                 # o motivo da marca fica no balão
+
+
 def test_periodo_tem_atalhos_e_so_o_personalizado_pede_datas(app_env):
     populate(app_env, hours=3)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
@@ -290,7 +384,7 @@ def test_30_dias_em_um_minuto_avisa_do_limite(app_env):
     populate(app_env, hours=3)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     at.segmented_control[0].set_value("30 dias").run()
-    at.radio[0].set_value("1 minuto").run()
+    at.segmented_control[1].set_value("1 minuto").run()
     assert not at.exception, at.exception
     assert any("até 7 dias" in i.value for i in at.info)
 
@@ -319,7 +413,7 @@ def test_resolucao_de_um_minuto_nao_mostra_a_faixa_das_horas_sem_media(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     add_dead_hours(app_env, "no-01", [10])
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
-    at.radio[0].set_value("1 minuto").run()
+    at.segmented_control[1].set_value("1 minuto").run()
     assert not at.exception, at.exception
     assert not any(c.value.startswith("Horas sem média") for c in at.caption)
 
@@ -339,29 +433,67 @@ def add_dead_hours(path: Path, device: str, hours_ago: list[int]) -> None:
     conn.close()
 
 
-def test_serie_horaria_conta_as_horas_suspeitas_que_ficaram_de_fora(app_env):
+HOURS_DETAILS = "Critérios e detalhamento por sensor"
+
+
+def hours_details(at) -> str:
+    """O texto do expansor único da série horária, com a regra das horas, o detalhe por sensor e o critério das suspeitas."""
+    boxes = [e for e in at.expander if e.label == HOURS_DETAILS]
+    assert len(boxes) == 1, [e.label for e in at.expander]
+    return " ".join(c.value for c in boxes[0].caption)
+
+
+def visible_captions(at) -> list[str]:
+    """Os avisos que aparecem sem abrir nenhum expansor."""
+    inside = {c.value for e in at.expander for c in e.caption}
+    return [c.value for c in at.caption if c.value not in inside]
+
+
+def test_serie_horaria_diz_as_horas_sem_media_uma_vez_e_leva_o_resto_num_expansor_so(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     add_dead_hours(app_env, "no-01", [10])
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert any("1 hora suspeita ficou de fora (no-01: 1)" in c.value for c in at.caption)
+    visible = visible_captions(at)
+    summary = [v for v in visible if v.startswith("Horas sem média")]
+    assert len(summary) == 1 and "1 suspeita" in summary[0]
+    assert [v for v in visible if "suspeita" in v] == summary          # a contagem de suspeitas não se repete
+    assert not any("ficou de fora" in v or "ficaram de fora" in v for v in visible)
+    assert not any("minutos de leitura" in v for v in visible)         # a regra dos 45 minutos vai para o expansor
 
 
-def test_aviso_das_horas_suspeitas_nao_afirma_o_que_o_ar_faz_e_leva_os_criterios_num_expansor(app_env):
+def test_expansor_da_serie_horaria_traz_a_regra_das_horas_e_o_criterio_das_suspeitas(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     add_dead_hours(app_env, "no-01", [10])
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-
-    notes = [c.value for c in at.caption if "hora suspeita ficou de fora" in c.value]
-    assert len(notes) == 1 and "abaixo de" not in notes[0]       # o aviso é curto: os limites ficam no expansor
+    text = hours_details(at)
+    assert "45 minutos de leitura (75%)" in text                                        # a regra das médias horárias
+    assert "25%" in text and "0,5 µg/m³" in text and "1,0 µg/m³" in text               # a regra das suspeitas
+    assert "falha do sensor" in text and "ar muito limpo" in text and "CETESB" in text  # a causa não está decidida
     assert not any("o que o ar não faz" in c.value for c in at.caption)
 
-    criteria = [e for e in at.expander if e.label == "Critério das horas suspeitas"]
-    assert len(criteria) == 1
-    text = " ".join(c.value for c in criteria[0].caption)
-    assert "25%" in text and "0,5 µg/m³" in text and "1,0 µg/m³" in text        # a regra aplicada
-    assert "falha do sensor" in text and "ar muito limpo" in text and "CETESB" in text  # a causa não está decidida
+
+def test_expansor_da_serie_horaria_detalha_as_horas_sem_media_por_sensor(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    add_dead_hours(app_env, "no-01", [10])
+    add_dead_hours(app_env, "no-02", [12, 11])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    text = hours_details(at)
+    assert re.search(r"no-01:\*\* [^-]*1 suspeita", text)             # cada sensor, a sua contagem
+    assert re.search(r"no-02:\*\* [^-]*2 suspeitas", text)
+    summary = next(v for v in visible_captions(at) if v.startswith("Horas sem média"))
+    assert "3 suspeitas" in summary and "soma dos sensores" in summary    # as contagens juntam horas de sensores diferentes
+
+
+def test_detalhe_por_sensor_so_chama_de_suspeita_o_no_que_tem_horas_suspeitas(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    add_dead_hours(app_env, "no-02", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    lines = {m.group(1): m.group(2) for m in re.finditer(r"(no-0\d):\*\* ([^-]*)", hours_details(at))}
+    assert "suspeita" in lines["no-02"] and "suspeita" not in lines["no-01"]
 
 
 def trend_head(at) -> str:
@@ -378,6 +510,213 @@ def test_grafico_de_seis_horas_tem_titulo_curto_e_uma_linha_so_com_periodo_e_leg
     assert re.search(r"\d{2}(/\d{2}|–\d{2}/\d{2}| a \d{2}/\d{2}) · µg/m³", head)    # o período e a unidade
     assert "no-01" in head and "background:#22b8cf" in head                            # a legenda, com a cor do nó
     assert "sem leituras" not in head
+
+
+def chart_heads(at) -> list[str]:
+    """Os HTMLs da linha acima de cada gráfico de linhas, na ordem da página: o de 6 horas e depois os da aba Séries."""
+    return [h.proto.body for h in at.get("html") if 'class="aq-trend-head"' in h.proto.body]
+
+
+def series_flow(at) -> list[tuple[str, str]]:
+    """O que a aba Séries mostra depois dos filtros, em ordem: avisos, a linha de cada gráfico e os gráficos."""
+    flow = []
+    for key in sorted(at.tabs[1].children):
+        el = at.tabs[1].children[key]
+        if el.type == "caption":
+            flow.append(("aviso", el.value))
+        elif el.type == "html" and 'class="aq-trend-head"' in el.proto.body:
+            flow.append(("linha", re.search(r'aq-label[^>]*>([^<]*)<', el.proto.body).group(1)))
+        elif el.type == "vega_lite_chart":
+            flow.append(("grafico", json.loads(el.proto.spec)["description"]))
+    return flow
+
+
+STRIP_TITLE = "Qualidade da coleta por hora"
+
+
+def test_faixa_das_horas_sem_media_tem_titulo_legenda_das_causas_e_diz_o_que_e_o_branco(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    flow = series_flow(at)
+    title = flow.index(("linha", STRIP_TITLE))
+    assert flow[title + 1][0] == "grafico" and flow[title + 1][1].startswith("Faixa das horas sem média")  # colado nela
+    head = next(h for h in chart_heads(at) if STRIP_TITLE in h)
+    assert 'class="aq-label aq-title"' in head                                       # com o destaque dos outros títulos
+    assert "</i>sem leituras</span>" in head and "background:#8b93a1" in head       # cada causa, com a cor da faixa
+    assert "</i>suspeita</span>" in head and "background:#e2b53b" in head
+    assert "em branco: hora válida</span>" in head                                   # e o que o espaço vazio quer dizer
+
+
+def test_faixa_das_horas_sem_media_nao_repete_a_legenda_dentro_do_grafico(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    specs = [json.loads(c.proto.spec) for c in at.get("vega_lite_chart")]
+    strip = next(s for s in specs if s["description"].startswith("Faixa das horas sem média"))
+    assert strip["encoding"]["color"].get("legend", "padrão") is None             # a legenda vai na linha de cima
+
+
+def test_sem_a_faixa_das_horas_sem_media_nao_ha_titulo_dela(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.segmented_control[1].set_value("1 minuto").run()                            # a faixa só existe na média horária
+    assert not at.exception, at.exception
+    assert ("linha", STRIP_TITLE) not in series_flow(at)
+
+
+def test_expansor_diz_que_o_branco_da_faixa_tambem_e_antes_da_primeira_leitura_e_a_hora_em_andamento(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    text = hours_details(at)
+    # A faixa só pinta as horas sem média, e o dashboard só conta as horas entre a primeira e a última leitura de cada
+    # sensor: o branco nem sempre é hora válida, e a legenda curta não pode prometer isso sem a exceção por perto.
+    assert "em branco" in text and "antes da primeira leitura" in text and "hora em andamento" in text
+
+
+def series_axes(at) -> list[dict]:
+    """O eixo do tempo dos gráficos da aba Séries: PM2,5, a faixa das horas sem média e a umidade, na ordem da página."""
+    specs = [json.loads(c.proto.spec) for c in at.get("vega_lite_chart")][1:]            # o primeiro é o de 6 horas
+    mine = [s for s in specs if "por sensor" in s["description"] or s["description"].startswith("Faixa das horas")]
+    return [next(layer["encoding"]["x"]["axis"] for layer in spec.get("layer", [spec])
+                 if "axis" in layer.get("encoding", {}).get("x", {})) for spec in mine]
+
+
+def tick_dates(axis: dict) -> list[date]:
+    return [date(v["year"], v["month"], v["date"]) for v in axis["values"]]
+
+
+def local_today() -> date:
+    return datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+
+
+def test_eixo_dos_graficos_de_sete_dias_marca_so_a_data_de_cada_dia(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    axes = series_axes(at)
+    assert len(axes) == 3                                        # PM2,5, a faixa das horas sem média e a umidade
+    week = [local_today() - timedelta(days=n) for n in range(6, -1, -1)]
+    for axis in axes:
+        assert axis["format"] == "%d/%m"                         # sem "00:00" repetido em cada marca
+        assert tick_dates(axis) == week                          # uma por dia, as mesmas nos três painéis
+
+
+def test_a_hora_exata_continua_no_balao_do_grafico_que_perdeu_a_hora_no_eixo(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    spec = next(json.loads(c.proto.spec) for c in at.get("vega_lite_chart")[1:] if "por sensor" in c.proto.spec)
+    tips = next(layer["encoding"]["tooltip"] for layer in spec.get("layer", [spec]) if "tooltip" in layer["encoding"])
+    assert any(t["title"] == "Horário" and t["format"] == "%d/%m %H:%M" for t in tips)
+
+
+def test_periodo_de_30_dias_marca_uma_data_por_semana(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.segmented_control[0].set_value("30 dias").run()
+    assert not at.exception, at.exception
+    for axis in series_axes(at):
+        dates = tick_dates(axis)
+        assert dates[0] == local_today() - timedelta(days=29) and len(dates) == 5
+        assert {(b - a).days for a, b in zip(dates, dates[1:])} == {7}      # 30 marcas diárias não caberiam
+
+
+def test_periodo_de_um_dia_e_pouco_para_marcar_so_a_data_e_mantem_a_hora_nos_rotulos(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.segmented_control[0].set_value("Personalizado").run()
+    at.date_input[0].set_value((local_today() - timedelta(days=1), local_today())).run()
+    assert not at.exception, at.exception
+    axes = series_axes(at)
+    assert axes and all("%H:%M" in axis["format"] and "values" not in axis for axis in axes)
+
+
+def test_um_minuto_com_dias_de_dados_tambem_marca_so_a_data(app_env):
+    populate(app_env, hours=72, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.segmented_control[1].set_value("1 minuto").run()
+    assert not at.exception, at.exception
+    axes = series_axes(at)
+    assert len(axes) == 2                                        # PM2,5 e umidade: a faixa não existe nessa resolução
+    for axis in axes:
+        dates = tick_dates(axis)
+        assert axis["format"] == "%d/%m" and len(dates) >= 2
+        assert {(b - a).days for a, b in zip(dates, dates[1:])} == {1}
+
+
+def test_explicacao_da_umidade_fica_logo_abaixo_do_grafico_de_umidade(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.multiselect[1].set_value(["humidity", "pm25"]).run()           # a umidade primeiro: o fim da página não é dela
+    assert not at.exception, at.exception
+    flow = series_flow(at)
+    chart = next(i for i, (kind, text) in enumerate(flow) if kind == "grafico" and "Umidade" in text)
+    assert flow[chart + 1][0] == "aviso" and flow[chart + 1][1].startswith("Registros com umidade acima de 75%")
+    assert sum(text.startswith("Registros com umidade") for kind, text in flow if kind == "aviso") == 1
+
+
+def test_sem_o_grafico_de_umidade_a_explicacao_da_umidade_nao_aparece(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.multiselect[1].set_value(["pm25"]).run()
+    assert not at.exception, at.exception
+    assert not any(text.startswith("Registros com umidade") for kind, text in series_flow(at))
+
+
+def test_linha_de_75_por_cento_do_grafico_de_umidade_tem_rotulo(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    spec = next(json.loads(c.proto.spec) for c in at.get("vega_lite_chart") if "Umidade" in json.loads(c.proto.spec)["description"])
+    labels = [layer for layer in spec["layer"] if layer["mark"]["type"] == "text"]
+    assert len(labels) == 1 and labels[0]["encoding"]["text"] == {"value": "75%"}          # o rótulo da linha tracejada
+
+
+def test_cada_grafico_da_aba_series_tem_a_variavel_e_a_legenda_numa_linha(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    heads = chart_heads(at)
+    assert len(heads) == 4                          # o de 6 horas, PM2,5, a faixa das horas sem média e a umidade
+    variables = [head for head in heads[1:] if STRIP_TITLE not in head]
+    assert "PM2,5 (µg/m³)" in variables[0] and "Umidade relativa (%)" in variables[1]
+    for head in variables:
+        assert "background:#22b8cf" in head and "background:#e0529c" in head      # cada sensor, com a cor da sua linha
+        assert "</i>no-01</span>" in head and "</i>no-02</span>" in head
+
+
+def test_titulo_de_cada_grafico_da_aba_series_tem_destaque_e_a_nota_do_grafico_de_seis_horas_nao(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    heads = chart_heads(at)
+    assert "aq-title" not in heads[0]                    # o 6 horas já tem o seu #### em cima: o período fica como nota
+    assert all('class="aq-label aq-title"' in head for head in heads[1:])
+    css = page_style(at)
+    assert rem_of(css, ".aq-label.aq-title", "font-size") == 1               # 16 px, como o texto do corpo da página
+    rule = re.search(r"[.]aq-label[.]aq-title\s*[{]([^}]*)[}]", css).group(1)
+    assert "font-weight: 600" in rule and "opacity: 1" in rule             # seminegrito e sem o apagado das notas
+
+
+def test_graficos_da_aba_series_nao_repetem_titulo_e_legenda_dentro_do_grafico(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    specs = [json.loads(c.proto.spec) for c in at.get("vega_lite_chart")]
+    lines = [s for s in specs if s["description"].startswith("Gráfico de linhas") and "por sensor" in s["description"]][1:]
+    assert len(lines) == 2
+    for spec in lines:
+        assert "title" not in spec                                  # o nome da variável vai na linha de cima
+        colors = [layer["encoding"]["color"] for layer in spec.get("layer", [spec]) if "color" in layer.get("encoding", {})]
+        assert colors and all(c.get("legend") is None for c in colors)          # e a legenda também
+        assert spec["height"] <= 250                                 # sem o cabeçalho, a área das linhas segue a mesma
 
 
 def test_grafico_de_seis_horas_nao_repete_titulo_e_legenda_dentro_do_grafico(app_env):
@@ -459,23 +798,6 @@ def test_cabecalho_do_grafico_avisa_quando_nenhum_no_enviou(app_env):
     assert "no-01, no-02 · sem leituras neste período" in trend_head(at)
 
 
-def test_aviso_das_horas_suspeitas_separa_a_contagem_por_no(app_env):
-    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
-    add_dead_hours(app_env, "no-01", [10])
-    add_dead_hours(app_env, "no-02", [12, 11])
-    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
-    assert not at.exception, at.exception
-    assert any("3 horas suspeitas ficaram de fora (no-01: 1, no-02: 2)" in c.value for c in at.caption)
-
-
-def test_aviso_das_horas_suspeitas_so_cita_os_nos_com_horas_suspeitas(app_env):
-    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
-    add_dead_hours(app_env, "no-02", [10])
-    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
-    assert not at.exception, at.exception
-    assert any("1 hora suspeita ficou de fora (no-02: 1)" in c.value for c in at.caption)
-
-
 def test_sem_horas_suspeitas_a_serie_horaria_nao_menciona_o_assunto(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
@@ -513,7 +835,7 @@ def test_avisa_quando_a_ultima_leitura_foi_marcada(app_env):
 def test_troca_para_resolucao_de_um_minuto(app_env):
     populate(app_env, hours=3)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
-    at.radio[0].set_value("1 minuto").run()
+    at.segmented_control[1].set_value("1 minuto").run()
     assert not at.exception, at.exception
 
 
