@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pyarrow as pa
 import pytest
 
 pytest.importorskip("streamlit")
@@ -439,3 +440,36 @@ def test_nota_da_leitura_zerada_cita_so_as_particulas_que_o_no_enviou(app_env, v
     assert not at.exception, at.exception
     notes = [c.value for c in at.caption if "Leitura zerada" in c.value]
     assert len(notes) == 1 and notes[0].startswith(f"Leitura zerada {named}:"), notes
+
+
+def shown(table):
+    """O que a tabela escreve nas células: os valores formatados pelo Styler, ou os próprios valores sem ele."""
+    display = table.proto.arrow_data.styler.display_values
+    if not display:
+        return table.value.astype(str)
+    return pa.ipc.open_stream(display).read_all().to_pandas()
+
+
+def has_decimal_point(text) -> bool:
+    return bool(text.apply(lambda col: col.str.contains(".", regex=False)).any().any())
+
+
+def test_tabela_de_saude_escreve_os_numeros_com_virgula_e_mantem_a_barra(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    table = at.dataframe[0]
+    assert list(table.value.columns[:3]) == ["Sensor", "Completude", "%"]  # a barra e o número ao lado dela
+    text = shown(table)
+    assert text["%"].str.fullmatch(r"\d+,\d\d%").all(), list(text["%"])
+    assert not has_decimal_point(text), text
+
+
+def test_tabela_de_previsao_escreve_os_numeros_com_virgula(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    text = shown(at.dataframe[1])
+    for column in ("MAE (µg/m³)", "RMSE (µg/m³)", "Skill score"):
+        assert text[column].str.fullmatch(r"-?\d+,\d\d").all(), (column, list(text[column]))
+    assert not has_decimal_point(text), text
