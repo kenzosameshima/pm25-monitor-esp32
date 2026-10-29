@@ -1,0 +1,20 @@
+# Lido a partir da pasta server/, de onde o dashboard é iniciado.
+#
+# Com o modo claro e o escuro definidos, o dashboard segue o tema do sistema, como o Streamlit faz sem
+# configuração. Uma [theme] só com a cor primária fixaria o tema claro.
+#
+# A cor de interação (aba escolhida, seleções, botões) é azul: o vermelho do padrão do Streamlit fica reservado
+# ao que é problema, e o azul não se confunde com nenhuma das cinco faixas de qualidade do ar. Cada cor tem
+# pelo menos 4,5:1 de contraste sobre o fundo do seu modo (conferido em tests/test_theme.py).
+
+[theme.light]
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f1f3f7"
+textColor = "#1f2330"
+primaryColor = "#2d6cdf"
+
+[theme.dark]
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#171b24"
+textColor = "#e6e8ee"
+primaryColor = "#5b95f7"

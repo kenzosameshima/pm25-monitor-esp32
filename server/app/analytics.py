@@ -120,6 +120,39 @@ def hourly_means(conn: sqlite3.Connection, start: datetime, end: datetime,
     return pd.concat(parts, ignore_index=True)[HOURLY_COLUMNS]
 
 
+EXCLUSION_COLUMNS = ["hora", "device_id", "causa"]
+NO_READINGS, FEW_READINGS, SUSPECT_HOUR = "sem leituras", "poucas leituras", "suspeita"
+EXCLUSION_CAUSES = (NO_READINGS, FEW_READINGS, SUSPECT_HOUR)
+
+
+def hour_exclusions(hourly: pd.DataFrame, *, until: datetime | None = None,
+                    min_readings: int = MIN_READINGS_PER_HOUR) -> pd.DataFrame:
+    """As horas do `hourly_means` que ficaram sem média, com a causa de cada uma (EXCLUSION_CAUSES).
+
+    'sem leituras': nenhuma leitura na hora. 'poucas leituras': leituras, mas menos que `min_readings`.
+    'suspeita': leituras suficientes em que o sensor quase não viu partículas (ADR 0004). Só entram as horas
+    entre a primeira e a última leitura de cada nó no período, como em `hourly_means`; com `until` (UTC), cada
+    nó é estendido como 'sem leituras' até a última hora que terminou antes desse instante, para um nó que
+    parou aparecer parado até agora. Também com `until`, a hora ainda em andamento fica de fora: ela tem
+    poucas leituras só porque não acabou.
+    """
+    if hourly.empty:
+        return pd.DataFrame(columns=EXCLUSION_COLUMNS)
+    suspect = hourly["suspeita"].astype(bool)
+    out = hourly[suspect | (hourly["n"] < min_readings)]
+    if until is not None:
+        out = out[out["hora"] + pd.Timedelta(hours=1) <= pd.Timestamp(until)]
+    cause = np.select([suspect[out.index], out["n"] == 0], [SUSPECT_HOUR, NO_READINGS], FEW_READINGS)
+    parts = [pd.DataFrame({"hora": out["hora"], "device_id": out["device_id"], "causa": cause})]
+    if until is not None:
+        end = pd.Timestamp(until).floor("h")
+        for device, last in hourly.groupby("device_id")["hora"].max().items():
+            stopped = pd.date_range(last + pd.Timedelta(hours=1), end, freq="h", inclusive="left")
+            parts.append(pd.DataFrame({"hora": stopped, "device_id": device, "causa": NO_READINGS}))
+    return (pd.concat(parts, ignore_index=True).sort_values(["device_id", "hora"], ignore_index=True)
+            [EXCLUSION_COLUMNS])
+
+
 def _status(last_received, now: datetime) -> tuple[str, float]:
     if last_received is None or pd.isna(last_received):
         return "sem_dados", np.nan

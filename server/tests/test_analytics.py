@@ -147,6 +147,56 @@ def test_comparacao_nao_traz_o_observado_de_hora_suspeita(conn):
     assert observed[pd.Timestamp(NOW - timedelta(hours=1))] == 20.0
 
 
+# ---------------------------------------------------------------- causa das horas sem média
+
+def hours_by_cause(exclusions: pd.DataFrame, device: str = "no-01") -> list[tuple[int, str]]:
+    """(hora, causa) de um nó, com a hora contada em horas a partir de NOW (negativo: no passado)."""
+    rows = exclusions[exclusions["device_id"] == device]
+    return [(int((h - pd.Timestamp(NOW)).total_seconds() // 3600), c) for h, c in zip(rows["hora"], rows["causa"])]
+
+
+def mixed_hours(conn) -> pd.DataFrame:
+    """Cinco horas de no-01: válida, sem leitura, com 30 leituras, só de zeros e válida."""
+    insert(conn, hour_with([10.0] * 60, start=-300)
+           + hour_with([10.0] * 30, start=-180)
+           + hour_with([0.0] * 60, start=-120)
+           + hour_with([10.0] * 60, start=-60))
+    return analytics.hourly_means(conn, NOW - timedelta(hours=6), NOW, ["no-01"])
+
+
+def test_cada_hora_sem_media_diz_a_causa(conn):
+    ex = analytics.hour_exclusions(mixed_hours(conn))
+    assert list(ex.columns) == analytics.EXCLUSION_COLUMNS
+    assert hours_by_cause(ex) == [(-4, "sem leituras"), (-3, "poucas leituras"), (-2, "suspeita")]
+
+
+def test_hora_valida_nao_aparece_entre_as_sem_media(conn):
+    insert(conn, hour_with([10.0] * 60, start=-60))
+    assert analytics.hour_exclusions(analytics.hourly_means(conn, NOW - timedelta(hours=2), NOW, ["no-01"])).empty
+
+
+def test_no_que_parou_fica_sem_leituras_ate_o_instante_dado(conn):
+    h = mixed_hours(conn)                                    # a última hora com leitura é a -1
+    until = NOW + timedelta(hours=3, minutes=30)             # horas 0, 1 e 2 já terminaram; a 3 está em andamento
+    ex = analytics.hour_exclusions(h, until=until)
+    assert hours_by_cause(ex)[-3:] == [(0, "sem leituras"), (1, "sem leituras"), (2, "sem leituras")]
+    assert not any(hour == 3 for hour, _ in hours_by_cause(ex))
+    assert [c for _, c in hours_by_cause(analytics.hour_exclusions(h))].count("sem leituras") == 1  # sem `until`, nada é somado
+
+
+def test_hora_em_andamento_nao_conta_como_poucas_leituras(conn):
+    insert(conn, hour_with([10.0] * 60, start=-60) + hour_with([10.0] * 20, start=0))   # a hora 0 está na metade
+    h = analytics.hourly_means(conn, NOW - timedelta(hours=2), NOW + timedelta(hours=1), ["no-01"])
+    now = NOW + timedelta(minutes=20)
+    assert hours_by_cause(analytics.hour_exclusions(h, until=now)) == []
+    assert hours_by_cause(analytics.hour_exclusions(h)) == [(0, "poucas leituras")]  # sem `until`, é só uma hora curta
+
+
+def test_sem_horas_devolve_as_colunas_esperadas(conn):
+    ex = analytics.hour_exclusions(analytics.hourly_means(conn, NOW - timedelta(hours=1), NOW))
+    assert ex.empty and list(ex.columns) == analytics.EXCLUSION_COLUMNS
+
+
 # ---------------------------------------------------------------- estado dos nós
 
 @pytest.mark.parametrize("minutes_after, expected", [(2, "em_operacao"), (10, "atrasado"), (20, "sem_dados")])
