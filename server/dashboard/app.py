@@ -280,7 +280,7 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
     data = data.assign(valor=data[y].map(decimal_comma))      # o tooltip do Vega escreveria o ponto decimal
     names = sorted(data[color].unique())
     sensors = color == "device_id"
-    if compact:                                               # uma leitura sem vizinha dentro do intervalo não forma linha
+    if compact:                                               # uma leitura sem vizinha a menos de `max_gap` não forma linha
         data = data.assign(isolado=data.groupby("segmento")[x].transform("size") == 1)
     # Doze marcas em 6 horas: uma a cada 30 minutos. O intervalo explícito (`TimeIntervalStep`) deixa o gráfico em
     # branco no Streamlit; a contagem numérica não.
@@ -447,8 +447,19 @@ def status_tab() -> None:
                                                                       color="blue", width="small"),
                        "%": st.column_config.Column(width="small")},
     )
-    st.caption("Mensagens perdidas são lacunas de sequência dentro de uma mesma inicialização do nó; "
-               "minutos sem leitura e sem lacuna de sequência indicam falha do sensor, não da rede.")
+    with st.expander("Como interpretar os indicadores"):
+        # Uma definição por coluna da tabela, no vocabulário do glossário.
+        st.caption(
+            "- **Completude:** fração dos minutos esperados que têm leitura; a barra e o percentual mostram o mesmo valor.\n"
+            "- **Maior lacuna:** o maior período seguido sem leitura na janela.\n"
+            "- **Mensagens perdidas:** lacunas de sequência dentro de uma mesma inicialização do nó.\n"
+            "- **Reinícios:** inicializações do nó além da primeira.\n"
+            "- **Duplicatas descartadas:** leituras reenviadas por um nó e ignoradas pelo servidor por já estarem "
+            "guardadas.\n"
+            "- **Leituras marcadas:** leituras que o servidor considerou implausíveis; ficam guardadas, mas não entram "
+            "nas médias horárias por padrão.")
+        st.caption("Minutos sem leitura e sem lacuna de sequência sugerem falha do sensor, e não da rede, mas o painel "
+                   "não confirma a causa.")
 
 
 def series_tab(devices_all: list[str]) -> None:

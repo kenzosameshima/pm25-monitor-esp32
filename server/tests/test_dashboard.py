@@ -165,7 +165,7 @@ def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     assert len(at.metric) == 4
-    assert len(at.expander) == 0
+    assert [e.label for e in at.expander] == ["Como interpretar os indicadores"]   # o cartão não tem expansor próprio
 
 
 def aq_scales(at) -> list[str]:
@@ -550,6 +550,33 @@ def test_no_que_nao_mandou_nada_em_24_horas_tem_a_maior_lacuna_de_24_h(app_env):
     assert not at.exception, at.exception
     text = shown(at.dataframe[0]).set_index("Sensor")
     assert text.loc["no-02", "Maior lacuna"] == "24 h"           # em vez de 1440 (min)
+
+
+def test_explicacao_da_tabela_de_saude_vai_num_expansor_e_nao_afirma_a_causa(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    box = [e for e in at.expander if e.label == "Como interpretar os indicadores"]
+    assert len(box) == 1
+    text = " ".join(c.value for c in box[0].caption)
+    assert "lacunas de sequência" in text                       # o que são as mensagens perdidas
+    assert "sugerem falha do sensor" in text and "não confirma a causa" in text    # uma hipótese, não uma causa
+    assert "indicam falha do sensor" not in text
+    inside = {c.value for c in box[0].caption}
+    assert not any("lacunas de sequência" in c.value for c in at.caption if c.value not in inside)   # nada solto sob a tabela
+
+
+def test_explicacao_da_tabela_de_saude_define_cada_indicador_da_tabela(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    box = next(e for e in at.expander if e.label == "Como interpretar os indicadores")
+    text = " ".join(c.value for c in box.caption)
+    indicators = [c for c in at.dataframe[0].value.columns if c not in ("Sensor", "%")]   # "%" repete a completude
+    assert len(indicators) == 6
+    for name in indicators:
+        assert f"**{name}:**" in text, f"a tabela tem a coluna {name} e a explicação não a define"
+    assert "minutos esperados" in text and "implausíveis" in text        # o que são a completude e as leituras marcadas
 
 
 def test_tabela_de_previsao_escreve_os_numeros_com_virgula(app_env):
