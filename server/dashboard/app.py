@@ -39,6 +39,9 @@ alt.data_transformers.disable_max_rows()
 PAGE_STYLE = """<style>
 /* O padrão do Streamlit (6rem em cima, 10rem embaixo) cria scroll em abas que caberiam na tela. */
 [data-testid='stMainBlockContainer'] {padding-top: 3.5rem; padding-bottom: 2rem}
+/* Texto auxiliar: o Streamlit o deixa a 60% de opacidade, o que dá 3,7:1 no tema claro. A 75% passa de 4,5:1
+   nos dois temas e ainda fica abaixo do texto principal. */
+[data-testid='stCaptionContainer'] {opacity: .75 !important}
 /* Algarismos de largura fixa, para os valores não dançarem a cada atualização; o PM2,5 é a razão da página e
    fica maior que os demais indicadores do cartão. */
 [data-testid='stMetricValue'] {font-variant-numeric: tabular-nums}
@@ -234,7 +237,7 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
                rule: float | None = None, color: str = "device_id", legend: str = "Sensor",
                domain: list[str] | None = None, time_only: bool = False, subtitle: str | None = None) -> alt.Chart:
     """Linhas por nó, uma cor fixa para cada. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
-    fixa o eixo do tempo, e `time_only` mostra só a hora nos rótulos, com a data no `subtitle`."""
+    fixa o eixo do tempo, e `time_only` mostra só a hora nos rótulos, com a data (`subtitle`) no título."""
     data = with_segments(data[[x, y, color]].dropna(), x, color, max_gap)
     data = data.assign(valor=data[y].map(decimal_comma))      # o tooltip do Vega escreveria o ponto decimal
     names = sorted(data[color].unique())
@@ -258,8 +261,17 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
         chart = chart + alt.Chart(pd.DataFrame({"limite": [rule]})).mark_rule(
             strokeDash=[4, 4], color="gray").encode(y="limite:Q")
     # No Streamlit a altura inclui título, legenda e eixos: 330 deixa para a área das linhas cerca de 200 px.
-    return chart.properties(height=330, title=alt.TitleParams(title, subtitle=subtitle or alt.Undefined,
-                                                              anchor="start"))
+    # A data vai no próprio título: o subtítulo do Vega não segue o tema e some sobre o fundo escuro.
+    return chart.properties(height=330, description=chart_description(data, x, y, title, names),
+                            title=alt.TitleParams(f"{title} · {subtitle}" if subtitle else title, anchor="start"))
+
+
+def chart_description(data: pd.DataFrame, x: str, y: str, title: str, names: list[str]) -> str:
+    """O texto que o leitor de tela lê no lugar do gráfico de linhas: o que ele mostra, o período e a faixa de valores."""
+    if data.empty:
+        return f"Gráfico de linhas: {title}, sem valores no período."
+    return (f"Gráfico de linhas: {title} por sensor ({', '.join(names)}), de {data[x].min():%d/%m %H:%M} a "
+            f"{data[x].max():%d/%m %H:%M}; valores de {decimal_comma(data[y].min())} a {decimal_comma(data[y].max())}.")
 
 
 def exclusion_note(exclusions: pd.DataFrame) -> str:
@@ -284,7 +296,10 @@ def exclusion_strip(exclusions: pd.DataFrame, domain: list[str]) -> alt.Chart:
                         scale=alt.Scale(domain=list(EXCLUSION_COLORS), range=list(EXCLUSION_COLORS.values()))),
         tooltip=[alt.Tooltip("hora_local:T", title="Hora", format="%d/%m %H:%M"),
                  alt.Tooltip("device_id:N", title="Sensor"), alt.Tooltip("causa:N", title="Causa")],
-    ).properties(height=alt.Step(26))                              # 26 px por nó, sem depender da legenda
+    ).properties(                                                  # 26 px por nó, sem depender da legenda
+        height=alt.Step(26),
+        description=(f"Faixa das horas sem média, uma linha por sensor ({', '.join(sorted(hours['device_id'].unique()))}), "
+                     f"com a causa de cada hora. {exclusion_note(exclusions)}"))
 
 
 # ---------------------------------------------------------------- abas
@@ -478,19 +493,21 @@ def forecast_tab(devices_all: list[str]) -> None:
         st.info("Ainda não há horas completas para comparar.")
         return
     long["hora_local"] = local_naive(long["hora"])
+    long["valor"] = long["pm25"].map(decimal_comma)          # o tooltip do Vega escreveria o ponto decimal
     long = with_segments(long, "hora_local", "serie", pd.Timedelta(hours=1))
     models = [c for c in table.columns if c not in SERIES_COLORS]
     colors = SERIES_COLORS | dict(zip(models, MODEL_COLORS * len(models)))
     chart = alt.Chart(long).mark_line(point=True).encode(
         x=alt.X("hora_local:T", title=None, axis=alt.Axis(format="%d/%m %H:%M")),
-        y=alt.Y("pm25:Q", title=VARIABLES["pm25"], scale=alt.Scale(zero=False)),
+        y=alt.Y("pm25:Q", title=VARIABLES["pm25"], scale=alt.Scale(zero=False),
+                axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')")),
         color=alt.Color("serie:N", title=None,
                         scale=alt.Scale(domain=list(colors), range=list(colors.values()))),
         detail="segmento:N",
         strokeDash=alt.condition(alt.datum.serie == "Observado", alt.value([1, 0]), alt.value([5, 4])),
         tooltip=[alt.Tooltip("hora_local:T", title="Hora", format="%d/%m %H:%M"), alt.Tooltip("serie:N", title="Série"),
-                 alt.Tooltip("pm25:Q", title="PM2,5", format=".1f")],
-    ).properties(height=320)
+                 alt.Tooltip("valor:N", title="PM2,5")],
+    ).properties(height=320, description=f"Gráfico de linhas do PM2,5 por hora: {', '.join(colors)}.")
     st.altair_chart(chart, width="stretch")
 
     metrics = comparison.metrics.replace({"previsor": SERIES_LABELS}).rename(columns=METRIC_LABELS)
