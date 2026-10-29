@@ -10,7 +10,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Duration
 import java.time.Instant
@@ -79,6 +81,13 @@ class FreshnessTest {
         assertEquals(DeviceStatus.LATE, currentStatus(device, list, received.plusSeconds(4 * 60)))
         assertEquals(DeviceStatus.SILENT, currentStatus(device, list, received.plusSeconds(20 * 60)))
         assertEquals(DeviceStatus.SILENT, currentStatus(device.copy(lastReceived = null), list, received))
+    }
+
+    @Test
+    fun `so o no sem dados deixa de ter valor atual`() {
+        assertTrue(hasCurrentValue(DeviceStatus.ONLINE))
+        assertTrue(hasCurrentValue(DeviceStatus.LATE))     // atrasado ainda mostra o valor, com a idade ao lado
+        assertFalse(hasCurrentValue(DeviceStatus.SILENT))
     }
 
     @Test

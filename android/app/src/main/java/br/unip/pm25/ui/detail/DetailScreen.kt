@@ -165,8 +165,7 @@ private fun HistoryCard(series: HourlySeries, range: HistoryRange) {
             )
             if (summary.suspectHours > 0) {
                 Text(
-                    "Em ${summary.suspectHours} h o sensor quase não viu partículas, o que o ar não faz por horas: " +
-                        "essas horas também ficam em branco.",
+                    suspectHoursNote(summary.suspectHours),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary,
                 )

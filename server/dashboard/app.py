@@ -98,11 +98,23 @@ def suspect_note(by_node: dict[str, int]) -> str:
     hours = sum(by_node.values())
     verb = "hora suspeita ficou" if hours == 1 else "horas suspeitas ficaram"
     nodes = ", ".join(f"{device}: {n}" for device, n in sorted(by_node.items()))
+    return f"{hours} {verb} de fora ({nodes}). O sensor quase não viu partículas nessas horas."
+
+
+def suspect_criteria() -> str:
+    """A regra das horas suspeitas e o que ela não decide, para quem quer saber por que uma hora ficou de fora."""
     low = f"{analytics.SUSPECT_LOW_PM25:.1f}".replace(".", ",")
     mean = f"{analytics.SUSPECT_MEAN_BELOW:.1f}".replace(".", ",")
-    return (f"{hours} {verb} de fora ({nodes}): pelo menos {analytics.SUSPECT_LOW_SHARE:.0%} dos minutos com PM2,5 abaixo de "
-            f"{low} µg/m³, ou média abaixo de {mean} µg/m³. O sensor quase não viu partículas, o que o ar não faz "
-            "por horas.")
+    return (f"Uma hora é suspeita quando pelo menos {analytics.SUSPECT_LOW_SHARE:.0%} dos minutos têm PM2,5 abaixo de "
+            f"{low} µg/m³, ou quando a média fica abaixo de {mean} µg/m³. A regra parte de que ficar quase sem "
+            "partículas por uma hora inteira é raro. A causa pode ser falha do sensor ou ar muito limpo, e a regra "
+            "ainda precisa ser conferida contra a estação da CETESB.")
+
+
+def show_suspect_note(by_node: dict[str, int]) -> None:
+    st.caption(suspect_note(by_node))
+    with st.expander("Critério das horas suspeitas"):
+        st.caption(suspect_criteria())
 
 
 @st.cache_data(ttl=60)
@@ -257,10 +269,15 @@ def status_tab() -> None:
                "minutos sem leitura e sem lacuna de sequência indicam falha do sensor, não da rede.")
 
     recent = load_measurements(now - timedelta(hours=6), now + timedelta(minutes=1), tuple(status["device_id"]))
+    st.markdown("#### PM2,5 nas últimas 6 horas")
     if not recent.empty:
-        st.markdown("#### PM2,5 nas últimas 6 horas")
         st.altair_chart(line_chart(recent.assign(hora=local_naive(recent["ts_sensor"])), "hora", "pm25",
                                    VARIABLES["pm25"], pd.Timedelta(minutes=5)), width="stretch")
+    # Um nó sem leitura na janela some do gráfico e da legenda: o aviso diz que ele não foi esquecido.
+    sent = set(recent["device_id"]) if not recent.empty else set()
+    missing = [d for d in devices if d in by_id.index and d not in sent]
+    if missing:
+        st.caption(f"{', '.join(missing)}: sem leituras nas últimas 6 horas.")
 
 
 def series_tab(devices_all: list[str]) -> None:
@@ -289,12 +306,12 @@ def series_tab(devices_all: list[str]) -> None:
         if data.empty:
             st.info(f"Sem horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura no período escolhido.")
             if suspect:
-                st.caption(suspect_note(suspect))
+                show_suspect_note(suspect)
             return
         data["hora_local"] = local_naive(data["hora"])
         st.caption(f"Médias de horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura (75%).")
         if suspect:
-            st.caption(suspect_note(suspect))
+            show_suspect_note(suspect)
         max_gap = pd.Timedelta(hours=1)
     else:
         # Cada minuto vira um ponto no navegador: períodos longos travariam a página.
