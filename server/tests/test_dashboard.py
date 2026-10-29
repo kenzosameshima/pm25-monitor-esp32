@@ -132,16 +132,24 @@ def test_tabela_de_previsao_avisa_quando_os_modelos_nao_tem_horas_em_comum(app_e
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     assert not any("mesmas 11 horas" in c.value for c in at.caption)
-    assert [w.value for w in at.tabs[2].warning] == [DIFFERENT_PERIODS]
+    assert not at.tabs[2].warning and DIFFERENT_PERIODS in forecast_notice(at)
 
 
 def tab_items(tab) -> list[tuple[str, str]]:
-    """O tipo e o texto (quando o elemento é um texto) de cada elemento da aba, na ordem em que aparecem."""
+    """O tipo e o texto (quando o elemento é um texto ou um HTML) de cada elemento da aba, na ordem em que aparecem."""
     items = []
     for key in sorted(tab.children):
-        value = getattr(tab.children[key], "value", "")
-        items.append((tab.children[key].type, value if isinstance(value, str) else ""))
+        element = tab.children[key]
+        value = element.proto.body if element.type == "html" else getattr(element, "value", "")
+        items.append((element.type, value if isinstance(value, str) else ""))
     return items
+
+
+def forecast_notice(at) -> str:
+    """O bloco do aviso de períodos diferentes, entre o gráfico e a tabela."""
+    notices = [text for kind, text in tab_items(at.tabs[2]) if kind == "html" and 'class="aq-note"' in text]
+    assert len(notices) == 1, notices
+    return notices[0]
 
 
 def test_aviso_de_periodos_diferentes_fica_acima_da_tabela_com_a_nota_do_skill_score_ao_lado(app_env):
@@ -151,10 +159,23 @@ def test_aviso_de_periodos_diferentes_fica_acima_da_tabela_com_a_nota_do_skill_s
     assert not at.exception, at.exception
     items = tab_items(at.tabs[2])
     kinds = [kind for kind, _ in items]
-    warning = kinds.index("warning")
-    assert kinds.index("vega_lite_chart") < warning < kinds.index("dataframe")        # entre o gráfico e a tabela
-    assert items[warning + 1] == ("caption", SKILL_NOTE)                              # com a nota do skill score colada
+    notice = next(i for i, (kind, text) in enumerate(items) if kind == "html" and 'class="aq-note"' in text)
+    assert kinds.index("vega_lite_chart") < notice < kinds.index("dataframe")         # entre o gráfico e a tabela
+    assert DIFFERENT_PERIODS in items[notice][1] and SKILL_NOTE in items[notice][1]   # as duas frases, no mesmo bloco
+    assert not at.tabs[2].warning and SKILL_NOTE not in [text for kind, text in items if kind == "caption"]
     assert not any("nas horas em que tem previsão" in text for _, text in items)      # e a frase velha, abaixo, some
+
+
+def test_aviso_de_periodos_diferentes_e_discreto_e_baixo(app_env):
+    populate(app_env)
+    add_model_forecasts(app_env, "ridge", "v2", [20, 21, 22])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    css = re.search(r"[.]aq-note\s*[{]([^}]*)[}]", page_style(at)).group(1)
+    assert "color-mix(in srgb, currentColor" in css and "#fff" not in css          # fundo quase transparente, não um bloco chapado
+    assert "border-left: 3px solid" in css                                         # o filete é o que lembra que é um aviso
+    assert rem_of(page_style(at), ".aq-note", "padding") <= 0.5                    # 8 px em cima e embaixo (o st.warning tinha 16)
+    assert rem_of(page_style(at), ".aq-note", "font-size") <= 0.875                # no tamanho das notas, não do texto da página
 
 
 def test_nota_das_mesmas_horas_tambem_fica_acima_da_tabela(app_env):

@@ -21,7 +21,7 @@ from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from dashboard.duration import duration_text  # noqa: E402
-from dashboard.evaluation import evaluated_text, evaluation_guide, small_sample_note  # noqa: E402
+from dashboard.evaluation import evaluated_text, evaluation_guide, notice_html, small_sample_note  # noqa: E402
 from dashboard.last_reading import last_reading_html  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
 from dashboard.time_axis import day_ticks  # noqa: E402
@@ -103,6 +103,11 @@ PAGE_STYLE = """<style>
 .aq-label, .aq-key-off {opacity: .75}
 .aq-label.aq-title {font-size: 1rem; font-weight: 600; opacity: 1}
 .aq-trend-head .aq-sub {flex-basis: 100%; opacity: .75}
+/* O aviso acima da tabela de avaliação: fundo quase transparente, um filete âmbar e texto de nota, para não valer mais
+   que os números que ele qualifica. */
+.aq-note {display: flex; flex-direction: column; gap: .125rem; padding: .5rem .75rem; font-size: .875rem; line-height: 1.4;
+          border-left: 3px solid #e2b53b; border-radius: .25rem; background: color-mix(in srgb, currentColor 5%, transparent)}
+.aq-note-detail {opacity: .75}
 .aq-keys {display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem}
 .aq-key i {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem}
 .aq-key i.aq-blank {box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 55%, transparent)}
@@ -661,11 +666,11 @@ SKILL_NOTE = "O skill score de cada linha compara o previsor com a persistência
 
 def show_evaluation_notes(table: pd.DataFrame, metrics: pd.DataFrame) -> None:
     """Em que horas a tabela de métricas foi calculada, escrito acima dela para ninguém comparar linhas de amostras
-    diferentes sem saber: quando as horas são outras, é um aviso (MAE e RMSE não se comparam), com o skill score ao lado."""
+    diferentes sem saber. Quando as horas são outras, é um aviso discreto (MAE e RMSE não se comparam) com a nota do skill
+    score no mesmo bloco; quando são as mesmas, uma linha de texto."""
     rated = table[[SERIES_LABELS[OBSERVED], *metrics["Previsor"]]].dropna()
     if metrics["Horas avaliadas"].nunique() > 1 or len(rated) != metrics["Horas avaliadas"].iloc[0]:
-        st.warning(DIFFERENT_PERIODS)
-        st.caption(SKILL_NOTE)
+        st.html(notice_html(DIFFERENT_PERIODS, SKILL_NOTE))
         return
     hours = local_naive(rated.index.to_series())
     st.caption(evaluated_text(len(rated), len(metrics), hours.min(), hours.max()))

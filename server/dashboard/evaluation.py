@@ -1,6 +1,7 @@
 """Os textos da avaliação de previsões: quantas horas entraram nas contas e quando a amostra é pequena demais."""
 
 from datetime import datetime
+from html import escape
 
 # Menos que um dia de horas: o ciclo diário do PM2,5 nem fecha. É um aviso de tela, não um teste estatístico.
 SMALL_SAMPLE_HOURS = 24
@@ -18,6 +19,13 @@ def evaluated_text(hours: int, previsors: int, first: datetime, last: datetime) 
         return f"Avaliada em {hours_text(hours)}{span}."
     same = "na mesma hora" if hours == 1 else f"nas mesmas {hours} horas"
     return f"Todos os previsores foram avaliados {same}{span}."
+
+
+def notice_html(headline: str, detail: str) -> str:
+    """Um aviso que fica acima de uma tabela sem competir com ela: a frase principal e, embaixo, um detalhe, num bloco só
+    (o estilo é `.aq-note`: fundo quase transparente, filete e texto pequeno)."""
+    return (f'<div class="aq-note" role="note"><span>{escape(headline)}</span>'
+            f'<span class="aq-note-detail">{escape(detail)}</span></div>')
 
 
 def small_sample_note(hours: int) -> str:

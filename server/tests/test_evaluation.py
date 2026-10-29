@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from dashboard.evaluation import SMALL_SAMPLE_HOURS, evaluated_text, evaluation_guide, hours_text, small_sample_note
+from dashboard.evaluation import SMALL_SAMPLE_HOURS, evaluated_text, evaluation_guide, hours_text, notice_html, small_sample_note
 
 FIRST, LAST = datetime(2026, 10, 28, 20), datetime(2026, 10, 29, 6)
 
@@ -25,6 +25,17 @@ def test_uma_hora_so_vira_a_mesma_hora_com_a_data_dela():
 def test_a_persistencia_sozinha_diz_so_as_horas_avaliadas():
     assert evaluated_text(48, 1, FIRST, LAST) == "Avaliada em 48 horas, de 28/10 20:00 a 29/10 06:00."
     assert evaluated_text(1, 1, FIRST, FIRST) == "Avaliada em 1 hora (28/10 20:00)."
+
+
+def test_o_aviso_leva_a_frase_principal_e_o_detalhe_no_mesmo_bloco():
+    html = notice_html("Períodos de avaliação diferentes: MAE e RMSE não se comparam.", "O skill score vale por linha.")
+    assert html.startswith('<div class="aq-note" role="note">') and html.endswith("</div>") and html.count("<div") == 1
+    assert html.index("Períodos de avaliação diferentes") < html.index('<span class="aq-note-detail">O skill score')
+
+
+def test_o_texto_do_aviso_nao_quebra_o_html():
+    html = notice_html("a<b", "c & d")
+    assert "a&lt;b" in html and "c &amp; d" in html
 
 
 def test_o_guia_define_cada_coluna_da_tabela_no_vocabulario_do_glossario():
