@@ -142,9 +142,14 @@ def add_last_reading(path: Path, device: str, hours_ago: float, **values) -> Non
     conn.close()
 
 
+def last_reading_blocks(at) -> list[str]:
+    """Os HTMLs da última leitura de cada nó sem dados."""
+    return [h.proto.body for h in at.get("html") if 'class="aq-last"' in h.proto.body]
+
+
 def test_no_sem_dados_nao_mostra_a_ultima_leitura_como_se_fosse_atual(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
-    add_last_reading(app_env, "no-02", hours_ago=27, pm25=0.0, pm10=0.0)  # o nó parou com a leitura em zero
+    add_last_reading(app_env, "no-02", hours_ago=27, pm25=0.0, pm10=0.0, rssi=-53)  # o nó parou com a leitura em zero
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
 
@@ -155,9 +160,56 @@ def test_no_sem_dados_nao_mostra_a_ultima_leitura_como_se_fosse_atual(app_env):
     assert any("sem dados" in c.value for c in at.caption)
 
     last = at.expander[0]                        # a última leitura segue acessível, dita como histórico
-    assert last.label == "Ver a última leitura recebida"
-    text = " ".join(c.value for c in last.caption)
-    assert "histórico" in text and "0,0 µg/m³" in text
+    assert last.label == "Última leitura recebida"
+    assert len(last.get("html")) == 1 and len(last_reading_blocks(at)) == 1      # no-01 está em operação e não tem
+    block = last_reading_blocks(at)[0]
+    assert "Leitura histórica; não representa a condição atual" in block
+    assert re.search(r'PM2,5 \(µg/m³\)</span><span class="aq-last-value">0,0<', block)       # os valores em grade
+    assert "Sinal Wi-Fi na leitura: -53 dBm" in block                                           # o sinal é o da leitura
+    assert len([c for c in at.caption if c.value.startswith("Sinal Wi-Fi")]) == 1   # o do no-01; o do no-02 não é atual
+
+
+def test_cartao_sem_dados_esconde_o_pm25_vazio_enquanto_a_ultima_leitura_esta_aberta(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert at.metric[-1].label == "PM2,5" and at.metric[-1].value == "—"       # fechado, o "—" segue dizendo que não há leitura
+    # Aberto, o histórico ocupa o lugar do "—", que ficaria repetido sobre os valores. O expansor é um elemento details
+    # que só perde o atributo `open` quando termina de fechar, mas marca o conteúdo como `inert` assim que começa:
+    # a regra olha o conteúdo ainda ativo, e o bloco volta junto com o início do fechamento, não depois dele.
+    hidden = re.search(r"st-key-node-'\]:has\(details\[open\] \[data-testid='stExpanderDetails'\]:not\(\[inert\]\)\)"
+                       r"[^{]*st-key-hero-empty-[^{]*\{([^}]*)\}", page_style(at))
+    assert hidden, "falta a regra que esconde o PM2,5 vazio com o histórico aberto"
+    assert "grid-template-rows: 0fr" in hidden.group(1) and "opacity: 0" in hidden.group(1)      # encolhe e some
+
+
+def test_pm25_vazio_encolhe_e_volta_com_transicao_em_vez_de_cortar(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    css = page_style(at)
+    # O bloco anima a altura (pela fileira da grade, de 1fr a 0fr) e a opacidade nos dois sentidos; sem transição, ele
+    # aparecia de uma vez quando o expansor terminava de encolher.
+    base = re.search(r"stLayoutWrapper'\]:has\(> \[class\*='st-key-hero-empty-'\]\) \{([^}]*)\}", css)
+    assert base, "falta a regra-base do bloco do PM2,5 vazio"
+    assert "grid-template-rows: 1fr" in base.group(1)
+    assert re.search(r"transition:[^;}]*grid-template-rows[^;}]*opacity", base.group(1))
+    # Escondido, o bloco ainda deixaria o espaço entre blocos do cartão: a margem negativa o desconta.
+    hidden = re.search(r"stExpanderDetails'\]:not\(\[inert\]\)\)[^{]*\{([^}]*)\}", css).group(1)
+    assert "margin-bottom: calc(-1 * var(--aq-gap))" in hidden
+    assert "--aq-gap: 1rem" in css and "--aq-gap: .75rem" in wide_screen_rules(at)    # o mesmo espaço do cartão
+    assert "prefers-reduced-motion: reduce" in css                                   # sem movimento para quem pede
+
+
+def test_ultima_leitura_marcada_como_implausivel_diz_isso_dentro_do_expansor(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27, quality="umid_fora_faixa", humidity=120.0)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    last = at.expander[0]
+    assert any("implausível (umid_fora_faixa)" in c.value for c in last.caption)
 
 
 def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env):
@@ -604,6 +656,17 @@ def rem_of(rules: str, selector: str, prop: str) -> float:
     match = re.search(rf"{re.escape(selector)}\s*\{{[^}}]*?{prop}:\s*([\d.]+)rem", rules)
     assert match, f"{selector} sem {prop} em rem"
     return float(match.group(1))
+
+
+def test_estilo_da_pagina_nao_tem_sinal_de_menor_dentro_do_css(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    css = re.fullmatch(r"<style>(.*)</style>", page_style(at), re.S)
+    assert css, "o estilo precisa ser um bloco <style> só"
+    # O sanitizador do st.html joga fora o <style> inteiro se achar um "<" dentro dele, até num comentário: a página
+    # fica sem nenhum dos estilos, e nenhum teste que leia o texto do CSS percebe.
+    assert "<" not in css.group(1)
 
 
 def test_cabecalho_em_tela_larga_gasta_menos_altura(app_env):

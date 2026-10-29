@@ -21,6 +21,7 @@ from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from dashboard.duration import duration_text  # noqa: E402
+from dashboard.last_reading import last_reading_html  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
 from dashboard.trend import period_text, trend_head_html  # noqa: E402
 
@@ -51,7 +52,7 @@ PAGE_STYLE = """<style>
 [data-testid='stMainBlockContainer'] [data-testid='stHeading'] h1 {font-size: 1.75rem; line-height: 1.2; padding-top: 0; padding-bottom: .25rem}
 [data-testid='stTabs'] [role='tabpanel'] {padding-top: .5rem}
 /* O cartão de um nó gastava 470 px: o nome do nó grande, 16 px entre cada bloco e 24 px entre a escala e as métricas. */
-[data-testid='stVerticalBlock'][class*='st-key-node-'] {gap: .75rem; padding: .75rem}
+[data-testid='stVerticalBlock'][class*='st-key-node-'] {gap: .75rem; padding: .75rem; --aq-gap: .75rem}
 [data-testid='stVerticalBlock'][class*='st-key-hero-'] {gap: .5rem}
 [class*='st-key-node-'] [data-testid='stHeading'] h3 {font-size: 1.4rem; line-height: 1.3; padding-top: 0; padding-bottom: 0}
 [class*='st-key-node-'] [data-testid='stHeading'] [data-testid='stMarkdownContainer'] {margin-bottom: 0}
@@ -69,6 +70,22 @@ PAGE_STYLE = """<style>
 [class*='st-key-hero-'] [data-testid='stMetricValue'] {font-size: 3.2rem; font-weight: 600; line-height: 1.05}
 /* A unidade do PM2,5 vem menor e com peso normal ao lado do valor: dentro do próprio valor ela competiria com ele. */
 [class*='st-key-hero-']:not([class*='st-key-hero-empty-']) [data-testid='stMetricValue'] div::after {content: " µg/m³"; font-size: .4em; font-weight: 400; margin-left: .2em}
+/* Num nó sem dados, o "PM2,5 —" diz que não há leitura atual. Com a última leitura aberta, os valores dela ocupam o
+   lugar e o "—" só repetiria a ausência: o bloco encolhe e some, e volta quando o expansor começa a fechar. O expansor
+   (um elemento details) só perde o atributo open quando acaba de fechar, mas marca o conteúdo como inert já no
+   início: a regra olha o conteúdo ainda ativo, para o bloco não esperar a animação do expansor para voltar. A altura
+   anima pela fileira da grade (de 1fr a 0fr) e a margem negativa desconta o espaço entre blocos do cartão (--aq-gap),
+   que um bloco sem altura ainda deixaria. Sem o sinal de menor aqui dentro: o sanitizador do st.html descarta o bloco
+   de estilo inteiro se achar um. */
+[class*='st-key-node-'] {--aq-gap: 1rem}
+[class*='st-key-node-'] [data-testid='stLayoutWrapper']:has(> [class*='st-key-hero-empty-']) {display: grid; grid-template-rows: 1fr;
+    transition: grid-template-rows .25s ease, opacity .25s ease, margin-bottom .25s ease, visibility 0s}
+[class*='st-key-node-'] [class*='st-key-hero-empty-'] {min-height: 0; overflow: hidden}
+[class*='st-key-node-']:has(details[open] [data-testid='stExpanderDetails']:not([inert])) [data-testid='stLayoutWrapper']:has(> [class*='st-key-hero-empty-']) {grid-template-rows: 0fr; opacity: 0; margin-bottom: calc(-1 * var(--aq-gap)); visibility: hidden;
+    transition: grid-template-rows .25s ease, opacity .25s ease, margin-bottom .25s ease, visibility 0s .25s}
+@media (prefers-reduced-motion: reduce) {
+[class*='st-key-node-'] [data-testid='stLayoutWrapper']:has(> [class*='st-key-hero-empty-']) {transition: none !important}
+}
 /* Escala das faixas de qualidade do ar sob o PM2,5. */
 .aq-scale {position: relative; max-width: 24rem; margin: .1rem 0 1.5rem}
 .aq-track {display: flex; gap: 2px; height: .5rem; border-radius: .25rem; overflow: hidden}
@@ -84,6 +101,14 @@ PAGE_STYLE = """<style>
 .aq-period, .aq-key-off {opacity: .75}
 .aq-keys {display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem}
 .aq-key i {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem}
+/* A última leitura de um nó sem dados, no expansor: o aviso, os valores em grade sobre um fundo próprio e o sinal. */
+.aq-last {display: grid; gap: .5rem}
+.aq-last-title {font-weight: 600}
+.aq-last-note, .aq-last-foot {font-size: .875rem; opacity: .75}
+.aq-last-grid {display: grid; grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr)); gap: .75rem; padding: .75rem;
+               border-radius: .5rem; background: color-mix(in srgb, currentColor 6%, transparent)}
+.aq-last-label {display: block; font-size: .875rem; opacity: .75}
+.aq-last-value {display: block; font-size: 1.4rem; font-variant-numeric: tabular-nums}
 </style>"""
 st.html(PAGE_STYLE)
 
@@ -203,12 +228,15 @@ def ago(minutes: float | None) -> str:
     return f"há {minutes / 1440:.0f} dias"
 
 
-def last_reading_text(dev: pd.Series, when: str) -> str:
+def last_reading_block(dev: pd.Series, reading_at: datetime) -> str:
     """A última leitura de um nó sem dados recentes, dita como histórico para não passar por valor atual."""
-    values = " · ".join([f"PM2,5 {fmt(dev['pm25'], ' µg/m³')}", f"PM10 {fmt(dev['pm10'], ' µg/m³')}",
-                         fmt(dev["temperature"], " °C"), fmt(dev["humidity"], "%"), fmt(dev["rssi"], " dBm", 0)])
-    note = "" if dev["quality"] == "ok" else f" O servidor a marcou como implausível ({dev['quality']})."
-    return f"Leitura de {when}, histórico (não é o valor atual): {values}.{note}"
+    values = [("PM2,5 (µg/m³)", fmt(dev["pm25"], "")), ("PM10 (µg/m³)", fmt(dev["pm10"], "")),
+              ("Temperatura", fmt(dev["temperature"], " °C")), ("Umidade", fmt(dev["humidity"], "%"))]
+    return last_reading_html(reading_at, values, fmt(dev["rssi"], " dBm", 0) if pd.notna(dev["rssi"]) else None)
+
+
+def flagged_note(quality: str) -> str:
+    return f":red[O servidor marcou esta leitura como implausível ({quality}).]"
 
 
 def zero_reading_note(pm1, pm25, pm10) -> str:
@@ -377,15 +405,18 @@ def status_tab() -> None:
                 continue
             dev = by_id.loc[device]
             minutes = None if pd.isna(dev["minutes_since"]) else dev["minutes_since"]
-            when = dev["ts_sensor"].tz_convert(LOCAL_TZ).strftime("%d/%m %H:%M")
+            reading_at = dev["ts_sensor"].tz_convert(LOCAL_TZ)
+            when = reading_at.strftime("%d/%m %H:%M")
             st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")
             if dev["status"] == "sem_dados":
                 # Sem envio recente, o último valor não diz como o ar está agora (um sensor parado em zero
                 # apareceria como "Boa"): o valor atual fica vazio e a última leitura, dita histórica, no expansor.
                 with st.container(key=f"hero-empty-{device}"):
                     st.metric("PM2,5", "—")
-                with st.expander("Ver a última leitura recebida"):
-                    st.caption(last_reading_text(dev, when))
+                with st.expander("Última leitura recebida"):
+                    st.html(last_reading_block(dev, reading_at))
+                    if dev["quality"] != "ok":
+                        st.caption(flagged_note(dev["quality"]))
             else:
                 # O PM2,5 abre o cartão, grande e com a escala das faixas sob ele; os outros indicadores ficam numa
                 # linha só, menores.
@@ -411,7 +442,7 @@ def status_tab() -> None:
                 if pd.notna(dev["rssi"]):
                     st.caption(f"Sinal Wi-Fi: {fmt(dev['rssi'], ' dBm', 0)}")
                 if dev["quality"] != "ok":
-                    st.caption(f":red[O servidor marcou esta leitura como implausível ({dev['quality']}).]")
+                    st.caption(flagged_note(dev["quality"]))
             if isinstance(dev["firmware"], str):
                 st.caption(f"Firmware: {dev['firmware']}")
 
