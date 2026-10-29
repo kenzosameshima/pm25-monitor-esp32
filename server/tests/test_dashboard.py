@@ -507,7 +507,7 @@ def series_flow(at) -> list[tuple[str, str]]:
         if el.type == "caption":
             flow.append(("aviso", el.value))
         elif el.type == "html" and 'class="aq-trend-head"' in el.proto.body:
-            flow.append(("linha", re.search(r'aq-label">([^<]*)<', el.proto.body).group(1)))
+            flow.append(("linha", re.search(r'aq-label[^>]*>([^<]*)<', el.proto.body).group(1)))
         elif el.type == "vega_lite_chart":
             flow.append(("grafico", json.loads(el.proto.spec)["description"]))
     return flow
@@ -551,6 +551,19 @@ def test_cada_grafico_da_aba_series_tem_a_variavel_e_a_legenda_numa_linha(app_en
     for head in heads[1:]:
         assert "background:#22b8cf" in head and "background:#e0529c" in head      # cada sensor, com a cor da sua linha
         assert "</i>no-01</span>" in head and "</i>no-02</span>" in head
+
+
+def test_titulo_de_cada_grafico_da_aba_series_tem_destaque_e_a_nota_do_grafico_de_seis_horas_nao(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    heads = chart_heads(at)
+    assert "aq-title" not in heads[0]                    # o 6 horas já tem o seu #### em cima: o período fica como nota
+    assert all('class="aq-label aq-title"' in head for head in heads[1:])
+    css = page_style(at)
+    assert rem_of(css, ".aq-label.aq-title", "font-size") == 1               # 16 px, como o texto do corpo da página
+    rule = re.search(r"[.]aq-label[.]aq-title\s*[{]([^}]*)[}]", css).group(1)
+    assert "font-weight: 600" in rule and "opacity: 1" in rule             # seminegrito e sem o apagado das notas
 
 
 def test_graficos_da_aba_series_nao_repetem_titulo_e_legenda_dentro_do_grafico(app_env):

@@ -99,6 +99,7 @@ PAGE_STYLE = """<style>
 .aq-trend-head {display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .25rem 1rem;
                 font-size: .875rem}
 .aq-label, .aq-key-off {opacity: .75}
+.aq-label.aq-title {font-size: 1rem; font-weight: 600; opacity: 1}
 .aq-keys {display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem}
 .aq-key i {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem}
 /* A última leitura de um nó sem dados, no expansor: o aviso, os valores em grade sobre um fundo próprio e o sinal. */
@@ -586,7 +587,7 @@ def series_tab(devices_all: list[str]) -> None:
     for i, var in enumerate(variables):
         rule = HIGH_HUMIDITY if var == "humidity" else None
         nodes = sorted(data.loc[data[var].notna(), "device_id"].unique())
-        st.html(trend_head_html(VARIABLES[var], [(n, sensor_color(n)) for n in nodes]))
+        st.html(trend_head_html(VARIABLES[var], [(n, sensor_color(n)) for n in nodes], title=True))
         st.altair_chart(line_chart(data, "hora_local", var, VARIABLES[var], max_gap, rule=rule, domain=domain,
                                    rule_label=f"{rule:.0f}%" if rule else None, headless=True), width="stretch")
         if var == "humidity" and data["humidity"].notna().any():    # a explicação fica junto do gráfico a que se refere

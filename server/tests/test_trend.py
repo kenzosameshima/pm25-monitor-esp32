@@ -25,6 +25,13 @@ def test_o_texto_da_esquerda_vem_pronto_e_cada_sensor_leva_a_sua_cor():
     assert "sem leituras" not in html                   # sem nó calado, sem aviso
 
 
+def test_o_titulo_de_um_grafico_leva_a_marca_de_destaque_e_a_nota_de_apoio_nao():
+    note = trend_head_html("29/10 · µg/m³", [])
+    title = trend_head_html("PM2,5 (µg/m³)", [], title=True)
+    assert '<span class="aq-label">' in note and "aq-title" not in note
+    assert '<span class="aq-label aq-title">PM2,5 (µg/m³)</span>' in title
+
+
 def test_no_sem_leituras_vem_explicado_ao_lado_da_legenda():
     html = trend_head_html("29/10 · µg/m³", [("no-01", "#22b8cf")], ["no-02"])
     assert "no-02 · sem leituras neste período" in html
