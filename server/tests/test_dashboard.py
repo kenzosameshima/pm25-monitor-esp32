@@ -1069,6 +1069,32 @@ def test_sensor_com_modelo_nao_mostra_aviso_de_modelo_ausente(app_env):
     assert not at.tabs[2].info and NO_MODEL not in [c.value for c in at.tabs[2].caption]
 
 
+def test_linha_avaliada_em_uma_hora_diz_que_a_amostra_e_pequena_e_as_demais_nao(app_env):
+    populate(app_env, hours=40)
+    add_model_forecasts(app_env, "ridge", "v1", list(range(12, 29)))      # 28 horas: mais de um dia
+    add_model_forecasts(app_env, "ridge", "v0-retro", [35])               # uma hora, sem nenhuma em comum com a v1
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    text = shown(at.dataframe[1]).set_index("Previsor")
+    assert dict(text["Observação"]) == {"Persistência": "", "ridge v1": "", "ridge v0-retro": "Amostra de apenas 1 hora"}
+
+
+def test_sem_amostra_pequena_a_tabela_nao_ganha_a_coluna_de_observacao(app_env):
+    populate(app_env, hours=40)
+    add_model_forecasts(app_env, "ridge", "v1", list(range(12, 29)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert "Observação" not in at.dataframe[1].value.columns
+
+
+def test_amostra_pequena_vale_para_todas_as_linhas_que_tem_menos_de_um_dia(app_env):
+    populate(app_env)                                                      # a v1 prevê 11 horas, e a persistência fica com as mesmas
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    text = shown(at.dataframe[1]).set_index("Previsor")
+    assert set(text["Observação"]) == {"Amostra de apenas 11 horas"}
+
+
 def forecast_head(at) -> str:
     """O HTML da linha acima do gráfico da aba Previsto × observado."""
     return next(h.proto.body for h in at.tabs[2].get("html") if 'class="aq-trend-head"' in h.proto.body)

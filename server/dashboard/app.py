@@ -21,7 +21,7 @@ from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from dashboard.duration import duration_text  # noqa: E402
-from dashboard.evaluation import evaluated_text  # noqa: E402
+from dashboard.evaluation import evaluated_text, small_sample_note  # noqa: E402
 from dashboard.last_reading import last_reading_html  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
 from dashboard.time_axis import day_ticks  # noqa: E402
@@ -712,6 +712,9 @@ def forecast_tab(devices_all: list[str]) -> None:
     st.altair_chart(chart, width="stretch")
 
     show_evaluation_notes(table, metrics)
+    notes = metrics["Horas"].map(small_sample_note)
+    if notes.ne("").any():               # a coluna só existe quando alguma linha tem menos de um dia de horas
+        metrics = metrics.assign(**{"Observação": notes})
     # O Styler escreve os números com vírgula (o formato da coluna do Streamlit só sabe o ponto).
     st.dataframe(metrics.style.format(decimal=",", precision=2, na_rep="—"), hide_index=True)
     st.caption("Persistência repete a média da hora anterior e é a referência que qualquer modelo precisa superar. "
