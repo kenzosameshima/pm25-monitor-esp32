@@ -44,6 +44,17 @@ def test_sem_explicacao_do_branco_a_legenda_nao_traz_a_marca():
     assert "aq-blank" not in trend_head_html("PM2,5", [("no-01", "#22b8cf")])
 
 
+def test_a_segunda_linha_do_cabecalho_vem_depois_do_titulo_e_da_legenda():
+    html = trend_head_html("PM2,5 (µg/m³) · previsão para a hora seguinte", [("Observado", "#3b82f6")], title=True,
+                           subtitle="27/10 15:00 a 29/10 16:00 · horário de Brasília")
+    assert html.endswith('<span class="aq-sub">27/10 15:00 a 29/10 16:00 · horário de Brasília</span></div>')
+    assert html.index("aq-keys") < html.index("aq-sub")               # a legenda fica na linha do título
+
+
+def test_sem_segunda_linha_o_cabecalho_nao_traz_a_marca():
+    assert "aq-sub" not in trend_head_html("PM2,5", [("no-01", "#22b8cf")])
+
+
 def test_no_sem_leituras_vem_explicado_ao_lado_da_legenda():
     html = trend_head_html("29/10 · µg/m³", [("no-01", "#22b8cf")], ["no-02"])
     assert "no-02 · sem leituras neste período" in html

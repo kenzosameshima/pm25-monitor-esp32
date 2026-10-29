@@ -514,8 +514,9 @@ def test_grafico_de_seis_horas_tem_titulo_curto_e_uma_linha_so_com_periodo_e_leg
 
 
 def chart_heads(at) -> list[str]:
-    """Os HTMLs da linha acima de cada gráfico de linhas, na ordem da página: o de 6 horas e depois os da aba Séries."""
-    return [h.proto.body for h in at.get("html") if 'class="aq-trend-head"' in h.proto.body]
+    """Os HTMLs da linha acima de cada gráfico de linhas das abas Status e Séries, na ordem da página: o de 6 horas e
+    depois os da aba Séries. O da aba Previsto × observado tem o seu próprio helper (`forecast_head`)."""
+    return [h.proto.body for tab in at.tabs[:2] for h in tab.get("html") if 'class="aq-trend-head"' in h.proto.body]
 
 
 def series_flow(at) -> list[tuple[str, str]]:
@@ -962,6 +963,38 @@ def test_tabela_de_previsao_escreve_os_numeros_com_virgula(app_env):
     for column in ("MAE (µg/m³)", "RMSE (µg/m³)", "Skill score"):
         assert text[column].str.fullmatch(r"-?\d+,\d\d").all(), (column, list(text[column]))
     assert not has_decimal_point(text), text
+
+
+def forecast_head(at) -> str:
+    """O HTML da linha acima do gráfico da aba Previsto × observado."""
+    return next(h.proto.body for h in at.tabs[2].get("html") if 'class="aq-trend-head"' in h.proto.body)
+
+
+def forecast_spec(at) -> dict:
+    return json.loads(at.tabs[2].get("vega_lite_chart")[0].proto.spec)
+
+
+def test_grafico_de_previsao_tem_cabecalho_com_titulo_periodo_fuso_e_legenda_numa_linha(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    head = forecast_head(at)
+    assert 'class="aq-label aq-title">PM2,5 (µg/m³) · previsão para a hora seguinte<' in head
+    for name, color in (("Observado", "#3b82f6"), ("Persistência", "#9ca3af"), ("ridge v1", "#f97316")):
+        assert f'background:{color}" aria-hidden="true"></i>{name}</span>' in head       # a legenda, na cor da linha
+    assert re.search(r'aq-sub">[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2} a [0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2} '
+                     r'· horário de Brasília<', head)                                 # o período e o fuso, abaixo
+
+
+def test_grafico_de_previsao_nao_repete_titulo_nem_legenda_e_mantem_observado_continuo_e_previsoes_tracejadas(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    spec = forecast_spec(at)
+    assert spec["encoding"]["color"].get("legend", "padrão") is None                 # a legenda vai na linha de cima
+    assert spec["encoding"]["y"].get("title", "padrão") is None                      # e a unidade no título
+    dash = spec["encoding"]["strokeDash"]["condition"]
+    assert dash["value"] == [1, 0] and spec["encoding"]["strokeDash"]["value"] == [5, 4]   # observado contínuo, o resto tracejado
 
 
 def page_style(at) -> str:

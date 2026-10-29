@@ -101,6 +101,7 @@ PAGE_STYLE = """<style>
                 font-size: .875rem}
 .aq-label, .aq-key-off {opacity: .75}
 .aq-label.aq-title {font-size: 1rem; font-weight: 600; opacity: 1}
+.aq-trend-head .aq-sub {flex-basis: 100%; opacity: .75}
 .aq-keys {display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem}
 .aq-key i {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem}
 .aq-key i.aq-blank {box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 55%, transparent)}
@@ -669,15 +670,18 @@ def forecast_tab(devices_all: list[str]) -> None:
     colors = SERIES_COLORS | dict(zip(models, MODEL_COLORS * len(models)))
     chart = alt.Chart(long).mark_line(point=True).encode(
         x=alt.X("hora_local:T", title=None, axis=alt.Axis(format="%d/%m %H:%M")),
-        y=alt.Y("pm25:Q", title=VARIABLES["pm25"], scale=alt.Scale(zero=False),
+        y=alt.Y("pm25:Q", title=None, scale=alt.Scale(zero=False),
                 axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')")),
-        color=alt.Color("serie:N", title=None,
+        color=alt.Color("serie:N", title=None, legend=None,
                         scale=alt.Scale(domain=list(colors), range=list(colors.values()))),
         detail="segmento:N",
         strokeDash=alt.condition(alt.datum.serie == "Observado", alt.value([1, 0]), alt.value([5, 4])),
         tooltip=[alt.Tooltip("hora_local:T", title="Hora", format="%d/%m %H:%M"), alt.Tooltip("serie:N", title="Série"),
                  alt.Tooltip("valor:N", title="PM2,5")],
     ).properties(height=320, description=f"Gráfico de linhas do PM2,5 por hora: {', '.join(colors)}.")
+    first, last = long["hora_local"].min(), long["hora_local"].max()
+    st.html(trend_head_html(f"{VARIABLES['pm25']} · previsão para a hora seguinte", list(colors.items()),
+                            title=True, subtitle=f"{first:%d/%m %H:%M} a {last:%d/%m %H:%M} · horário de Brasília"))
     st.altair_chart(chart, width="stretch")
 
     metrics = comparison.metrics.replace({"previsor": SERIES_LABELS}).rename(columns=METRIC_LABELS)
