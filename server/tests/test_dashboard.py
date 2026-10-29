@@ -78,7 +78,7 @@ def test_dashboard_renderiza_as_tres_abas(app_env):
     # tabela de saúde da coleta: o nó 2 teve uma hora sem dados e um reinício
     health = at.dataframe[0].value.set_index("Sensor")
     assert health.loc["no-02", "Reinícios"] == 1
-    assert health.loc["no-02", "Maior lacuna (min)"] >= 59
+    assert health.loc["no-02", "Maior lacuna"] >= 59       # o valor segue em minutos: a coluna ordena pelo tempo
     assert health.loc["no-01", "Mensagens perdidas"] == 0
 
     # previsto × observado: persistência e o modelo gravado, com skill score
@@ -531,6 +531,25 @@ def test_tabela_de_saude_escreve_os_numeros_com_virgula_e_mantem_a_barra(app_env
     text = shown(table)
     assert text["%"].str.fullmatch(r"\d+,\d\d%").all(), list(text["%"])
     assert not has_decimal_point(text), text
+
+
+def test_tabela_de_saude_escreve_a_maior_lacuna_em_horas_e_minutos(app_env):
+    populate(app_env)                                            # o no-02 ficou uma hora sem dados
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert "Maior lacuna" in at.dataframe[0].value.columns and "Maior lacuna (min)" not in at.dataframe[0].value.columns
+    text = shown(at.dataframe[0]).set_index("Sensor")
+    assert text.loc["no-02", "Maior lacuna"] == "1 h"
+    assert re.fullmatch(r"\d+ min", text.loc["no-01", "Maior lacuna"]), text.loc["no-01", "Maior lacuna"]
+
+
+def test_no_que_nao_mandou_nada_em_24_horas_tem_a_maior_lacuna_de_24_h(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    text = shown(at.dataframe[0]).set_index("Sensor")
+    assert text.loc["no-02", "Maior lacuna"] == "24 h"           # em vez de 1440 (min)
 
 
 def test_tabela_de_previsao_escreve_os_numeros_com_virgula(app_env):

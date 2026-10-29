@@ -20,6 +20,7 @@ import streamlit as st  # noqa: E402
 from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
+from dashboard.duration import duration_text  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
 from dashboard.trend import period_text, trend_head_html  # noqa: E402
 
@@ -222,7 +223,7 @@ STATUS_LABELS = {"em_operacao": "🟢 em operação", "atrasado": "🟡 atrasado
 HEALTH_LABELS = {
     "device_id": "Sensor",
     "completude": "Completude",
-    "maior_lacuna_min": "Maior lacuna (min)",
+    "maior_lacuna_min": "Maior lacuna",
     "mensagens_perdidas": "Mensagens perdidas",
     "reinicios": "Reinícios",
     "duplicatas_descartadas": "Duplicatas descartadas",
@@ -436,6 +437,8 @@ def status_tab() -> None:
     styled = health.style.format(decimal=",", na_rep="—")
     # Com `subset`: um formatter em dicionário também redefine as colunas que ficam de fora dele.
     styled = styled.format(lambda v: decimal_comma(v * 100, 2) + "%", subset=["%"], na_rep="—")
+    # A maior lacuna segue em minutos no valor (a coluna ordena por ele) e se lê em horas quando passa de uma.
+    styled = styled.format(duration_text, subset=["Maior lacuna"], na_rep="—")
     st.dataframe(
         styled, hide_index=True,
         # Azul neutro: a barra de completude não deve parecer um alerta mesmo com 99%.
