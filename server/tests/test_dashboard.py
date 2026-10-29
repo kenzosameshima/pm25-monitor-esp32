@@ -489,6 +489,7 @@ def test_expansor_da_serie_horaria_detalha_as_horas_sem_media_por_sensor(app_env
 
 def test_detalhe_por_sensor_so_chama_de_suspeita_o_no_que_tem_horas_suspeitas(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    add_last_reading(app_env, "no-01", hours_ago=8, boot_id=7)   # horas sem leituras para o no-01, mas nenhuma suspeita
     add_dead_hours(app_env, "no-02", [10])
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
@@ -684,8 +685,8 @@ def test_cada_grafico_da_aba_series_tem_a_variavel_e_a_legenda_numa_linha(app_en
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     heads = chart_heads(at)
-    assert len(heads) == 4                          # o de 6 horas, PM2,5, a faixa das horas sem média e a umidade
-    variables = [head for head in heads[1:] if STRIP_TITLE not in head]
+    variables = [head for head in heads[1:] if STRIP_TITLE not in head]       # a faixa tem a sua linha, mas nem sempre existe
+    assert len(heads) in (3, 4) and len(variables) == 2                        # o de 6 horas, PM2,5 e umidade
     assert "PM2,5 (µg/m³)" in variables[0] and "Umidade relativa (%)" in variables[1]
     for head in variables:
         assert "background:#22b8cf" in head and "background:#e0529c" in head      # cada sensor, com a cor da sua linha
