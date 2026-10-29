@@ -274,6 +274,51 @@ def test_numeros_do_painel_usam_virgula_decimal(app_env):
     assert len(stale) == 1 and re.search(r"último envio há \d+,\d h", stale[0]), stale
 
 
+def series_rows(at) -> list[list[str]]:
+    """Os rótulos dos controles do topo da aba Séries, uma lista por linha (as colunas de uma linha ficam juntas)."""
+    rows = []
+    for key in sorted(at.tabs[1].children):
+        el = at.tabs[1].children[key]
+        if el.type == "flex_container":
+            rows.append([c.label for column in el.children.values() for c in column.children.values()])
+        elif el.type in ("multiselect", "button_group", "checkbox", "download_button"):
+            rows.append([el.label])
+        else:
+            break                                   # o primeiro aviso ou gráfico encerra os controles
+    return rows
+
+
+def test_filtros_da_aba_series_ficam_em_duas_linhas(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    rows = series_rows(at)
+    assert rows[0] == ["Sensores", "Variáveis"]                                 # quem e o quê, lado a lado
+    assert rows[1][:3] == ["Período", "Resolução", "Ocultar leituras marcadas"]   # o recorte dos dados, em outra linha
+    assert len(rows) == 2
+
+
+def test_resolucao_vira_botoes_e_sem_escolha_fica_a_media_horaria(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    resolution = at.segmented_control[1]
+    assert resolution.label == "Resolução" and list(resolution.options) == ["Média horária", "1 minuto"]
+    assert resolution.value == "Média horária" and len(at.radio) == 0
+    resolution.set_value(None).run()                                     # os botões deixam desmarcar
+    assert not at.exception, at.exception
+    assert any(c.value.startswith("Horas sem média") or "minutos de leitura" in c.value for c in at.caption)
+
+
+def test_filtro_das_leituras_marcadas_tem_nome_curto_e_explica_no_balao(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    only_ok = at.checkbox[0]
+    assert only_ok.label == "Ocultar leituras marcadas" and only_ok.value is True
+    assert "implausíveis" in only_ok.help                                 # o motivo da marca fica no balão
+
+
 def test_periodo_tem_atalhos_e_so_o_personalizado_pede_datas(app_env):
     populate(app_env, hours=3)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
@@ -290,7 +335,7 @@ def test_30_dias_em_um_minuto_avisa_do_limite(app_env):
     populate(app_env, hours=3)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     at.segmented_control[0].set_value("30 dias").run()
-    at.radio[0].set_value("1 minuto").run()
+    at.segmented_control[1].set_value("1 minuto").run()
     assert not at.exception, at.exception
     assert any("até 7 dias" in i.value for i in at.info)
 
@@ -319,7 +364,7 @@ def test_resolucao_de_um_minuto_nao_mostra_a_faixa_das_horas_sem_media(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     add_dead_hours(app_env, "no-01", [10])
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
-    at.radio[0].set_value("1 minuto").run()
+    at.segmented_control[1].set_value("1 minuto").run()
     assert not at.exception, at.exception
     assert not any(c.value.startswith("Horas sem média") for c in at.caption)
 
@@ -513,7 +558,7 @@ def test_avisa_quando_a_ultima_leitura_foi_marcada(app_env):
 def test_troca_para_resolucao_de_um_minuto(app_env):
     populate(app_env, hours=3)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
-    at.radio[0].set_value("1 minuto").run()
+    at.segmented_control[1].set_value("1 minuto").run()
     assert not at.exception, at.exception
 
 

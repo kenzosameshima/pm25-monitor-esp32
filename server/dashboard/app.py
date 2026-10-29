@@ -495,17 +495,23 @@ def status_tab() -> None:
 
 def series_tab(devices_all: list[str]) -> None:
     today = datetime.now(ZoneInfo(LOCAL_TZ)).date()
-    c1, c2, c3 = st.columns([2, 2, 1])
+    # Duas linhas: o que olhar (sensores e variáveis, cada um em metade da largura) e o recorte dos dados (período,
+    # resolução e leituras marcadas), alinhados pela base para a caixa de datas do período personalizado não os soltar.
+    c1, c2 = st.columns(2)
     devices = c1.multiselect("Sensores", devices_all, default=devices_all)
-    choice = c2.segmented_control("Período", [*PERIOD_PRESETS, "Personalizado"], default="7 dias") or "7 dias"
+    variables = c2.multiselect("Variáveis", list(VARIABLES), default=["pm25", "humidity"], format_func=VARIABLES.get)
+    c3, c4, c5 = st.columns([3, 2, 2], vertical_alignment="bottom")
+    choice = c3.segmented_control("Período", [*PERIOD_PRESETS, "Personalizado"], default="7 dias") or "7 dias"
     if choice == "Personalizado":
-        period = c2.date_input("Datas", value=(today - timedelta(days=6), today), max_value=today,
+        period = c3.date_input("Datas", value=(today - timedelta(days=6), today), max_value=today,
                                format="DD/MM/YYYY")
     else:
         period = (today - timedelta(days=PERIOD_PRESETS[choice] - 1), today)
-    resolution = c3.radio("Resolução", ["Média horária", "1 minuto"])
-    variables = st.multiselect("Variáveis", list(VARIABLES), default=["pm25", "humidity"], format_func=VARIABLES.get)
-    only_ok = st.checkbox("Ocultar leituras marcadas como implausíveis", value=True)
+    resolution = (c4.segmented_control("Resolução", ["Média horária", "1 minuto"], default="Média horária")
+                  or "Média horária")
+    only_ok = c5.checkbox("Ocultar leituras marcadas", value=True,
+                          help="Leituras que o servidor marcou como implausíveis: valor fora da faixa física ou horário "
+                               "impossível. Ficam guardadas; desmarque para incluí-las nos gráficos.")
 
     if not isinstance(period, tuple) or len(period) != 2:
         st.info("Escolha a data inicial e a final.")
