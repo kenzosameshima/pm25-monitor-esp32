@@ -59,6 +59,22 @@ def air_quality(pm25) -> str | None:
     return next(label for bound, label in AIR_QUALITY_BANDS if pm25 <= bound)
 
 
+def band_position(pm25) -> float | None:
+    """Onde um PM2,5 cai numa escala de 0 a 1 que dá a cada faixa o mesmo comprimento.
+
+    Dentro de cada faixa a posição é proporcional ao valor. A última faixa não tem teto: a escala a mostra
+    até o dobro do seu limite inferior (de 125 a 250), e o que passa disso fica no fim. None sem valor válido.
+    """
+    if pm25 is None or pd.isna(pm25) or pm25 < 0:
+        return None
+    finite = [bound for bound, _ in AIR_QUALITY_BANDS[:-1]]
+    starts, ends = [0.0, *finite], [*finite, 2 * finite[-1]]
+    for i, (start, end) in enumerate(zip(starts, ends)):
+        if pm25 <= end:
+            return (i + (pm25 - start) / (end - start)) / len(ends)
+    return 1.0
+
+
 def production_devices(conn: sqlite3.Connection) -> list[str]:
     """Nós com leituras, sem os de teste, em ordem de nome."""
     return [r["device_id"] for r in db.device_overview(conn) if not is_test_device(r["device_id"])]

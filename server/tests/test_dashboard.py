@@ -1,5 +1,6 @@
 """Testes do dashboard com o AppTest do Streamlit: o script roda sem navegador sobre um banco sintético."""
 
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -164,6 +165,40 @@ def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env
     assert not at.exception, at.exception
     assert len(at.metric) == 4
     assert len(at.expander) == 0
+
+
+def aq_scales(at) -> list[str]:
+    """Os HTMLs das escalas de faixas que a página desenhou, um por nó com leitura atual."""
+    return [h.proto.body for h in at.get("html") if 'class="aq-scale"' in h.proto.body]
+
+
+def test_cartao_do_no_em_operacao_mostra_a_escala_das_faixas_com_a_leitura_por_extenso(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    scales = aq_scales(at)
+    assert len(scales) == 1
+    assert re.search(r'aria-label="PM2,5 de \d+,\d µg/m³, na faixa (Boa|Moderada|Ruim|Muito ruim|Péssima)"', scales[0])
+
+
+def test_no_sem_dados_nao_mostra_a_escala_das_faixas(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27, pm25=0.0, pm10=0.0)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert len(aq_scales(at)) == 1                 # só o no-01: o zero do no-02 não vira uma leitura na escala
+
+
+def test_todo_grafico_tem_descricao_para_o_leitor_de_tela(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])        # com horas fora, a série horária também desenha a faixa
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    descriptions = [json.loads(c.proto.spec).get("description") for c in at.get("vega_lite_chart")]
+    assert len(descriptions) == 5 and all(descriptions), descriptions     # 6 h, PM2,5, umidade, faixa e previsão
+    assert any(d.startswith("Gráfico de linhas") and "PM2,5" in d and "no-01" in d for d in descriptions)
+    assert any(d.startswith("Faixa das horas sem média") for d in descriptions)
+    assert any("observado" in d.lower() and "persistência" in d.lower() for d in descriptions)
 
 
 def test_cartao_do_no_poe_o_sinal_wifi_numa_linha_a_parte(app_env):
