@@ -313,6 +313,23 @@ def test_segunda_linha_de_filtros_quebra_em_vez_de_cortar_os_controles(app_env):
     assert not any(child.type == "column" for child in row.children.values())      # os controles, sem colunas de largura fixa
 
 
+def test_checkbox_e_botao_de_exportar_ficam_na_mesma_faixa_dos_botoes_de_escolha(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    row = at.tabs[1].children[sorted(at.tabs[1].children)[1]]
+    assert row.key == "series-filters"                              # o estilo precisa achar a linha dos filtros
+    css = page_style(at)
+    # Os botões de escolha têm 32 px de altura. O botão de exportar tinha 40 e o checkbox 24: com a linha alinhada pela
+    # base, os centros dos três ficavam 4 px fora um do outro, e a linha parecia torta.
+    checkbox = re.search(r"[.]st-key-series-filters \[data-testid='stCheckbox'\]\s*[{]([^}]*)[}]", css)
+    assert checkbox and "min-height: 2rem" in checkbox.group(1) and "align-items: center" in checkbox.group(1)
+    export = re.search(r"[.]st-key-series-filters \[data-testid='stDownloadButton'\] button\s*[{]([^}]*)[}]", css)
+    assert export and "min-height: 2rem" in export.group(1) and re.search(r"(?<![-\w])height: 2rem", export.group(1))
+    dates = re.search(r"[.]st-key-series-filters \[data-testid='stDateInputField'\]\s*[{]([^}]*)[}]", css)   # as datas, no
+    assert dates and "height: 2rem" in dates.group(1)                                                       # personalizado
+
+
 def test_exportacao_fica_na_linha_dos_filtros_e_nao_depois_dos_graficos(app_env):
     populate(app_env, hours=3)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()

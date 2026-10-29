@@ -111,6 +111,12 @@ PAGE_STYLE = """<style>
                border-radius: .5rem; background: color-mix(in srgb, currentColor 6%, transparent)}
 .aq-last-label {display: block; font-size: .875rem; opacity: .75}
 .aq-last-value {display: block; font-size: 1.4rem; font-variant-numeric: tabular-nums}
+/* A linha dos filtros da aba Séries está alinhada pela base: o checkbox (24 px), o botão de exportar (40 px) e a caixa
+   de datas (40 px) ganham a altura dos botões de escolha (32 px), e os centros ficam na mesma linha. */
+.st-key-series-filters [data-testid='stCheckbox'] {min-height: 2rem; display: flex; align-items: center}
+.st-key-series-filters [data-testid='stDownloadButton'] button {min-height: 2rem; height: 2rem; padding-block: 0}
+.st-key-series-filters [data-testid='stDateInputField'] {min-height: 2rem; height: 2rem}
+.st-key-series-filters [data-testid='stDateInputFieldsScroller'] {min-height: 0; height: 100%}
 </style>"""
 st.html(PAGE_STYLE)
 
@@ -543,7 +549,7 @@ def series_tab(devices_all: list[str]) -> None:
     c1, c2 = st.columns(2)
     devices = c1.multiselect("Sensores", devices_all, default=devices_all)
     variables = c2.multiselect("Variáveis", list(VARIABLES), default=["pm25", "humidity"], format_func=VARIABLES.get)
-    row = st.container(horizontal=True, vertical_alignment="bottom", gap="medium")
+    row = st.container(horizontal=True, vertical_alignment="bottom", gap="medium", key="series-filters")
     choice = row.segmented_control("Período", [*PERIOD_PRESETS, "Personalizado"], default="7 dias") or "7 dias"
     if choice == "Personalizado":
         period = row.date_input("Datas", value=(today - timedelta(days=6), today), max_value=today,
