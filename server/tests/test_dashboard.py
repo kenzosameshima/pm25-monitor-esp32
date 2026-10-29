@@ -147,7 +147,7 @@ def test_no_sem_dados_nao_mostra_a_ultima_leitura_como_se_fosse_atual(app_env):
     assert not at.exception, at.exception
 
     pm25 = [m for m in at.metric if m.label == "PM2,5"]
-    assert pm25[1].value == "—"                  # no-02: nem 0.0 µg/m³ nem a faixa "Boa"
+    assert pm25[1].value == "—"                  # no-02: nem 0,0 µg/m³ nem a faixa "Boa"
     assert not pm25[1].delta
     assert len(at.metric) == 6                   # os 5 do no-01 e só o PM2,5 do no-02
     assert any("sem dados" in c.value for c in at.caption)
@@ -155,7 +155,7 @@ def test_no_sem_dados_nao_mostra_a_ultima_leitura_como_se_fosse_atual(app_env):
     last = at.expander[0]                        # a última leitura segue acessível, dita como histórico
     assert last.label == "Ver a última leitura recebida"
     text = " ".join(c.value for c in last.caption)
-    assert "histórico" in text and "0.0 µg/m³" in text
+    assert "histórico" in text and "0,0 µg/m³" in text
 
 
 def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env):
@@ -164,6 +164,17 @@ def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env
     assert not at.exception, at.exception
     assert len(at.metric) == 5
     assert len(at.expander) == 0
+
+
+def test_numeros_do_painel_usam_virgula_decimal(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    values = [m.value for m in at.metric if m.value != "—" and m.label != "Sinal Wi-Fi"]  # o sinal é inteiro
+    assert values and all("." not in v and "," in v for v in values), values
+    stale = [c.value for c in at.caption if "sem dados" in c.value]
+    assert len(stale) == 1 and re.search(r"último envio há \d+,\d h", stale[0]), stale
 
 
 def test_serie_horaria_conta_as_horas_sem_media_por_causa(app_env):

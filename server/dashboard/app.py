@@ -4,7 +4,9 @@ Lê o banco SQLite em modo somente leitura; o modo WAL permite ler enquanto a AP
 Uso, a partir da pasta server/:   streamlit run dashboard/app.py
 """
 
+import re
 import sys
+import zlib
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -129,10 +131,15 @@ def local_naive(series: pd.Series) -> pd.Series:
 
 # ---------------------------------------------------------------- formatação
 
+def decimal_comma(value: float, decimals: int = 1) -> str:
+    """O número com vírgula decimal, como se escreve em português."""
+    return f"{value:.{decimals}f}".replace(".", ",")
+
+
 def fmt(value, unit: str, decimals: int = 1) -> str:
     if value is None or pd.isna(value):
         return "—"
-    return f"{value:.{decimals}f}{unit}"
+    return decimal_comma(value, decimals) + unit
 
 
 def ago(minutes: float | None) -> str:
@@ -143,7 +150,7 @@ def ago(minutes: float | None) -> str:
     if minutes < 60:
         return f"há {int(minutes)} min"
     if minutes < 48 * 60:
-        return f"há {minutes / 60:.1f} h"
+        return f"há {decimal_comma(minutes / 60)} h"
     return f"há {minutes / 1440:.0f} dias"
 
 
@@ -174,10 +181,20 @@ MODEL_COLORS = ["#f97316", "#10b981", "#a855f7", "#ec4899"]
 
 BAND_COLORS = {"Boa": "green", "Moderada": "yellow", "Ruim": "orange", "Muito ruim": "red", "Péssima": "violet"}
 
+# Uma cor por nó, a mesma em todos os gráficos e abas. Ciano e magenta não se confundem entre si nem com o azul
+# de "Observado", e ficam longe do vermelho, que o painel reserva para problema.
+SENSOR_PALETTE = ["#22b8cf", "#e0529c", "#8b93a1", "#c9a227"]
 # Horas sem média: cinza para a que não tem leitura, azul-aço para a de poucas leituras e âmbar para a suspeita.
 EXCLUSION_COLORS = {analytics.NO_READINGS: "#8b93a1", analytics.FEW_READINGS: "#6aa6c8",
                     analytics.SUSPECT_HOUR: "#e2b53b"}
 Y_AXIS_WIDTH = 48  # largura mínima do eixo vertical: faz a faixa das horas sem média alinhar com os gráficos de linha
+
+
+def sensor_color(device: str) -> str:
+    """A cor do nó, pelo número no fim do nome (no-01, no-02...); um nome sem número cai numa cor estável."""
+    match = re.search(r"(\d+)$", device)
+    index = int(match.group(1)) - 1 if match else zlib.crc32(device.encode())
+    return SENSOR_PALETTE[index % len(SENSOR_PALETTE)]
 
 
 def air_quality(pm25) -> tuple[str, str] | None:
@@ -197,20 +214,25 @@ def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta)
 def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timedelta,
                rule: float | None = None, color: str = "device_id", legend: str = "Sensor",
                domain: list[str] | None = None) -> alt.Chart:
-    """Linhas por nó. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
+    """Linhas por nó, uma cor fixa para cada. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
     fixa o eixo do tempo."""
     data = with_segments(data[[x, y, color]].dropna(), x, color, max_gap)
+    data = data.assign(valor=data[y].map(decimal_comma))      # o tooltip do Vega escreveria o ponto decimal
+    names = sorted(data[color].unique())
+    sensors = color == "device_id"
     chart = alt.Chart(data).mark_line(point=len(data) <= 400).encode(
         x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%d/%m %H:%M"),
                 scale=alt.Scale(domain=domain) if domain else alt.Undefined),
         y=alt.Y(f"{y}:Q", title=None, scale=alt.Scale(zero=False),
-                axis=alt.Axis(minExtent=Y_AXIS_WIDTH)),
-        color=alt.Color(f"{color}:N", title=legend, legend=alt.Legend(orient="top")),
+                axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')", minExtent=Y_AXIS_WIDTH)),
+        color=alt.Color(f"{color}:N", title=legend, legend=alt.Legend(orient="top"),
+                        scale=alt.Scale(domain=names, range=[sensor_color(n) for n in names])
+                        if sensors else alt.Undefined),
         detail="segmento:N",
         tooltip=[
             alt.Tooltip(f"{x}:T", title="Horário", format="%d/%m %H:%M"),
             alt.Tooltip(f"{color}:N", title=legend),
-            alt.Tooltip(f"{y}:Q", title=title, format=".1f"),
+            alt.Tooltip("valor:N", title=title),
         ],
     )
     if rule is not None:
