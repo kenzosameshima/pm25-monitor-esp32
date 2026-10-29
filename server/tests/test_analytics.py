@@ -275,6 +275,26 @@ def test_sem_valor_valido_nao_ha_faixa(pm25):
     assert analytics.air_quality(pm25) is None
 
 
+@pytest.mark.parametrize("pm25, position", [
+    (0.0, 0.0),
+    (12.5, 0.1),       # metade da faixa Boa: a escala dá a cada faixa um quinto do comprimento
+    (25.0, 0.2),       # o limite fica no fim da faixa de baixo e no começo da de cima: a escala é contínua
+    (37.5, 0.3),
+    (100.0, 0.7),      # metade da faixa Muito ruim (75 a 125)
+    (125.0, 0.8),
+    (187.5, 0.9),      # a última faixa não tem teto: a escala a mostra de 125 a 250
+    (250.0, 1.0),
+    (900.0, 1.0),      # além do fim da escala, o marcador fica no fim
+])
+def test_posicao_na_escala_das_faixas(pm25, position):
+    assert analytics.band_position(pm25) == pytest.approx(position)
+
+
+@pytest.mark.parametrize("pm25", [None, float("nan"), -1.0])
+def test_sem_valor_valido_nao_ha_posicao_na_escala(pm25):
+    assert analytics.band_position(pm25) is None
+
+
 def test_faixas_sao_as_mesmas_do_app():
     """O app Android confere o mesmo arquivo, então as duas pontas não se afastam sem um teste falhar."""
     shared = json.loads((Path(__file__).parents[2] / "shared" / "air-quality-bands.json").read_text(encoding="utf-8"))

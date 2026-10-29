@@ -20,6 +20,7 @@ import streamlit as st  # noqa: E402
 from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
+from dashboard.scale import band_scale_html  # noqa: E402
 
 LOCAL_TZ = "America/Sao_Paulo"
 MAX_MINUTE_DAYS = 7  # o período padrão da aba Séries (7 dias) ainda cabe em resolução de 1 minuto
@@ -35,8 +36,25 @@ VARIABLES = {
 st.set_page_config(page_title="PM2,5 — monitoramento", page_icon=str(Path(__file__).with_name("favicon.svg")),
                    layout="wide")
 alt.data_transformers.disable_max_rows()
-# O padrão do Streamlit (6rem em cima, 10rem embaixo) cria scroll em abas que caberiam na tela.
-st.html("<style>[data-testid='stMainBlockContainer'] {padding-top: 3.5rem; padding-bottom: 2rem}</style>")
+PAGE_STYLE = """<style>
+/* O padrão do Streamlit (6rem em cima, 10rem embaixo) cria scroll em abas que caberiam na tela. */
+[data-testid='stMainBlockContainer'] {padding-top: 3.5rem; padding-bottom: 2rem}
+/* Algarismos de largura fixa, para os valores não dançarem a cada atualização; o PM2,5 é a razão da página e
+   fica maior que os demais indicadores do cartão. */
+[data-testid='stMetricValue'] {font-variant-numeric: tabular-nums}
+[class*='st-key-node-'] [data-testid='stMetricValue'] {font-size: 1.75rem}
+[class*='st-key-hero-'] [data-testid='stMetricValue'] {font-size: 3.2rem; font-weight: 600; line-height: 1.05}
+/* Escala das faixas de qualidade do ar sob o PM2,5. */
+.aq-scale {position: relative; max-width: 24rem; margin: .1rem 0 1.5rem}
+.aq-track {display: flex; gap: 2px; height: .5rem; border-radius: .25rem; overflow: hidden}
+.aq-track span {flex: 1}
+.aq-marker {position: absolute; top: -.35rem; width: 4px; height: 1.2rem; transform: translateX(-50%);
+            border-radius: 2px; background: #1f2330; box-shadow: 0 0 0 2px #fff}
+.aq-ticks {position: relative; height: 1rem; margin-top: .35rem; font-size: .75rem; opacity: .75;
+           font-variant-numeric: tabular-nums}
+.aq-ticks span {position: absolute; transform: translateX(-50%)}
+</style>"""
+st.html(PAGE_STYLE)
 
 
 # ---------------------------------------------------------------- dados
@@ -282,7 +300,7 @@ def status_tab() -> None:
     by_id = status.set_index("device_id")
     devices = expected_devices(status)
     for col, device in zip(st.columns(len(devices)), devices):
-        with col, st.container(border=True):
+        with col, st.container(border=True, key=f"node-{device}"):
             st.subheader(device)
             if device not in by_id.index:
                 st.caption("⚪ aguardando instalação · nenhuma leitura recebida")
@@ -296,20 +314,25 @@ def status_tab() -> None:
             if dev["status"] == "sem_dados":
                 # Sem envio recente, o último valor não diz como o ar está agora (um sensor parado em zero
                 # apareceria como "Boa"): o valor atual fica vazio e a última leitura, dita histórica, no expansor.
-                st.metric("PM2,5", "—")
+                with st.container(key=f"hero-{device}"):
+                    st.metric("PM2,5", "—")
                 with st.expander("Ver a última leitura recebida"):
                     st.caption(last_reading_text(dev, when))
             else:
-                # Uma linha de colunas por grupo: a faixa sob o PM2,5 não desalinha a linha de baixo.
-                a, b = st.columns(2)
+                # O PM2,5 abre o cartão, grande e com a escala das faixas sob ele; os outros indicadores ficam numa
+                # linha só, menores.
                 band, color = air_quality(dev["pm25"]) or (None, "off")
-                a.metric("PM2,5", fmt(dev["pm25"], " µg/m³"), delta=band, delta_color=color, delta_arrow="off",
-                         help="Faixas da CETESB para a média de 24 horas; aplicadas à leitura de um minuto, "
-                              "servem só de referência.")
-                b.metric("PM10", fmt(dev["pm10"], " µg/m³"))
-                a, b = st.columns(2)
-                a.metric("Temperatura", fmt(dev["temperature"], " °C"))
-                b.metric("Umidade", fmt(dev["humidity"], "%"))
+                with st.container(key=f"hero-{device}"):
+                    st.metric("PM2,5", fmt(dev["pm25"], " µg/m³"), delta=band, delta_color=color, delta_arrow="off",
+                              help="Faixas da CETESB para a média de 24 horas; aplicadas à leitura de um minuto, "
+                                   "servem só de referência.")
+                    position = analytics.band_position(dev["pm25"])
+                    if position is not None:
+                        st.html(band_scale_html(position, f"PM2,5 de {fmt(dev['pm25'], ' µg/m³')}, na faixa {band}"))
+                a, b, c = st.columns(3)
+                a.metric("PM10", fmt(dev["pm10"], " µg/m³"))
+                b.metric("Temperatura", fmt(dev["temperature"], " °C"))
+                c.metric("Umidade", fmt(dev["humidity"], "%"))
                 # O sinal e o firmware dizem como o nó está, não como está o ar: ficam no rodapé do cartão.
                 if pd.notna(dev["rssi"]):
                     st.caption(f"Sinal Wi-Fi: {fmt(dev['rssi'], ' dBm', 0)}")
