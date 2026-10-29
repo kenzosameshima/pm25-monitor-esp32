@@ -74,6 +74,10 @@ _Avoid_: hora boa, hora completa
 Hora com leituras suficientes em que o sensor quase não viu partículas: pelo menos um quarto das leituras abaixo de 0,5 µg/m³ de PM2,5, ou média abaixo de 1,0 µg/m³. Fica sem média e é contada à parte.
 _Avoid_: hora zerada, hora inválida (inválida é a de poucas leituras)
 
+**Hora sem média**:
+Hora que não é válida, por uma de três causas: nenhuma leitura, poucas leituras (menos de 75% dos minutos) ou suspeita. É a que fica em branco nos gráficos, e o dashboard diz a causa de cada uma.
+_Avoid_: hora perdida, hora ruim
+
 **Média horária**:
 A média das leituras de uma hora válida de um nó, hora cheia em UTC.
 _Avoid_: média da hora, média por hora

@@ -174,6 +174,11 @@ MODEL_COLORS = ["#f97316", "#10b981", "#a855f7", "#ec4899"]
 
 BAND_COLORS = {"Boa": "green", "Moderada": "yellow", "Ruim": "orange", "Muito ruim": "red", "Péssima": "violet"}
 
+# Horas sem média: cinza para a que não tem leitura, azul-aço para a de poucas leituras e âmbar para a suspeita.
+EXCLUSION_COLORS = {analytics.NO_READINGS: "#8b93a1", analytics.FEW_READINGS: "#6aa6c8",
+                    analytics.SUSPECT_HOUR: "#e2b53b"}
+Y_AXIS_WIDTH = 48  # largura mínima do eixo vertical: faz a faixa das horas sem média alinhar com os gráficos de linha
+
 
 def air_quality(pm25) -> tuple[str, str] | None:
     """Nome e cor da faixa de qualidade do ar de um valor de PM2,5; None sem valor."""
@@ -190,12 +195,17 @@ def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta)
 
 
 def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timedelta,
-               rule: float | None = None, color: str = "device_id", legend: str = "Sensor") -> alt.Chart:
+               rule: float | None = None, color: str = "device_id", legend: str = "Sensor",
+               domain: list[str] | None = None) -> alt.Chart:
+    """Linhas por nó. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
+    fixa o eixo do tempo."""
     data = with_segments(data[[x, y, color]].dropna(), x, color, max_gap)
     chart = alt.Chart(data).mark_line(point=len(data) <= 400).encode(
-        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%d/%m %H:%M")),
-        y=alt.Y(f"{y}:Q", title=title, scale=alt.Scale(zero=False)),
-        color=alt.Color(f"{color}:N", title=legend),
+        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%d/%m %H:%M"),
+                scale=alt.Scale(domain=domain) if domain else alt.Undefined),
+        y=alt.Y(f"{y}:Q", title=None, scale=alt.Scale(zero=False),
+                axis=alt.Axis(minExtent=Y_AXIS_WIDTH)),
+        color=alt.Color(f"{color}:N", title=legend, legend=alt.Legend(orient="top")),
         detail="segmento:N",
         tooltip=[
             alt.Tooltip(f"{x}:T", title="Horário", format="%d/%m %H:%M"),
@@ -206,7 +216,33 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
     if rule is not None:
         chart = chart + alt.Chart(pd.DataFrame({"limite": [rule]})).mark_rule(
             strokeDash=[4, 4], color="gray").encode(y="limite:Q")
-    return chart.properties(height=260)
+    # No Streamlit a altura inclui título, legenda e eixos: 330 deixa para a área das linhas cerca de 200 px.
+    return chart.properties(height=330, title=alt.TitleParams(title, anchor="start"))
+
+
+def exclusion_note(exclusions: pd.DataFrame) -> str:
+    """Quantas horas ficaram sem média em cada causa, para quem quer o número além da faixa colorida."""
+    count = exclusions["causa"].value_counts()
+    wording = {analytics.NO_READINGS: lambda n: f"{n} sem leituras",
+               analytics.FEW_READINGS: lambda n: f"{n} com poucas leituras",
+               analytics.SUSPECT_HOUR: lambda n: f"{n} {'suspeita' if n == 1 else 'suspeitas'}"}
+    parts = [say(int(count[cause])) for cause, say in wording.items() if count.get(cause, 0)]
+    return "Horas sem média: " + (parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " e " + parts[-1]) + "."
+
+
+def exclusion_strip(exclusions: pd.DataFrame, domain: list[str]) -> alt.Chart:
+    """Uma faixa por nó com as horas sem média, cada causa numa cor, alinhada ao eixo dos gráficos."""
+    hours = exclusions.assign(hora_local=local_naive(exclusions["hora"]))
+    hours["fim_local"] = hours["hora_local"] + pd.Timedelta(hours=1)
+    return alt.Chart(hours).mark_rect().encode(
+        x=alt.X("hora_local:T", title=None, scale=alt.Scale(domain=domain), axis=alt.Axis(format="%d/%m %H:%M")),
+        x2="fim_local:T",
+        y=alt.Y("device_id:N", title=None, axis=alt.Axis(minExtent=Y_AXIS_WIDTH)),
+        color=alt.Color("causa:N", title=None, legend=alt.Legend(orient="top", direction="horizontal"),
+                        scale=alt.Scale(domain=list(EXCLUSION_COLORS), range=list(EXCLUSION_COLORS.values()))),
+        tooltip=[alt.Tooltip("hora_local:T", title="Hora", format="%d/%m %H:%M"),
+                 alt.Tooltip("device_id:N", title="Sensor"), alt.Tooltip("causa:N", title="Causa")],
+    ).properties(height=alt.Step(26))                              # 26 px por nó, sem depender da legenda
 
 
 # ---------------------------------------------------------------- abas
@@ -261,7 +297,7 @@ def status_tab() -> None:
     st.markdown("#### Saúde da coleta nas últimas 24 horas")
     st.dataframe(
         health, hide_index=True,
-        # Azul neutro: na cor primária (vermelha) a barra parece um alerta mesmo com 99% de completude.
+        # Azul neutro: a barra de completude não deve parecer um alerta mesmo com 99%.
         column_config={"Completude": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1,
                                                                       color="blue")},
     )
@@ -299,19 +335,33 @@ def series_tab(devices_all: list[str]) -> None:
     tz = ZoneInfo(LOCAL_TZ)
     start = datetime.combine(period[0], time(), tz).astimezone(timezone.utc)
     end = datetime.combine(period[1] + timedelta(days=1), time(), tz).astimezone(timezone.utc)
+    strip = None
+    domain = None
     if resolution == "Média horária":
         hourly = load_hourly(start, end, tuple(devices), only_ok)
         data = hourly.dropna(subset=["pm25"]).drop(columns=["suspeita"])
         suspect = suspect_hours_by_node(hourly)
+        # O eixo vai do início do período até agora; um nó que parou aparece sem leituras até lá.
+        until = min(end, now_utc())
+        domain = [start.astimezone(tz).replace(tzinfo=None).isoformat(),
+                  until.astimezone(tz).replace(tzinfo=None).isoformat()]
+        exclusions = analytics.hour_exclusions(hourly.rename(columns={"minutos": "n"}), until=until)
+        if not exclusions.empty:
+            strip = exclusion_strip(exclusions, domain)
         if data.empty:
             st.info(f"Sem horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura no período escolhido.")
             if suspect:
                 show_suspect_note(suspect)
+            if strip is not None:
+                st.caption(exclusion_note(exclusions))
+                st.altair_chart(strip, width="stretch")
             return
         data["hora_local"] = local_naive(data["hora"])
         st.caption(f"Médias de horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura (75%).")
         if suspect:
             show_suspect_note(suspect)
+        if strip is not None:
+            st.caption(exclusion_note(exclusions))
         max_gap = pd.Timedelta(hours=1)
     else:
         # Cada minuto vira um ponto no navegador: períodos longos travariam a página.
@@ -328,9 +378,12 @@ def series_tab(devices_all: list[str]) -> None:
         data = df.assign(hora_local=local_naive(df["ts_sensor"]))
         max_gap = pd.Timedelta(minutes=5)
 
-    for var in variables:
+    for i, var in enumerate(variables):
         rule = HIGH_HUMIDITY if var == "humidity" else None
-        st.altair_chart(line_chart(data, "hora_local", var, VARIABLES[var], max_gap, rule=rule), width="stretch")
+        st.altair_chart(line_chart(data, "hora_local", var, VARIABLES[var], max_gap, rule=rule, domain=domain),
+                        width="stretch")
+        if i == 0 and strip is not None:      # a faixa vale para todas as variáveis: as horas sem média são as mesmas
+            st.altair_chart(strip, width="stretch")
 
     if "humidity" in data and data["humidity"].notna().any():
         share = (data.groupby("device_id")["humidity"].apply(lambda s: (s > HIGH_HUMIDITY).mean()))

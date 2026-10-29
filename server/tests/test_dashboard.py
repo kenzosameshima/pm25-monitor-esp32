@@ -1,5 +1,6 @@
 """Testes do dashboard com o AppTest do Streamlit: o script roda sem navegador sobre um banco sintético."""
 
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -163,6 +164,35 @@ def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env
     assert not at.exception, at.exception
     assert len(at.metric) == 5
     assert len(at.expander) == 0
+
+
+def test_serie_horaria_conta_as_horas_sem_media_por_causa(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    note = [c.value for c in at.caption if c.value.startswith("Horas sem média")]
+    assert len(note) == 1
+    assert "1 suspeita" in note[0] and re.search(r"\d+ sem leituras", note[0])   # as causas com zero hora não entram
+    assert len(at.get("vega_lite_chart")) == 5       # 6 h, PM2,5, umidade, faixa das horas sem média e previsão
+
+
+def test_serie_horaria_mostra_o_no_que_parou_como_sem_leituras_ate_agora(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    note = next(c.value for c in at.caption if c.value.startswith("Horas sem média"))
+    assert int(re.search(r"(\d+) sem leituras", note).group(1)) >= 20     # as horas desde que o no-02 parou
+
+
+def test_resolucao_de_um_minuto_nao_mostra_a_faixa_das_horas_sem_media(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.radio[0].set_value("1 minuto").run()
+    assert not at.exception, at.exception
+    assert not any(c.value.startswith("Horas sem média") for c in at.caption)
 
 
 def add_dead_hours(path: Path, device: str, hours_ago: list[int]) -> None:
