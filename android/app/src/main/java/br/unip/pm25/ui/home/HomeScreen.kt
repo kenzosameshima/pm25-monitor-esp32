@@ -23,14 +23,20 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.onClick as semanticsOnClick
 import androidx.compose.ui.text.font.FontWeight
@@ -50,11 +56,13 @@ import br.unip.pm25.domain.AirQuality
 import br.unip.pm25.domain.currentStatus
 import br.unip.pm25.domain.estimatedServerNow
 import br.unip.pm25.domain.formatAge
+import br.unip.pm25.domain.hasCurrentValue
 import br.unip.pm25.domain.readingAge
 import br.unip.pm25.ui.AlertsCard
 import br.unip.pm25.ui.ErrorPanel
 import br.unip.pm25.ui.Metric
 import br.unip.pm25.ui.MetricRow
+import br.unip.pm25.ui.NO_VALUE
 import br.unip.pm25.ui.QualityChip
 import br.unip.pm25.ui.StaleBanner
 import br.unip.pm25.ui.rememberAlertsPrompt
@@ -171,8 +179,32 @@ private fun DeviceCard(device: DeviceState, status: DeviceStatus, serverNow: Ins
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             val latest = device.latest
-            if (latest == null) Text("Sem leituras.") else LatestReadingContent(latest, serverNow)
+            when {
+                latest == null -> Text("Sem leituras.")
+                hasCurrentValue(status) -> LatestReadingContent(latest, serverNow)
+                else -> NoRecentDataContent(latest, serverNow)
+            }
         }
+    }
+}
+
+/**
+ * Nó sem dados recentes: o valor fica vazio e sem faixa, para a última leitura (um sensor parado em zero
+ * aparece como "Boa") não parecer o ar de agora. Ela continua a um toque, dita como histórico.
+ */
+@Composable
+private fun NoRecentDataContent(latest: LatestReading, serverNow: Instant) {
+    var showLast by rememberSaveable { mutableStateOf(false) }
+    Text(NO_VALUE, style = MaterialTheme.typography.displaySmall,
+        modifier = Modifier.clearAndSetSemantics { contentDescription = "PM2,5: sem dados recentes" })
+    Text("PM2,5 · última leitura ${formatAge(readingAge(latest.ts, serverNow))}",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    TextButton(onClick = { showLast = !showLast }) {
+        Text(if (showLast) "Ocultar a última leitura" else "Ver a última leitura")
+    }
+    if (showLast) {
+        Text(historicalReadingText(latest, formatMoment(latest.ts)),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

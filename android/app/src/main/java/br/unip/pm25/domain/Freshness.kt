@@ -42,6 +42,12 @@ fun currentStatus(device: DeviceState, list: DeviceList, serverNow: Instant): De
     }
 }
 
+/**
+ * Se a última leitura de um nó vale como valor atual. Um nó sem dados parou de enviar: a leitura que ele
+ * deixou (um sensor parado em zero aparece como ar "Boa") é histórico, não o ar de agora.
+ */
+fun hasCurrentValue(status: DeviceStatus): Boolean = status != DeviceStatus.SILENT
+
 /** "agora", "há 5 min", "há 2 h", "há 3 dias". */
 fun formatAge(age: Duration): String {
     val minutes = age.toMinutes()
