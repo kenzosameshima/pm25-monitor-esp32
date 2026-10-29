@@ -120,8 +120,9 @@ def test_tabela_de_previsao_diz_que_todos_os_previsores_usam_as_mesmas_horas(app
     assert not at.exception, at.exception
     metrics = at.dataframe[1].value.set_index("Previsor")
     assert set(metrics["Horas"]) == {11}                 # a persistência também só conta as 11 horas do modelo
-    note = [c.value for c in at.caption if "mesmas 11 horas" in c.value]
-    assert len(note) == 1 and "hora seguinte" in note[0] and " a " in note[0]  # horizonte e período avaliado
+    note = [c.value for c in at.tabs[2].caption if "mesmas 11 horas" in c.value]
+    assert len(note) == 1 and note[0].startswith("Todos os previsores foram avaliados nas mesmas 11 horas, de ")
+    assert not at.tabs[2].warning                        # as linhas se comparam: nada a avisar
 
 
 def test_tabela_de_previsao_avisa_quando_os_modelos_nao_tem_horas_em_comum(app_env):
@@ -130,7 +131,39 @@ def test_tabela_de_previsao_avisa_quando_os_modelos_nao_tem_horas_em_comum(app_e
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     assert not any("mesmas 11 horas" in c.value for c in at.caption)
-    assert any("nas horas em que tem previsão" in c.value for c in at.caption)
+    assert [w.value for w in at.tabs[2].warning] == [DIFFERENT_PERIODS]
+
+
+def tab_items(tab) -> list[tuple[str, str]]:
+    """O tipo e o texto (quando o elemento é um texto) de cada elemento da aba, na ordem em que aparecem."""
+    items = []
+    for key in sorted(tab.children):
+        value = getattr(tab.children[key], "value", "")
+        items.append((tab.children[key].type, value if isinstance(value, str) else ""))
+    return items
+
+
+def test_aviso_de_periodos_diferentes_fica_acima_da_tabela_com_a_nota_do_skill_score_ao_lado(app_env):
+    populate(app_env)
+    add_model_forecasts(app_env, "ridge", "v2", [20, 21, 22])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    items = tab_items(at.tabs[2])
+    kinds = [kind for kind, _ in items]
+    warning = kinds.index("warning")
+    assert kinds.index("vega_lite_chart") < warning < kinds.index("dataframe")        # entre o gráfico e a tabela
+    assert items[warning + 1] == ("caption", SKILL_NOTE)                              # com a nota do skill score colada
+    assert not any("nas horas em que tem previsão" in text for _, text in items)      # e a frase velha, abaixo, some
+
+
+def test_nota_das_mesmas_horas_tambem_fica_acima_da_tabela(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    items = tab_items(at.tabs[2])
+    kinds = [kind for kind, _ in items]
+    note = next(i for i, (kind, text) in enumerate(items) if kind == "caption" and "mesmas 11 horas" in text)
+    assert kinds.index("vega_lite_chart") < note < kinds.index("dataframe")
 
 
 def add_last_reading(path: Path, device: str, hours_ago: float, **values) -> None:
@@ -991,6 +1024,8 @@ def tab_order(tab) -> list[str]:
     return [tab.children[key].type for key in sorted(tab.children)]
 
 
+DIFFERENT_PERIODS = "Períodos de avaliação diferentes: MAE e RMSE não são diretamente comparáveis entre linhas."
+SKILL_NOTE = "O skill score de cada linha compara o previsor com a persistência nas mesmas horas dele."
 TOO_LITTLE = "Ainda não há pares de previsão e observação suficientes para avaliar este sensor."
 NO_MODEL = "Nenhuma previsão de modelo disponível para este sensor no período exibido."
 

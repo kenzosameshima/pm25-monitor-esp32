@@ -21,6 +21,7 @@ from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from dashboard.duration import duration_text  # noqa: E402
+from dashboard.evaluation import evaluated_text  # noqa: E402
 from dashboard.last_reading import last_reading_html  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
 from dashboard.time_axis import day_ticks  # noqa: E402
@@ -654,16 +655,20 @@ def forecast_data_table(table: pd.DataFrame) -> pd.DataFrame:
     return text
 
 
-def evaluation_note(table: pd.DataFrame, metrics: pd.DataFrame) -> str:
-    """Em que horas a tabela de métricas foi calculada, para ninguém comparar linhas de amostras diferentes."""
-    horizon = "Previsão da média da hora seguinte"
+DIFFERENT_PERIODS = "Períodos de avaliação diferentes: MAE e RMSE não são diretamente comparáveis entre linhas."
+SKILL_NOTE = "O skill score de cada linha compara o previsor com a persistência nas mesmas horas dele."
+
+
+def show_evaluation_notes(table: pd.DataFrame, metrics: pd.DataFrame) -> None:
+    """Em que horas a tabela de métricas foi calculada, escrito acima dela para ninguém comparar linhas de amostras
+    diferentes sem saber: quando as horas são outras, é um aviso (MAE e RMSE não se comparam), com o skill score ao lado."""
     rated = table[[SERIES_LABELS[OBSERVED], *metrics["Previsor"]]].dropna()
     if metrics["Horas"].nunique() > 1 or len(rated) != metrics["Horas"].iloc[0]:
-        return (f"{horizon}. Os previsores não têm horas em comum: cada um foi avaliado nas horas em que tem "
-                "previsão, e só o skill score compara com a persistência nas mesmas horas.")
+        st.warning(DIFFERENT_PERIODS)
+        st.caption(SKILL_NOTE)
+        return
     hours = local_naive(rated.index.to_series())
-    period = "" if len(rated) == 1 else f", de {hours.min():%d/%m %H:%M} a {hours.max():%d/%m %H:%M}"
-    return f"{horizon}, avaliada nas mesmas {len(rated)} horas para todos os previsores{period}."
+    st.caption(evaluated_text(len(rated), len(metrics), hours.min(), hours.max()))
 
 
 def forecast_tab(devices_all: list[str]) -> None:
@@ -706,9 +711,9 @@ def forecast_tab(devices_all: list[str]) -> None:
                             title=True, subtitle=f"{first:%d/%m %H:%M} a {last:%d/%m %H:%M} · horário de Brasília"))
     st.altair_chart(chart, width="stretch")
 
+    show_evaluation_notes(table, metrics)
     # O Styler escreve os números com vírgula (o formato da coluna do Streamlit só sabe o ponto).
     st.dataframe(metrics.style.format(decimal=",", precision=2, na_rep="—"), hide_index=True)
-    st.caption(evaluation_note(table, metrics))
     st.caption("Persistência repete a média da hora anterior e é a referência que qualquer modelo precisa superar. "
                "MAE é o erro médio e RMSE pesa mais os erros grandes. O skill score compara o RMSE do previsor com "
                "o da persistência nas mesmas horas: acima de zero, o modelo acerta mais que repetir a hora anterior.")
