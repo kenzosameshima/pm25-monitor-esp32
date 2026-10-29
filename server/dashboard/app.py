@@ -292,7 +292,7 @@ def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta)
 
 
 def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timedelta,
-               rule: float | None = None, color: str = "device_id", legend: str = "Sensor",
+               rule: float | None = None, rule_label: str | None = None, color: str = "device_id", legend: str = "Sensor",
                domain: list[str] | None = None, compact: bool = False, headless: bool = False) -> alt.Chart:
     """Linhas por nó, uma cor fixa para cada. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
     fixa o eixo do tempo. `headless` tira o título e a legenda de dentro do gráfico: a página os escreve numa linha
@@ -333,14 +333,25 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
     else:
         chart = base.mark_line(point=len(data) <= 400)
     if rule is not None:
-        chart = chart + alt.Chart(pd.DataFrame({"limite": [rule]})).mark_rule(
-            strokeDash=[4, 4], color="gray").encode(y="limite:Q")
+        limit = alt.Chart(pd.DataFrame({"limite": [rule]}))
+        chart = chart + limit.mark_rule(strokeDash=[4, 4], color="gray").encode(y="limite:Q")
+        if rule_label:                          # o nome da linha tracejada, no canto esquerdo e logo acima dela
+            chart = chart + limit.mark_text(align="left", baseline="bottom", dx=4, dy=-3, color="gray").encode(
+                x=alt.value(0), y="limite:Q", text=alt.value(rule_label))
     # No Streamlit a altura inclui título, legenda e eixos: 330 deixa para a área das linhas cerca de 200 px, e sem
     # título nem legenda 240 deixam o mesmo tanto.
     description = chart_description(data, x, y, title, names)
     if headless:
         return chart.properties(height=240, description=description)
     return chart.properties(height=330, description=description, title=alt.TitleParams(title, anchor="start"))
+
+
+def humidity_note(data: pd.DataFrame) -> str:
+    """Quanto dos registros de cada nó passou do limite de umidade, e por que isso importa para o PM2,5."""
+    share = data.groupby("device_id")["humidity"].apply(lambda s: (s > HIGH_HUMIDITY).mean())
+    parts = ", ".join(f"{dev}: {p:.0%}" for dev, p in share.items())
+    return (f"Registros com umidade acima de {HIGH_HUMIDITY:.0f}% ({parts}) podem ter PM2,5 "
+            "superestimado pela absorção de água nas partículas.")
 
 
 def chart_description(data: pd.DataFrame, x: str, y: str, title: str, names: list[str]) -> str:
@@ -573,15 +584,11 @@ def series_tab(devices_all: list[str]) -> None:
         nodes = sorted(data.loc[data[var].notna(), "device_id"].unique())
         st.html(trend_head_html(VARIABLES[var], [(n, sensor_color(n)) for n in nodes]))
         st.altair_chart(line_chart(data, "hora_local", var, VARIABLES[var], max_gap, rule=rule, domain=domain,
-                                   headless=True), width="stretch")
+                                   rule_label=f"{rule:.0f}%" if rule else None, headless=True), width="stretch")
+        if var == "humidity" and data["humidity"].notna().any():     # a explicação fica junto do gráfico a que se refere
+            st.caption(humidity_note(data))
         if i == 0 and strip is not None:      # a faixa vale para todas as variáveis: as horas sem média são as mesmas
             st.altair_chart(strip, width="stretch")
-
-    if "humidity" in data and data["humidity"].notna().any():
-        share = (data.groupby("device_id")["humidity"].apply(lambda s: (s > HIGH_HUMIDITY).mean()))
-        parts = ", ".join(f"{dev}: {p:.0%}" for dev, p in share.items())
-        st.caption(f"Registros com umidade acima de {HIGH_HUMIDITY:.0f}% ({parts}) podem ter PM2,5 "
-                   "superestimado pela absorção de água nas partículas.")
 
     export = data.drop(columns=["hora_local"])
     st.download_button("Baixar dados (CSV)", export.to_csv(index=False).encode("utf-8"),

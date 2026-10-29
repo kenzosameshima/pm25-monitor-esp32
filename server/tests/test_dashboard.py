@@ -468,6 +468,48 @@ def chart_heads(at) -> list[str]:
     return [h.proto.body for h in at.get("html") if 'class="aq-trend-head"' in h.proto.body]
 
 
+def series_flow(at) -> list[tuple[str, str]]:
+    """O que a aba Séries mostra depois dos filtros, em ordem: avisos, a linha de cada gráfico e os gráficos."""
+    flow = []
+    for key in sorted(at.tabs[1].children):
+        el = at.tabs[1].children[key]
+        if el.type == "caption":
+            flow.append(("aviso", el.value))
+        elif el.type == "html" and 'class="aq-trend-head"' in el.proto.body:
+            flow.append(("linha", re.search(r'aq-label">([^<]*)<', el.proto.body).group(1)))
+        elif el.type == "vega_lite_chart":
+            flow.append(("grafico", json.loads(el.proto.spec)["description"]))
+    return flow
+
+
+def test_explicacao_da_umidade_fica_logo_abaixo_do_grafico_de_umidade(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.multiselect[1].set_value(["humidity", "pm25"]).run()           # a umidade primeiro: o fim da página não é dela
+    assert not at.exception, at.exception
+    flow = series_flow(at)
+    chart = next(i for i, (kind, text) in enumerate(flow) if kind == "grafico" and "Umidade" in text)
+    assert flow[chart + 1][0] == "aviso" and flow[chart + 1][1].startswith("Registros com umidade acima de 75%")
+    assert sum(text.startswith("Registros com umidade") for kind, text in flow if kind == "aviso") == 1
+
+
+def test_sem_o_grafico_de_umidade_a_explicacao_da_umidade_nao_aparece(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.multiselect[1].set_value(["pm25"]).run()
+    assert not at.exception, at.exception
+    assert not any(text.startswith("Registros com umidade") for kind, text in series_flow(at))
+
+
+def test_linha_de_75_por_cento_do_grafico_de_umidade_tem_rotulo(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    spec = next(json.loads(c.proto.spec) for c in at.get("vega_lite_chart") if "Umidade" in json.loads(c.proto.spec)["description"])
+    labels = [layer for layer in spec["layer"] if layer["mark"]["type"] == "text"]
+    assert len(labels) == 1 and labels[0]["encoding"]["text"] == {"value": "75%"}          # o rótulo da linha tracejada
+
+
 def test_cada_grafico_da_aba_series_tem_a_variavel_e_a_legenda_numa_linha(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
