@@ -21,6 +21,8 @@ from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from dashboard.duration import duration_text  # noqa: E402
+from dashboard.evaluation import (evaluated_text, evaluation_guide, notice_html, pending_band,  # noqa: E402
+                                  small_sample_note)
 from dashboard.last_reading import last_reading_html  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
 from dashboard.time_axis import day_ticks  # noqa: E402
@@ -101,8 +103,15 @@ PAGE_STYLE = """<style>
                 font-size: .875rem}
 .aq-label, .aq-key-off {opacity: .75}
 .aq-label.aq-title {font-size: 1rem; font-weight: 600; opacity: 1}
+.aq-trend-head .aq-sub {flex-basis: 100%; opacity: .75}
+/* O aviso acima da tabela de avaliação: fundo quase transparente, um filete âmbar e texto de nota, para não valer mais
+   que os números que ele qualifica. */
+.aq-note {display: flex; flex-direction: column; gap: .125rem; padding: .5rem .75rem; font-size: .875rem; line-height: 1.4;
+          border-left: 3px solid #e2b53b; border-radius: .25rem; background: color-mix(in srgb, currentColor 5%, transparent)}
+.aq-note-detail {opacity: .75}
 .aq-keys {display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem}
 .aq-key i {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem}
+.aq-key i.aq-pending {border-radius: 2px; background: color-mix(in srgb, #8b93a1 25%, transparent)}
 .aq-key i.aq-blank {box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 55%, transparent)}
 /* A última leitura de um nó sem dados, no expansor: o aviso, os valores em grade sobre um fundo próprio e o sinal. */
 .aq-last {display: grid; gap: .5rem}
@@ -268,11 +277,13 @@ HEALTH_LABELS = {
     "leituras_marcadas": "Leituras marcadas",
 }
 SERIES_LABELS = {OBSERVED: "Observado", PERSISTENCE: "Persistência"}
-METRIC_LABELS = {"previsor": "Previsor", "horas": "Horas", "mae": "MAE (µg/m³)", "rmse": "RMSE (µg/m³)",
+METRIC_LABELS = {"previsor": "Previsor", "horas": "Horas avaliadas", "mae": "MAE (µg/m³)", "rmse": "RMSE (µg/m³)",
                  "skill": "Skill score"}
 # Observado em azul e o baseline em cinza; os modelos ficam com cores que não se confundem com nenhum dos dois.
 SERIES_COLORS = {"Observado": "#3b82f6", "Persistência": "#9ca3af"}
 MODEL_COLORS = ["#f97316", "#10b981", "#a855f7", "#ec4899"]
+# O trecho do gráfico de previsão que ainda não tem observação: uma faixa cinza clara atrás das linhas.
+PENDING_COLOR, PENDING_OPACITY = "#8b93a1", 0.25
 
 BAND_COLORS = {"Boa": "green", "Moderada": "yellow", "Ruim": "orange", "Muito ruim": "red", "Péssima": "violet"}
 
@@ -640,58 +651,105 @@ def series_tab(devices_all: list[str]) -> None:
                         help="Baixa os dados dos gráficos, no período e na resolução escolhidos.")
 
 
-def evaluation_note(table: pd.DataFrame, metrics: pd.DataFrame) -> str:
-    """Em que horas a tabela de métricas foi calculada, para ninguém comparar linhas de amostras diferentes."""
-    horizon = "Previsão da média da hora seguinte"
+TOO_LITTLE_TO_EVALUATE = "Ainda não há pares de previsão e observação suficientes para avaliar este sensor."
+NO_MODEL_FORECAST = "Nenhuma previsão de modelo disponível para este sensor no período exibido."
+
+
+def forecast_data_table(table: pd.DataFrame) -> pd.DataFrame:
+    """As horas que têm algum valor, com a hora local e os números com vírgula: o que existe quando não dá para avaliar.
+    Já vai em texto, com "—" nas células vazias: o navegador escreve "None" nas nulas, seja qual for o Styler."""
+    hours = table.dropna(how="all")
+    text = hours.apply(lambda column: column.map(lambda value: "—" if pd.isna(value) else decimal_comma(value)))
+    text.insert(0, "Hora", local_naive(hours.index.to_series()).dt.strftime("%d/%m %H:%M").to_numpy())
+    return text
+
+
+DIFFERENT_PERIODS = "Períodos de avaliação diferentes: MAE e RMSE não são diretamente comparáveis entre linhas."
+SKILL_NOTE = "O skill score de cada linha compara o previsor com a persistência nas mesmas horas dele."
+
+
+def show_evaluation_notes(table: pd.DataFrame, metrics: pd.DataFrame) -> None:
+    """Em que horas a tabela de métricas foi calculada, escrito acima dela para ninguém comparar linhas de amostras
+    diferentes sem saber. Quando as horas são outras, é um aviso discreto (MAE e RMSE não se comparam) com a nota do skill
+    score no mesmo bloco; quando são as mesmas, uma linha de texto."""
     rated = table[[SERIES_LABELS[OBSERVED], *metrics["Previsor"]]].dropna()
-    if metrics["Horas"].nunique() > 1 or len(rated) != metrics["Horas"].iloc[0]:
-        return (f"{horizon}. Os previsores não têm horas em comum: cada um foi avaliado nas horas em que tem "
-                "previsão, e só o skill score compara com a persistência nas mesmas horas.")
+    if metrics["Horas avaliadas"].nunique() > 1 or len(rated) != metrics["Horas avaliadas"].iloc[0]:
+        st.html(notice_html(DIFFERENT_PERIODS, SKILL_NOTE))
+        return
     hours = local_naive(rated.index.to_series())
-    period = "" if len(rated) == 1 else f", de {hours.min():%d/%m %H:%M} a {hours.max():%d/%m %H:%M}"
-    return f"{horizon}, avaliada nas mesmas {len(rated)} horas para todos os previsores{period}."
+    st.caption(evaluated_text(len(rated), len(metrics), hours.min(), hours.max()))
+
+
+SENSOR_BUTTONS_MAX = 4        # até aqui o sensor da aba de previsão se escolhe em botões; acima, numa lista estreita
+
+
+def forecast_sensor(devices_all: list[str]) -> str:
+    """O sensor da aba de previsão: botões lado a lado enquanto são poucos, que mostram as opções sem um clique a mais."""
+    if len(devices_all) <= SENSOR_BUTTONS_MAX:
+        return st.segmented_control("Sensor", devices_all, default=devices_all[0], required=True, key="forecast_device")
+    return st.selectbox("Sensor", devices_all, key="forecast_device", width=240)
 
 
 def forecast_tab(devices_all: list[str]) -> None:
-    device = st.selectbox("Sensor", devices_all, key="forecast_device")
+    device = forecast_sensor(devices_all)
     comparison = load_forecast(device, now_utc())
     table = comparison.series.rename(columns=SERIES_LABELS)
     has_models = len(table.columns) > len(SERIES_LABELS)
+    metrics = comparison.metrics.replace({"previsor": SERIES_LABELS}).rename(columns=METRIC_LABELS)
 
-    long =table.reset_index(names="hora").melt("hora", var_name="serie", value_name="pm25").dropna()
-    if long.empty:
-        st.info("Ainda não há horas completas para comparar.")
+    if metrics.empty:                    # nenhuma hora com observação e persistência: nada para avaliar nem para desenhar
+        st.info(TOO_LITTLE_TO_EVALUATE)
+        if not has_models:
+            st.caption(NO_MODEL_FORECAST)
+        if not table.dropna(how="all").empty:
+            with st.expander("Ver dados disponíveis"):
+                st.dataframe(forecast_data_table(table), hide_index=True)
         return
+    if not has_models:                   # antes do gráfico: é o que explica o gráfico ter só a persistência
+        st.info(NO_MODEL_FORECAST)
+
+    long = table.reset_index(names="hora").melt("hora", var_name="serie", value_name="pm25").dropna()
     long["hora_local"] = local_naive(long["hora"])
     long["valor"] = long["pm25"].map(decimal_comma)          # o tooltip do Vega escreveria o ponto decimal
     long = with_segments(long, "hora_local", "serie", pd.Timedelta(hours=1))
     models = [c for c in table.columns if c not in SERIES_COLORS]
     colors = SERIES_COLORS | dict(zip(models, MODEL_COLORS * len(models)))
-    chart = alt.Chart(long).mark_line(point=True).encode(
-        x=alt.X("hora_local:T", title=None, axis=alt.Axis(format="%d/%m %H:%M")),
-        y=alt.Y("pm25:Q", title=VARIABLES["pm25"], scale=alt.Scale(zero=False),
+    time_axis_labels = alt.Axis(format="%d/%m %H:%M")
+    lines = alt.Chart(long).mark_line(point=True).encode(
+        x=alt.X("hora_local:T", title=None, axis=time_axis_labels),
+        y=alt.Y("pm25:Q", title=None, scale=alt.Scale(zero=False),
                 axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')")),
-        color=alt.Color("serie:N", title=None,
+        color=alt.Color("serie:N", title=None, legend=None,
                         scale=alt.Scale(domain=list(colors), range=list(colors.values()))),
         detail="segmento:N",
         strokeDash=alt.condition(alt.datum.serie == "Observado", alt.value([1, 0]), alt.value([5, 4])),
         tooltip=[alt.Tooltip("hora_local:T", title="Hora", format="%d/%m %H:%M"), alt.Tooltip("serie:N", title="Série"),
                  alt.Tooltip("valor:N", title="PM2,5")],
-    ).properties(height=320, description=f"Gráfico de linhas do PM2,5 por hora: {', '.join(colors)}.")
+    )
+    first, last = long["hora_local"].min(), long["hora_local"].max()
+    # As previsões depois da última hora observada ainda não têm com o que ser comparadas: uma faixa clara atrás delas
+    # separa o que já dá para avaliar do que está pendente.
+    band = pending_band(long.loc[long["serie"] == "Observado", "hora_local"].max().to_pydatetime(), last.to_pydatetime())
+    layers = lines
+    if band is not None:
+        span = alt.Data(values=[{"inicio": band[0].isoformat(), "fim": band[1].isoformat()}])
+        shade = alt.Chart(span).mark_rect(color=PENDING_COLOR, opacity=PENDING_OPACITY).encode(
+            x=alt.X("inicio:T", title=None, axis=time_axis_labels), x2="fim:T")
+        layers = shade + lines
+    chart = layers.properties(height=320, description=f"Gráfico de linhas do PM2,5 por hora: {', '.join(colors)}.")
+    st.html(trend_head_html(f"{VARIABLES['pm25']} · previsão para a hora seguinte", list(colors.items()),
+                            title=True, subtitle=f"{first:%d/%m %H:%M} a {last:%d/%m %H:%M} · horário de Brasília",
+                            pending="Aguardando observação" if band is not None else None))
     st.altair_chart(chart, width="stretch")
 
-    metrics = comparison.metrics.replace({"previsor": SERIES_LABELS}).rename(columns=METRIC_LABELS)
-    if not metrics.empty:
-        # O Styler escreve os números com vírgula (o formato da coluna do Streamlit só sabe o ponto).
-        st.dataframe(metrics.style.format(decimal=",", precision=2, na_rep="—"), hide_index=True)
-    if not metrics.empty:
-        st.caption(evaluation_note(table, metrics))
-    st.caption("Persistência repete a média da hora anterior e é a referência que qualquer modelo precisa superar. "
-               "MAE é o erro médio e RMSE pesa mais os erros grandes. O skill score compara o RMSE do previsor com "
-               "o da persistência nas mesmas horas: acima de zero, o modelo acerta mais que repetir a hora anterior.")
-    if not has_models:
-        st.info("Nenhuma previsão de modelo registrada ainda. Quando o job horário estiver no ar, as previsões "
-                "gravadas na tabela forecasts aparecem aqui ao lado da persistência.")
+    show_evaluation_notes(table, metrics)
+    notes = metrics["Horas avaliadas"].map(small_sample_note)
+    if notes.ne("").any():               # a coluna só existe quando alguma linha tem menos de um dia de horas
+        metrics = metrics.assign(**{"Observação": notes})
+    # O Styler escreve os números com vírgula (o formato da coluna do Streamlit só sabe o ponto).
+    st.dataframe(metrics.style.format(decimal=",", precision=2, na_rep="—"), hide_index=True)
+    with st.expander("Como interpretar a avaliação"):
+        st.caption(evaluation_guide(retroactive=bool(metrics["Previsor"].str.endswith("-retro").any())))
 
 
 # ---------------------------------------------------------------- página

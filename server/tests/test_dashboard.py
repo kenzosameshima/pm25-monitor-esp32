@@ -119,9 +119,11 @@ def test_tabela_de_previsao_diz_que_todos_os_previsores_usam_as_mesmas_horas(app
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     metrics = at.dataframe[1].value.set_index("Previsor")
-    assert set(metrics["Horas"]) == {11}                 # a persistência também só conta as 11 horas do modelo
-    note = [c.value for c in at.caption if "mesmas 11 horas" in c.value]
-    assert len(note) == 1 and "hora seguinte" in note[0] and " a " in note[0]  # horizonte e período avaliado
+    assert set(metrics["Horas avaliadas"]) == {11}       # a persistência também só conta as 11 horas do modelo
+    assert list(metrics.reset_index().columns[:2]) == ["Previsor", "Horas avaliadas"]   # o nome diz o que a contagem é
+    note = [c.value for c in at.tabs[2].caption if "mesmas 11 horas" in c.value]
+    assert len(note) == 1 and note[0].startswith("Todos os previsores foram avaliados nas mesmas 11 horas, de ")
+    assert not at.tabs[2].warning                        # as linhas se comparam: nada a avisar
 
 
 def test_tabela_de_previsao_avisa_quando_os_modelos_nao_tem_horas_em_comum(app_env):
@@ -130,7 +132,60 @@ def test_tabela_de_previsao_avisa_quando_os_modelos_nao_tem_horas_em_comum(app_e
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     assert not any("mesmas 11 horas" in c.value for c in at.caption)
-    assert any("nas horas em que tem previsão" in c.value for c in at.caption)
+    assert not at.tabs[2].warning and DIFFERENT_PERIODS in forecast_notice(at)
+
+
+def tab_items(tab) -> list[tuple[str, str]]:
+    """O tipo e o texto (quando o elemento é um texto ou um HTML) de cada elemento da aba, na ordem em que aparecem."""
+    items = []
+    for key in sorted(tab.children):
+        element = tab.children[key]
+        value = element.proto.body if element.type == "html" else getattr(element, "value", "")
+        items.append((element.type, value if isinstance(value, str) else ""))
+    return items
+
+
+def forecast_notice(at) -> str:
+    """O bloco do aviso de períodos diferentes, entre o gráfico e a tabela."""
+    notices = [text for kind, text in tab_items(at.tabs[2]) if kind == "html" and 'class="aq-note"' in text]
+    assert len(notices) == 1, notices
+    return notices[0]
+
+
+def test_aviso_de_periodos_diferentes_fica_acima_da_tabela_com_a_nota_do_skill_score_ao_lado(app_env):
+    populate(app_env)
+    add_model_forecasts(app_env, "ridge", "v2", [20, 21, 22])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    items = tab_items(at.tabs[2])
+    kinds = [kind for kind, _ in items]
+    notice = next(i for i, (kind, text) in enumerate(items) if kind == "html" and 'class="aq-note"' in text)
+    assert kinds.index("vega_lite_chart") < notice < kinds.index("dataframe")         # entre o gráfico e a tabela
+    assert DIFFERENT_PERIODS in items[notice][1] and SKILL_NOTE in items[notice][1]   # as duas frases, no mesmo bloco
+    assert not at.tabs[2].warning and SKILL_NOTE not in [text for kind, text in items if kind == "caption"]
+    assert not any("nas horas em que tem previsão" in text for _, text in items)      # e a frase velha, abaixo, some
+
+
+def test_aviso_de_periodos_diferentes_e_discreto_e_baixo(app_env):
+    populate(app_env)
+    add_model_forecasts(app_env, "ridge", "v2", [20, 21, 22])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    css = re.search(r"[.]aq-note\s*[{]([^}]*)[}]", page_style(at)).group(1)
+    assert "color-mix(in srgb, currentColor" in css and "#fff" not in css          # fundo quase transparente, não um bloco chapado
+    assert "border-left: 3px solid" in css                                         # o filete é o que lembra que é um aviso
+    assert rem_of(page_style(at), ".aq-note", "padding") <= 0.5                    # 8 px em cima e embaixo (o st.warning tinha 16)
+    assert rem_of(page_style(at), ".aq-note", "font-size") <= 0.875                # no tamanho das notas, não do texto da página
+
+
+def test_nota_das_mesmas_horas_tambem_fica_acima_da_tabela(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    items = tab_items(at.tabs[2])
+    kinds = [kind for kind, _ in items]
+    note = next(i for i, (kind, text) in enumerate(items) if kind == "caption" and "mesmas 11 horas" in text)
+    assert kinds.index("vega_lite_chart") < note < kinds.index("dataframe")
 
 
 def add_last_reading(path: Path, device: str, hours_ago: float, **values) -> None:
@@ -489,6 +544,7 @@ def test_expansor_da_serie_horaria_detalha_as_horas_sem_media_por_sensor(app_env
 
 def test_detalhe_por_sensor_so_chama_de_suspeita_o_no_que_tem_horas_suspeitas(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    add_last_reading(app_env, "no-01", hours_ago=8, boot_id=7)   # horas sem leituras para o no-01, mas nenhuma suspeita
     add_dead_hours(app_env, "no-02", [10])
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
@@ -513,8 +569,9 @@ def test_grafico_de_seis_horas_tem_titulo_curto_e_uma_linha_so_com_periodo_e_leg
 
 
 def chart_heads(at) -> list[str]:
-    """Os HTMLs da linha acima de cada gráfico de linhas, na ordem da página: o de 6 horas e depois os da aba Séries."""
-    return [h.proto.body for h in at.get("html") if 'class="aq-trend-head"' in h.proto.body]
+    """Os HTMLs da linha acima de cada gráfico de linhas das abas Status e Séries, na ordem da página: o de 6 horas e
+    depois os da aba Séries. O da aba Previsto × observado tem o seu próprio helper (`forecast_head`)."""
+    return [h.proto.body for tab in at.tabs[:2] for h in tab.get("html") if 'class="aq-trend-head"' in h.proto.body]
 
 
 def series_flow(at) -> list[tuple[str, str]]:
@@ -684,8 +741,8 @@ def test_cada_grafico_da_aba_series_tem_a_variavel_e_a_legenda_numa_linha(app_en
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     heads = chart_heads(at)
-    assert len(heads) == 4                          # o de 6 horas, PM2,5, a faixa das horas sem média e a umidade
-    variables = [head for head in heads[1:] if STRIP_TITLE not in head]
+    variables = [head for head in heads[1:] if STRIP_TITLE not in head]       # a faixa tem a sua linha, mas nem sempre existe
+    assert len(heads) in (3, 4) and len(variables) == 2                        # o de 6 horas, PM2,5 e umidade
     assert "PM2,5 (µg/m³)" in variables[0] and "Umidade relativa (%)" in variables[1]
     for head in variables:
         assert "background:#22b8cf" in head and "background:#e0529c" in head      # cada sensor, com a cor da sua linha
@@ -961,6 +1018,231 @@ def test_tabela_de_previsao_escreve_os_numeros_com_virgula(app_env):
     for column in ("MAE (µg/m³)", "RMSE (µg/m³)", "Skill score"):
         assert text[column].str.fullmatch(r"-?\d+,\d\d").all(), (column, list(text[column]))
     assert not has_decimal_point(text), text
+
+
+def add_full_hours(path: Path, device: str, hours_ago: list[int], boot_id: int = 5) -> None:
+    """Uma hora cheia de leituras normais de `device` para cada `hours_ago` (horas antes da hora atual)."""
+    top = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    conn = db.connect(str(path))
+    for k in hours_ago:
+        start = top - timedelta(hours=k)
+        db.insert_batch(conn, device, [{"device_id": device, "boot_id": boot_id, "seq": k * 60 + m, "uptime_s": 0,
+                                        "schema_version": "1", "quality": "ok",
+                                        "ts_sensor": db.iso(start + timedelta(minutes=m)),
+                                        "ts_received": db.iso(start + timedelta(minutes=m)),
+                                        **synthetic(start + timedelta(minutes=m), {})} for m in range(60)], start)
+    conn.close()
+
+
+def choose_forecast_sensor(at, device: str) -> None:
+    """Escolhe o sensor da aba Previsto × observado, seja o controle botões ou lista."""
+    tab = at.tabs[2]
+    control = tab.segmented_control[0] if len(tab.segmented_control) else tab.selectbox[0]
+    control.set_value(device).run()
+
+
+def tab_order(tab) -> list[str]:
+    """Os tipos dos elementos de uma aba, na ordem em que aparecem."""
+    return [tab.children[key].type for key in sorted(tab.children)]
+
+
+DIFFERENT_PERIODS = "Períodos de avaliação diferentes: MAE e RMSE não são diretamente comparáveis entre linhas."
+SKILL_NOTE = "O skill score de cada linha compara o previsor com a persistência nas mesmas horas dele."
+TOO_LITTLE = "Ainda não há pares de previsão e observação suficientes para avaliar este sensor."
+NO_MODEL = "Nenhuma previsão de modelo disponível para este sensor no período exibido."
+
+
+def test_sensor_sem_pares_para_avaliar_diz_isso_e_deixa_os_dados_num_expansor_em_vez_de_um_grafico(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_full_hours(app_env, "no-02", [30, 20])                   # duas horas soltas: nenhuma tem a anterior para a persistência
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    choose_forecast_sensor(at, "no-02")
+    assert not at.exception, at.exception
+    tab = at.tabs[2]
+    assert [i.value for i in tab.info] == [TOO_LITTLE]
+    assert NO_MODEL in [c.value for c in tab.caption]                    # a falta de modelo também, antes de qualquer gráfico
+    assert len(tab.get("vega_lite_chart")) == 0                          # nada de gráfico de dois pontos com eixo em 5,214894
+    box = next(e for e in tab.expander if e.label == "Ver dados disponíveis")
+    text = shown(box.dataframe[0])
+    assert list(text.columns)[:3] == ["Hora", "Observado", "Persistência"] and len(text) == 4     # as duas horas e a seguinte a cada uma
+    assert text["Hora"].str.fullmatch("[0-9]{2}/[0-9]{2} [0-9]{2}:00").all() and not has_decimal_point(text)
+    # O navegador escreve "None" nas células nulas, seja qual for o `na_rep` do Styler: o vazio já vai como texto.
+    raw = box.dataframe[0].value
+    assert not raw.isna().any().any() and (raw == "—").sum().sum() == 4          # metade das células: cada hora tem um só valor
+
+
+def test_aviso_de_que_nao_ha_modelo_vem_antes_do_grafico_e_nao_cita_job_nem_tabela(app_env):
+    populate(app_env)                                           # o no-02 tem dados e nenhuma previsão de modelo
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    choose_forecast_sensor(at, "no-02")
+    assert not at.exception, at.exception
+    tab = at.tabs[2]
+    assert [i.value for i in tab.info] == [NO_MODEL]
+    order = tab_order(tab)
+    assert order.index("info") < order.index("vega_lite_chart")              # o aviso vem antes do gráfico, não depois
+    page = " ".join([i.value for i in at.info] + [c.value for c in at.caption])
+    assert "job horário" not in page and "forecasts" not in page          # nada de detalhe interno nem de causa operacional
+
+
+def test_sensor_com_modelo_nao_mostra_aviso_de_modelo_ausente(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert not at.tabs[2].info and NO_MODEL not in [c.value for c in at.tabs[2].caption]
+
+
+def test_linha_avaliada_em_uma_hora_diz_que_a_amostra_e_pequena_e_as_demais_nao(app_env):
+    populate(app_env, hours=40)
+    add_model_forecasts(app_env, "ridge", "v1", list(range(12, 29)))      # 28 horas: mais de um dia
+    add_model_forecasts(app_env, "ridge", "v0-retro", [35])               # uma hora, sem nenhuma em comum com a v1
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    text = shown(at.dataframe[1]).set_index("Previsor")
+    assert dict(text["Observação"]) == {"Persistência": "", "ridge v1": "", "ridge v0-retro": "Amostra de apenas 1 hora"}
+
+
+def test_sem_amostra_pequena_a_tabela_nao_ganha_a_coluna_de_observacao(app_env):
+    populate(app_env, hours=40)
+    add_model_forecasts(app_env, "ridge", "v1", list(range(12, 29)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert "Observação" not in at.dataframe[1].value.columns
+
+
+def test_amostra_pequena_vale_para_todas_as_linhas_que_tem_menos_de_um_dia(app_env):
+    populate(app_env)                                                      # a v1 prevê 11 horas, e a persistência fica com as mesmas
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    text = shown(at.dataframe[1]).set_index("Previsor")
+    assert set(text["Observação"]) == {"Amostra de apenas 11 horas"}
+
+
+def test_com_poucos_sensores_o_seletor_da_previsao_vira_botoes_no_lugar_da_lista(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    tab = at.tabs[2]
+    sensor = tab.segmented_control[0]
+    assert sensor.label == "Sensor" and list(sensor.options) == ["no-01", "no-02"] and sensor.value == "no-01"
+    assert len(tab.selectbox) == 0
+    choose_forecast_sensor(at, "no-02")
+    assert not at.exception, at.exception
+    assert at.tabs[2].segmented_control[0].value == "no-02"            # e a escolha vale para a aba toda
+
+
+def test_com_muitos_sensores_o_seletor_continua_lista(app_env):          # a largura dela (240 px) o AppTest não mostra
+    populate(app_env, hours=3, devices=tuple((f"no-0{n}", 1) for n in range(1, 6)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    tab = at.tabs[2]
+    assert len(tab.segmented_control) == 0 and len(tab.selectbox) == 1
+    assert tab.selectbox[0].label == "Sensor" and len(tab.selectbox[0].options) == 5
+
+
+GUIDE = "Como interpretar a avaliação"
+
+
+def forecast_guide(at) -> str:
+    """O texto do expansor da aba Previsto × observado."""
+    boxes = [e for e in at.tabs[2].expander if e.label == GUIDE]
+    assert len(boxes) == 1, [e.label for e in at.tabs[2].expander]
+    return " ".join(c.value for c in boxes[0].caption)
+
+
+def test_definicoes_da_avaliacao_ficam_num_expansor_e_nao_soltas_abaixo_da_tabela(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    guide = forecast_guide(at)
+    assert all(f"**{term}:**" in guide for term in ("Horas avaliadas", "Persistência", "MAE", "RMSE", "Skill score"))
+    inside = {c.value for e in at.tabs[2].expander for c in e.caption}
+    outside = [c.value for c in at.tabs[2].caption if c.value not in inside]
+    assert not any("MAE é o erro médio" in text or "pesa mais os erros" in text for text in outside)   # nada de definição solta
+    items = tab_items(at.tabs[2])
+    assert [kind for kind, _ in items][-1] == "expander"                       # o expansor fecha a aba, depois da tabela
+
+
+def test_guia_so_fala_de_previsao_retroativa_quando_a_tabela_tem_uma(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert "retroativa" not in forecast_guide(at)
+    add_model_forecasts(app_env, "ridge", "v0-retro", [3])
+    st.cache_data.clear()
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert "retroativa" in forecast_guide(at) and "-retro" in forecast_guide(at)
+
+
+def test_sem_pares_para_avaliar_nao_ha_guia_de_interpretacao(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_full_hours(app_env, "no-02", [30, 20])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    choose_forecast_sensor(at, "no-02")
+    assert not any(e.label == GUIDE for e in at.tabs[2].expander)             # não há resultado para interpretar
+
+
+def forecast_head(at) -> str:
+    """O HTML da linha acima do gráfico da aba Previsto × observado."""
+    return next(h.proto.body for h in at.tabs[2].get("html") if 'class="aq-trend-head"' in h.proto.body)
+
+
+def forecast_spec(at) -> dict:
+    return json.loads(at.tabs[2].get("vega_lite_chart")[0].proto.spec)
+
+
+def mark_type(layer: dict) -> str:
+    return layer["mark"]["type"] if isinstance(layer["mark"], dict) else layer["mark"]
+
+
+def forecast_line(at) -> dict:
+    """A camada das linhas do gráfico de previsão (a outra é a faixa do trecho sem observação)."""
+    return next(layer for layer in forecast_spec(at)["layer"] if mark_type(layer) == "line")
+
+
+def forecast_rows(at) -> "pa.Table":
+    """Os pontos do gráfico de previsão, um por série e hora."""
+    dataset = at.tabs[2].get("vega_lite_chart")[0].proto.datasets[0]
+    return pa.ipc.open_stream(dataset.data.data).read_all().to_pandas()
+
+
+def test_grafico_de_previsao_tem_cabecalho_com_titulo_periodo_fuso_e_legenda_numa_linha(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    head = forecast_head(at)
+    assert 'class="aq-label aq-title">PM2,5 (µg/m³) · previsão para a hora seguinte<' in head
+    for name, color in (("Observado", "#3b82f6"), ("Persistência", "#9ca3af"), ("ridge v1", "#f97316")):
+        assert f'background:{color}" aria-hidden="true"></i>{name}</span>' in head       # a legenda, na cor da linha
+    assert re.search(r'aq-sub">[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2} a [0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2} '
+                     r'· horário de Brasília<', head)                                 # o período e o fuso, abaixo
+
+
+def test_grafico_de_previsao_nao_repete_titulo_nem_legenda_e_mantem_observado_continuo_e_previsoes_tracejadas(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    encoding = forecast_line(at)["encoding"]
+    assert encoding["color"].get("legend", "padrão") is None                         # a legenda vai na linha de cima
+    assert encoding["y"].get("title", "padrão") is None                              # e a unidade no título
+    dash = encoding["strokeDash"]["condition"]
+    assert dash["value"] == [1, 0] and encoding["strokeDash"]["value"] == [5, 4]     # observado contínuo, o resto tracejado
+
+
+def test_trecho_sem_observacao_ganha_uma_faixa_atras_das_linhas_e_uma_amostra_na_legenda(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    layers = forecast_spec(at)["layer"]
+    assert [mark_type(layer) for layer in layers] == ["rect", "line"]               # a faixa vem primeiro: fica atrás das linhas
+    rows = forecast_rows(at)
+    last_observed = rows.loc[rows["serie"] == "Observado", "hora_local"].max().to_pydatetime()
+    last_plotted = rows["hora_local"].max().to_pydatetime()
+    assert last_plotted > last_observed                                              # há mesmo previsão sem observação
+    band = layers[0]["data"]["values"][0]
+    assert datetime.fromisoformat(band["inicio"]) == last_observed + timedelta(minutes=30)
+    assert datetime.fromisoformat(band["fim"]) == last_plotted + timedelta(minutes=30)
+    assert "tooltip" not in layers[0]["encoding"]                                    # a faixa não rouba o balão das linhas
+    assert '<i class="aq-pending" aria-hidden="true"></i>Aguardando observação</span>' in forecast_head(at)
 
 
 def page_style(at) -> str:
