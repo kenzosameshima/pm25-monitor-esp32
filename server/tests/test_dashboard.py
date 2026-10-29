@@ -205,6 +205,33 @@ def test_aviso_das_horas_suspeitas_nao_afirma_o_que_o_ar_faz_e_leva_os_criterios
     assert "falha do sensor" in text and "ar muito limpo" in text and "CETESB" in text  # a causa não está decidida
 
 
+def test_grafico_de_seis_horas_avisa_do_no_que_nao_enviou_nada(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert [c.value for c in at.caption if "sem leituras nas últimas" in c.value] == [
+        "no-02: sem leituras nas últimas 6 horas."]
+
+
+def test_grafico_de_seis_horas_nao_avisa_quando_todos_os_nos_enviaram(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert not any("sem leituras nas últimas" in c.value for c in at.caption)
+
+
+def test_grafico_de_seis_horas_avisa_quando_nenhum_no_enviou(app_env):
+    conn = db.connect(str(app_env))
+    db.init_db(conn)
+    conn.close()
+    add_last_reading(app_env, "no-01", hours_ago=30)
+    add_last_reading(app_env, "no-02", hours_ago=27)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert any(c.value == "no-01, no-02: sem leituras nas últimas 6 horas." for c in at.caption)
+
+
 def test_aviso_das_horas_suspeitas_separa_a_contagem_por_no(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
     add_dead_hours(app_env, "no-01", [10])

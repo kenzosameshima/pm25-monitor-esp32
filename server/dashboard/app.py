@@ -269,10 +269,15 @@ def status_tab() -> None:
                "minutos sem leitura e sem lacuna de sequência indicam falha do sensor, não da rede.")
 
     recent = load_measurements(now - timedelta(hours=6), now + timedelta(minutes=1), tuple(status["device_id"]))
+    st.markdown("#### PM2,5 nas últimas 6 horas")
     if not recent.empty:
-        st.markdown("#### PM2,5 nas últimas 6 horas")
         st.altair_chart(line_chart(recent.assign(hora=local_naive(recent["ts_sensor"])), "hora", "pm25",
                                    VARIABLES["pm25"], pd.Timedelta(minutes=5)), width="stretch")
+    # Um nó sem leitura na janela some do gráfico e da legenda: o aviso diz que ele não foi esquecido.
+    sent = set(recent["device_id"]) if not recent.empty else set()
+    missing = [d for d in devices if d in by_id.index and d not in sent]
+    if missing:
+        st.caption(f"{', '.join(missing)}: sem leituras nas últimas 6 horas.")
 
 
 def series_tab(devices_all: list[str]) -> None:
