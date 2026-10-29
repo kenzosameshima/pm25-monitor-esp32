@@ -20,7 +20,10 @@ import streamlit as st  # noqa: E402
 from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
+from dashboard.duration import duration_text  # noqa: E402
+from dashboard.last_reading import last_reading_html  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
+from dashboard.trend import period_text, trend_head_html  # noqa: E402
 
 LOCAL_TZ = "America/Sao_Paulo"
 MAX_MINUTE_DAYS = 7  # o período padrão da aba Séries (7 dias) ainda cabe em resolução de 1 minuto
@@ -39,6 +42,24 @@ alt.data_transformers.disable_max_rows()
 PAGE_STYLE = """<style>
 /* O padrão do Streamlit (6rem em cima, 10rem embaixo) cria scroll em abas que caberiam na tela. */
 [data-testid='stMainBlockContainer'] {padding-top: 3.5rem; padding-bottom: 2rem}
+/* Em tela larga, a margem de cima, o título de 44 px e os respiros em volta das abas gastavam um quarto da altura
+   antes do primeiro conteúdo. Menores, deixam o conteúdo mais acima. Abaixo de 640 px (o celular) nada muda: lá a
+   barra do Streamlit cobriria uma margem menor. A barra fica por cima do conteúdo e tem fundo sólido, então com a
+   margem menor ela esconderia o título: ela passa a ser transparente. */
+@media (min-width: 640px) {
+[data-testid='stHeader'] {background: transparent}
+[data-testid='stMainBlockContainer'] {padding-top: 1.75rem}
+[data-testid='stMainBlockContainer'] [data-testid='stHeading'] h1 {font-size: 1.75rem; line-height: 1.2; padding-top: 0; padding-bottom: .25rem}
+[data-testid='stTabs'] [role='tabpanel'] {padding-top: .5rem}
+/* O cartão de um nó gastava 470 px: o nome do nó grande, 16 px entre cada bloco e 24 px entre a escala e as métricas. */
+[data-testid='stVerticalBlock'][class*='st-key-node-'] {gap: .75rem; padding: .75rem; --aq-gap: .75rem}
+[data-testid='stVerticalBlock'][class*='st-key-hero-'] {gap: .5rem}
+[class*='st-key-node-'] [data-testid='stHeading'] h3 {font-size: 1.4rem; line-height: 1.3; padding-top: 0; padding-bottom: 0}
+[class*='st-key-node-'] [data-testid='stHeading'] [data-testid='stMarkdownContainer'] {margin-bottom: 0}
+[class*='st-key-hero-'] .aq-scale {margin-bottom: .25rem}
+[class*='st-key-hero-'] [data-testid='stMetric'] > div {display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: .75rem}
+[class*='st-key-hero-'] [data-testid='stMetricLabel'] {grid-column: 1 / -1}
+}
 /* Texto auxiliar: o Streamlit o deixa a 60% de opacidade, o que dá 3,7:1 no tema claro. A 75% passa de 4,5:1
    nos dois temas e ainda fica abaixo do texto principal. */
 [data-testid='stCaptionContainer'] {opacity: .75 !important}
@@ -47,6 +68,24 @@ PAGE_STYLE = """<style>
 [data-testid='stMetricValue'] {font-variant-numeric: tabular-nums}
 [class*='st-key-node-'] [data-testid='stMetricValue'] {font-size: 1.75rem}
 [class*='st-key-hero-'] [data-testid='stMetricValue'] {font-size: 3.2rem; font-weight: 600; line-height: 1.05}
+/* A unidade do PM2,5 vem menor e com peso normal ao lado do valor: dentro do próprio valor ela competiria com ele. */
+[class*='st-key-hero-']:not([class*='st-key-hero-empty-']) [data-testid='stMetricValue'] div::after {content: " µg/m³"; font-size: .4em; font-weight: 400; margin-left: .2em}
+/* Num nó sem dados, o "PM2,5 —" diz que não há leitura atual. Com a última leitura aberta, os valores dela ocupam o
+   lugar e o "—" só repetiria a ausência: o bloco encolhe e some, e volta quando o expansor começa a fechar. O expansor
+   (um elemento details) só perde o atributo open quando acaba de fechar, mas marca o conteúdo como inert já no
+   início: a regra olha o conteúdo ainda ativo, para o bloco não esperar a animação do expansor para voltar. A altura
+   anima pela fileira da grade (de 1fr a 0fr) e a margem negativa desconta o espaço entre blocos do cartão (--aq-gap),
+   que um bloco sem altura ainda deixaria. Sem o sinal de menor aqui dentro: o sanitizador do st.html descarta o bloco
+   de estilo inteiro se achar um. */
+[class*='st-key-node-'] {--aq-gap: 1rem}
+[class*='st-key-node-'] [data-testid='stLayoutWrapper']:has(> [class*='st-key-hero-empty-']) {display: grid; grid-template-rows: 1fr;
+    transition: grid-template-rows .25s ease, opacity .25s ease, margin-bottom .25s ease, visibility 0s}
+[class*='st-key-node-'] [class*='st-key-hero-empty-'] {min-height: 0; overflow: hidden}
+[class*='st-key-node-']:has(details[open] [data-testid='stExpanderDetails']:not([inert])) [data-testid='stLayoutWrapper']:has(> [class*='st-key-hero-empty-']) {grid-template-rows: 0fr; opacity: 0; margin-bottom: calc(-1 * var(--aq-gap)); visibility: hidden;
+    transition: grid-template-rows .25s ease, opacity .25s ease, margin-bottom .25s ease, visibility 0s .25s}
+@media (prefers-reduced-motion: reduce) {
+[class*='st-key-node-'] [data-testid='stLayoutWrapper']:has(> [class*='st-key-hero-empty-']) {transition: none !important}
+}
 /* Escala das faixas de qualidade do ar sob o PM2,5. */
 .aq-scale {position: relative; max-width: 24rem; margin: .1rem 0 1.5rem}
 .aq-track {display: flex; gap: 2px; height: .5rem; border-radius: .25rem; overflow: hidden}
@@ -56,6 +95,20 @@ PAGE_STYLE = """<style>
 .aq-ticks {position: relative; height: 1rem; margin-top: .35rem; font-size: .75rem; opacity: .75;
            font-variant-numeric: tabular-nums}
 .aq-ticks span {position: absolute; transform: translateX(-50%)}
+/* A linha acima do gráfico de 6 horas: o período e a unidade de um lado, a legenda e os avisos do outro. */
+.aq-trend-head {display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .25rem 1rem;
+                font-size: .875rem}
+.aq-period, .aq-key-off {opacity: .75}
+.aq-keys {display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1rem}
+.aq-key i {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem}
+/* A última leitura de um nó sem dados, no expansor: o aviso, os valores em grade sobre um fundo próprio e o sinal. */
+.aq-last {display: grid; gap: .5rem}
+.aq-last-title {font-weight: 600}
+.aq-last-note, .aq-last-foot {font-size: .875rem; opacity: .75}
+.aq-last-grid {display: grid; grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr)); gap: .75rem; padding: .75rem;
+               border-radius: .5rem; background: color-mix(in srgb, currentColor 6%, transparent)}
+.aq-last-label {display: block; font-size: .875rem; opacity: .75}
+.aq-last-value {display: block; font-size: 1.4rem; font-variant-numeric: tabular-nums}
 </style>"""
 st.html(PAGE_STYLE)
 
@@ -175,12 +228,15 @@ def ago(minutes: float | None) -> str:
     return f"há {minutes / 1440:.0f} dias"
 
 
-def last_reading_text(dev: pd.Series, when: str) -> str:
+def last_reading_block(dev: pd.Series, reading_at: datetime) -> str:
     """A última leitura de um nó sem dados recentes, dita como histórico para não passar por valor atual."""
-    values = " · ".join([f"PM2,5 {fmt(dev['pm25'], ' µg/m³')}", f"PM10 {fmt(dev['pm10'], ' µg/m³')}",
-                         fmt(dev["temperature"], " °C"), fmt(dev["humidity"], "%"), fmt(dev["rssi"], " dBm", 0)])
-    note = "" if dev["quality"] == "ok" else f" O servidor a marcou como implausível ({dev['quality']})."
-    return f"Leitura de {when}, histórico (não é o valor atual): {values}.{note}"
+    values = [("PM2,5 (µg/m³)", fmt(dev["pm25"], "")), ("PM10 (µg/m³)", fmt(dev["pm10"], "")),
+              ("Temperatura", fmt(dev["temperature"], " °C")), ("Umidade", fmt(dev["humidity"], "%"))]
+    return last_reading_html(reading_at, values, fmt(dev["rssi"], " dBm", 0) if pd.notna(dev["rssi"]) else None)
+
+
+def flagged_note(quality: str) -> str:
+    return f":red[O servidor marcou esta leitura como implausível ({quality}).]"
 
 
 def zero_reading_note(pm1, pm25, pm10) -> str:
@@ -195,7 +251,7 @@ STATUS_LABELS = {"em_operacao": "🟢 em operação", "atrasado": "🟡 atrasado
 HEALTH_LABELS = {
     "device_id": "Sensor",
     "completude": "Completude",
-    "maior_lacuna_min": "Maior lacuna (min)",
+    "maior_lacuna_min": "Maior lacuna",
     "mensagens_perdidas": "Mensagens perdidas",
     "reinicios": "Reinícios",
     "duplicatas_descartadas": "Duplicatas descartadas",
@@ -243,19 +299,26 @@ def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta)
 
 def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timedelta,
                rule: float | None = None, color: str = "device_id", legend: str = "Sensor",
-               domain: list[str] | None = None, time_only: bool = False, subtitle: str | None = None) -> alt.Chart:
+               domain: list[str] | None = None, compact: bool = False) -> alt.Chart:
     """Linhas por nó, uma cor fixa para cada. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
-    fixa o eixo do tempo, e `time_only` mostra só a hora nos rótulos, com a data (`subtitle`) no título."""
+    fixa o eixo do tempo. `compact` é o gráfico das últimas 6 horas: só a hora nos rótulos e sem título nem legenda,
+    que a página escreve numa linha acima. Ele leva uma linha fina de 30 em 30 minutos no eixo e mostra o ponto
+    só sob o mouse (o do tooltip), menos os das leituras isoladas, que sem vizinhas não formariam linha."""
     data = with_segments(data[[x, y, color]].dropna(), x, color, max_gap)
     data = data.assign(valor=data[y].map(decimal_comma))      # o tooltip do Vega escreveria o ponto decimal
     names = sorted(data[color].unique())
     sensors = color == "device_id"
-    chart = alt.Chart(data).mark_line(point=len(data) <= 400).encode(
-        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%H:%M" if time_only else "%d/%m %H:%M"),
+    if compact:                                               # uma leitura sem vizinha a menos de `max_gap` não forma linha
+        data = data.assign(isolado=data.groupby("segmento")[x].transform("size") == 1)
+    # Doze marcas em 6 horas: uma a cada 30 minutos. O intervalo explícito (`TimeIntervalStep`) deixa o gráfico em
+    # branco no Streamlit; a contagem numérica não.
+    ticks = 12 if compact else alt.Undefined
+    base = alt.Chart(data).encode(
+        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%H:%M" if compact else "%d/%m %H:%M", tickCount=ticks),
                 scale=alt.Scale(domain=domain) if domain else alt.Undefined),
         y=alt.Y(f"{y}:Q", title=None, scale=alt.Scale(zero=False),
                 axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')", minExtent=Y_AXIS_WIDTH)),
-        color=alt.Color(f"{color}:N", title=legend, legend=alt.Legend(orient="top"),
+        color=alt.Color(f"{color}:N", title=legend, legend=None if compact else alt.Legend(orient="top"),
                         scale=alt.Scale(domain=names, range=[sensor_color(n) for n in names])
                         if sensors else alt.Undefined),
         detail="segmento:N",
@@ -265,13 +328,24 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
             alt.Tooltip("valor:N", title=title),
         ],
     )
+    if compact:
+        hover = alt.selection_point(name="hover", fields=[x], nearest=True, on="pointerover", clear="pointerout",
+                                    empty=False)
+        dots = base.mark_point(filled=True, size=36)
+        chart = (base.mark_line(strokeWidth=2)
+                 + dots.encode(opacity=alt.condition(hover, alt.value(1), alt.value(0))).add_params(hover)
+                 + dots.transform_filter("datum.isolado"))
+    else:
+        chart = base.mark_line(point=len(data) <= 400)
     if rule is not None:
         chart = chart + alt.Chart(pd.DataFrame({"limite": [rule]})).mark_rule(
             strokeDash=[4, 4], color="gray").encode(y="limite:Q")
-    # No Streamlit a altura inclui título, legenda e eixos: 330 deixa para a área das linhas cerca de 200 px.
-    # A data vai no próprio título: o subtítulo do Vega não segue o tema e some sobre o fundo escuro.
-    return chart.properties(height=330, description=chart_description(data, x, y, title, names),
-                            title=alt.TitleParams(f"{title} · {subtitle}" if subtitle else title, anchor="start"))
+    # No Streamlit a altura inclui título, legenda e eixos: 330 deixa para a área das linhas cerca de 200 px, e sem
+    # título nem legenda 240 deixam o mesmo tanto.
+    description = chart_description(data, x, y, title, names)
+    if compact:
+        return chart.properties(height=240, description=description)
+    return chart.properties(height=330, description=description, title=alt.TitleParams(title, anchor="start"))
 
 
 def chart_description(data: pd.DataFrame, x: str, y: str, title: str, names: list[str]) -> str:
@@ -324,23 +398,25 @@ def status_tab() -> None:
     devices = expected_devices(status)
     for col, device in zip(st.columns(len(devices)), devices):
         with col, st.container(border=True, key=f"node-{device}"):
-            st.subheader(device)
+            location = by_id.at[device, "location"] if device in by_id.index else None
+            st.subheader(f"{device} · {location}" if isinstance(location, str) else device)
             if device not in by_id.index:
                 st.caption("⚪ aguardando instalação · nenhuma leitura recebida")
                 continue
             dev = by_id.loc[device]
             minutes = None if pd.isna(dev["minutes_since"]) else dev["minutes_since"]
-            when = dev["ts_sensor"].tz_convert(LOCAL_TZ).strftime("%d/%m %H:%M")
-            if isinstance(dev["location"], str):
-                st.caption(dev["location"])
+            reading_at = dev["ts_sensor"].tz_convert(LOCAL_TZ)
+            when = reading_at.strftime("%d/%m %H:%M")
             st.caption(f"{STATUS_LABELS[dev['status']]} · último envio {ago(minutes)} · leitura de {when}")
             if dev["status"] == "sem_dados":
                 # Sem envio recente, o último valor não diz como o ar está agora (um sensor parado em zero
                 # apareceria como "Boa"): o valor atual fica vazio e a última leitura, dita histórica, no expansor.
-                with st.container(key=f"hero-{device}"):
+                with st.container(key=f"hero-empty-{device}"):
                     st.metric("PM2,5", "—")
-                with st.expander("Ver a última leitura recebida"):
-                    st.caption(last_reading_text(dev, when))
+                with st.expander("Última leitura recebida"):
+                    st.html(last_reading_block(dev, reading_at))
+                    if dev["quality"] != "ok":
+                        st.caption(flagged_note(dev["quality"]))
             else:
                 # O PM2,5 abre o cartão, grande e com a escala das faixas sob ele; os outros indicadores ficam numa
                 # linha só, menores.
@@ -349,7 +425,7 @@ def status_tab() -> None:
                 zeroed = analytics.is_zero_reading(dev["pm1"], dev["pm25"], dev["pm10"])
                 band, color = (None, "off") if zeroed else air_quality(dev["pm25"]) or (None, "off")
                 with st.container(key=f"hero-{device}"):
-                    st.metric("PM2,5", fmt(dev["pm25"], " µg/m³"), delta=band, delta_color=color, delta_arrow="off",
+                    st.metric("PM2,5", fmt(dev["pm25"], ""), delta=band, delta_color=color, delta_arrow="off",
                               help="Faixas da CETESB para a média de 24 horas; aplicadas à leitura de um minuto, "
                                    "servem só de referência.")
                     if zeroed:
@@ -366,7 +442,7 @@ def status_tab() -> None:
                 if pd.notna(dev["rssi"]):
                     st.caption(f"Sinal Wi-Fi: {fmt(dev['rssi'], ' dBm', 0)}")
                 if dev["quality"] != "ok":
-                    st.caption(f":red[O servidor marcou esta leitura como implausível ({dev['quality']}).]")
+                    st.caption(flagged_note(dev["quality"]))
             if isinstance(dev["firmware"], str):
                 st.caption(f"Firmware: {dev['firmware']}")
 
@@ -374,17 +450,14 @@ def status_tab() -> None:
     recent = load_measurements(now - timedelta(hours=6), now + timedelta(minutes=1), tuple(status["device_id"]))
     tz = ZoneInfo(LOCAL_TZ)
     first, last = (now - timedelta(hours=6)).astimezone(tz), now.astimezone(tz)
-    days = f"{first:%d/%m}" if first.date() == last.date() else f"{first:%d/%m} a {last:%d/%m}"
-    st.markdown("#### PM2,5 nas últimas 6 horas")
+    st.markdown("#### PM2,5 · últimas 6 horas")
+    # Um nó sem leitura na janela some do gráfico: o aviso ao lado da legenda diz que ele não foi esquecido.
+    sent = sorted(set(recent["device_id"])) if not recent.empty else []
+    missing = [d for d in devices if d in by_id.index and d not in sent]
+    st.html(trend_head_html(period_text(first, last), "µg/m³", [(d, sensor_color(d)) for d in sent], missing))
     if not recent.empty:
         st.altair_chart(line_chart(recent.assign(hora=local_naive(recent["ts_sensor"])), "hora", "pm25",
-                                   VARIABLES["pm25"], pd.Timedelta(minutes=5), time_only=True, subtitle=days),
-                        width="stretch")
-    # Um nó sem leitura na janela some do gráfico e da legenda: o aviso diz que ele não foi esquecido.
-    sent = set(recent["device_id"]) if not recent.empty else set()
-    missing = [d for d in devices if d in by_id.index and d not in sent]
-    if missing:
-        st.caption(f"{', '.join(missing)}: sem leituras nas últimas 6 horas.")
+                                   VARIABLES["pm25"], pd.Timedelta(minutes=5), compact=True), width="stretch")
 
     window_start = now - timedelta(hours=24)
     health = load_health(window_start, now).rename(columns=HEALTH_LABELS)
@@ -395,6 +468,8 @@ def status_tab() -> None:
     styled = health.style.format(decimal=",", na_rep="—")
     # Com `subset`: um formatter em dicionário também redefine as colunas que ficam de fora dele.
     styled = styled.format(lambda v: decimal_comma(v * 100, 2) + "%", subset=["%"], na_rep="—")
+    # A maior lacuna segue em minutos no valor (a coluna ordena por ele) e se lê em horas quando passa de uma.
+    styled = styled.format(duration_text, subset=["Maior lacuna"], na_rep="—")
     st.dataframe(
         styled, hide_index=True,
         # Azul neutro: a barra de completude não deve parecer um alerta mesmo com 99%.
@@ -403,8 +478,19 @@ def status_tab() -> None:
                                                                       color="blue", width="small"),
                        "%": st.column_config.Column(width="small")},
     )
-    st.caption("Mensagens perdidas são lacunas de sequência dentro de uma mesma inicialização do nó; "
-               "minutos sem leitura e sem lacuna de sequência indicam falha do sensor, não da rede.")
+    with st.expander("Como interpretar os indicadores"):
+        # Uma definição por coluna da tabela, no vocabulário do glossário.
+        st.caption(
+            "- **Completude:** fração dos minutos esperados que têm leitura; a barra e o percentual mostram o mesmo valor.\n"
+            "- **Maior lacuna:** o maior período seguido sem leitura na janela.\n"
+            "- **Mensagens perdidas:** lacunas de sequência dentro de uma mesma inicialização do nó.\n"
+            "- **Reinícios:** inicializações do nó além da primeira.\n"
+            "- **Duplicatas descartadas:** leituras reenviadas por um nó e ignoradas pelo servidor por já estarem "
+            "guardadas.\n"
+            "- **Leituras marcadas:** leituras que o servidor considerou implausíveis; ficam guardadas, mas não entram "
+            "nas médias horárias por padrão.")
+        st.caption("Minutos sem leitura e sem lacuna de sequência sugerem falha do sensor, e não da rede, mas o painel "
+                   "não confirma a causa.")
 
 
 def series_tab(devices_all: list[str]) -> None:

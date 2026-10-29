@@ -61,7 +61,7 @@ Uma sequência de minutos sem leitura. A maior lacuna da janela é um indicador 
 _Avoid_: buraco, falha
 
 **Mensagem perdida**:
-Salto na sequência das leituras dentro de uma mesma inicialização. Minutos sem leitura e sem salto de sequência indicam falha do sensor, não da rede.
+Salto na sequência das leituras dentro de uma mesma inicialização. Minutos sem leitura e sem salto de sequência sugerem falha do sensor, não da rede; a causa não é confirmada.
 _Avoid_: pacote perdido, leitura perdida
 
 **Duplicata descartada**:

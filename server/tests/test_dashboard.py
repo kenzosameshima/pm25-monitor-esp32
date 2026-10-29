@@ -78,7 +78,7 @@ def test_dashboard_renderiza_as_tres_abas(app_env):
     # tabela de saúde da coleta: o nó 2 teve uma hora sem dados e um reinício
     health = at.dataframe[0].value.set_index("Sensor")
     assert health.loc["no-02", "Reinícios"] == 1
-    assert health.loc["no-02", "Maior lacuna (min)"] >= 59
+    assert health.loc["no-02", "Maior lacuna"] >= 59       # o valor segue em minutos: a coluna ordena pelo tempo
     assert health.loc["no-01", "Mensagens perdidas"] == 0
 
     # previsto × observado: persistência e o modelo gravado, com skill score
@@ -142,9 +142,14 @@ def add_last_reading(path: Path, device: str, hours_ago: float, **values) -> Non
     conn.close()
 
 
+def last_reading_blocks(at) -> list[str]:
+    """Os HTMLs da última leitura de cada nó sem dados."""
+    return [h.proto.body for h in at.get("html") if 'class="aq-last"' in h.proto.body]
+
+
 def test_no_sem_dados_nao_mostra_a_ultima_leitura_como_se_fosse_atual(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
-    add_last_reading(app_env, "no-02", hours_ago=27, pm25=0.0, pm10=0.0)  # o nó parou com a leitura em zero
+    add_last_reading(app_env, "no-02", hours_ago=27, pm25=0.0, pm10=0.0, rssi=-53)  # o nó parou com a leitura em zero
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
 
@@ -155,9 +160,56 @@ def test_no_sem_dados_nao_mostra_a_ultima_leitura_como_se_fosse_atual(app_env):
     assert any("sem dados" in c.value for c in at.caption)
 
     last = at.expander[0]                        # a última leitura segue acessível, dita como histórico
-    assert last.label == "Ver a última leitura recebida"
-    text = " ".join(c.value for c in last.caption)
-    assert "histórico" in text and "0,0 µg/m³" in text
+    assert last.label == "Última leitura recebida"
+    assert len(last.get("html")) == 1 and len(last_reading_blocks(at)) == 1      # no-01 está em operação e não tem
+    block = last_reading_blocks(at)[0]
+    assert "Leitura histórica; não representa a condição atual" in block
+    assert re.search(r'PM2,5 \(µg/m³\)</span><span class="aq-last-value">0,0<', block)       # os valores em grade
+    assert "Sinal Wi-Fi na leitura: -53 dBm" in block                                           # o sinal é o da leitura
+    assert len([c for c in at.caption if c.value.startswith("Sinal Wi-Fi")]) == 1   # o do no-01; o do no-02 não é atual
+
+
+def test_cartao_sem_dados_esconde_o_pm25_vazio_enquanto_a_ultima_leitura_esta_aberta(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert at.metric[-1].label == "PM2,5" and at.metric[-1].value == "—"       # fechado, o "—" segue dizendo que não há leitura
+    # Aberto, o histórico ocupa o lugar do "—", que ficaria repetido sobre os valores. O expansor é um elemento details
+    # que só perde o atributo `open` quando termina de fechar, mas marca o conteúdo como `inert` assim que começa:
+    # a regra olha o conteúdo ainda ativo, e o bloco volta junto com o início do fechamento, não depois dele.
+    hidden = re.search(r"st-key-node-'\]:has\(details\[open\] \[data-testid='stExpanderDetails'\]:not\(\[inert\]\)\)"
+                       r"[^{]*st-key-hero-empty-[^{]*\{([^}]*)\}", page_style(at))
+    assert hidden, "falta a regra que esconde o PM2,5 vazio com o histórico aberto"
+    assert "grid-template-rows: 0fr" in hidden.group(1) and "opacity: 0" in hidden.group(1)      # encolhe e some
+
+
+def test_pm25_vazio_encolhe_e_volta_com_transicao_em_vez_de_cortar(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    css = page_style(at)
+    # O bloco anima a altura (pela fileira da grade, de 1fr a 0fr) e a opacidade nos dois sentidos; sem transição, ele
+    # aparecia de uma vez quando o expansor terminava de encolher.
+    base = re.search(r"stLayoutWrapper'\]:has\(> \[class\*='st-key-hero-empty-'\]\) \{([^}]*)\}", css)
+    assert base, "falta a regra-base do bloco do PM2,5 vazio"
+    assert "grid-template-rows: 1fr" in base.group(1)
+    assert re.search(r"transition:[^;}]*grid-template-rows[^;}]*opacity", base.group(1))
+    # Escondido, o bloco ainda deixaria o espaço entre blocos do cartão: a margem negativa o desconta.
+    hidden = re.search(r"stExpanderDetails'\]:not\(\[inert\]\)\)[^{]*\{([^}]*)\}", css).group(1)
+    assert "margin-bottom: calc(-1 * var(--aq-gap))" in hidden
+    assert "--aq-gap: 1rem" in css and "--aq-gap: .75rem" in wide_screen_rules(at)    # o mesmo espaço do cartão
+    assert "prefers-reduced-motion: reduce" in css                                   # sem movimento para quem pede
+
+
+def test_ultima_leitura_marcada_como_implausivel_diz_isso_dentro_do_expansor(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27, quality="umid_fora_faixa", humidity=120.0)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    last = at.expander[0]
+    assert any("implausível (umid_fora_faixa)" in c.value for c in last.caption)
 
 
 def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env):
@@ -165,7 +217,7 @@ def test_no_em_operacao_continua_com_todos_os_indicadores_e_sem_expansor(app_env
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     assert len(at.metric) == 4
-    assert len(at.expander) == 0
+    assert [e.label for e in at.expander] == ["Como interpretar os indicadores"]   # o cartão não tem expansor próprio
 
 
 def aq_scales(at) -> list[str]:
@@ -312,23 +364,91 @@ def test_aviso_das_horas_suspeitas_nao_afirma_o_que_o_ar_faz_e_leva_os_criterios
     assert "falha do sensor" in text and "ar muito limpo" in text and "CETESB" in text  # a causa não está decidida
 
 
-def test_grafico_de_seis_horas_avisa_do_no_que_nao_enviou_nada(app_env):
+def trend_head(at) -> str:
+    """O HTML da linha acima do gráfico de 6 horas, com o período, a legenda e os avisos dos nós calados."""
+    return next(h.proto.body for h in at.get("html") if 'class="aq-trend-head"' in h.proto.body)
+
+
+def test_grafico_de_seis_horas_tem_titulo_curto_e_uma_linha_so_com_periodo_e_legenda(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert "#### PM2,5 · últimas 6 horas" in [m.value for m in at.markdown]
+    head = trend_head(at)
+    assert re.search(r"\d{2}(/\d{2}|–\d{2}/\d{2}| a \d{2}/\d{2}) · µg/m³", head)    # o período e a unidade
+    assert "no-01" in head and "background:#22b8cf" in head                            # a legenda, com a cor do nó
+    assert "sem leituras" not in head
+
+
+def test_grafico_de_seis_horas_nao_repete_titulo_e_legenda_dentro_do_grafico(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    spec = json.loads(at.get("vega_lite_chart")[0].proto.spec)
+    assert "title" not in spec                       # o título e o período já vêm acima do gráfico
+    colors = [layer["encoding"]["color"] for layer in spec.get("layer", [spec]) if "color" in layer.get("encoding", {})]
+    assert colors and all(c.get("legend") is None for c in colors)     # e a legenda também
+
+
+def status_chart(at) -> dict:
+    """A especificação do gráfico de 6 horas, o primeiro da página."""
+    return json.loads(at.get("vega_lite_chart")[0].proto.spec)
+
+
+def test_eixo_do_grafico_de_seis_horas_marca_de_meia_em_meia_hora(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    spec = status_chart(at)
+    axes = [layer["encoding"]["x"]["axis"] for layer in spec.get("layer", [spec]) if "x" in layer.get("encoding", {})]
+    # Doze marcas em 6 horas dão uma a cada 30 minutos (eram 24, de 15 em 15). Um intervalo explícito no eixo
+    # (`{"interval": "minute", "step": 30}`) deixa o gráfico em branco no Streamlit, por isso a contagem é numérica.
+    assert any(axis.get("tickCount") == 12 for axis in axes)
+
+
+def test_linha_do_grafico_de_seis_horas_e_fina_e_so_mostra_o_ponto_sob_o_mouse(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    spec = status_chart(at)
+    line = next(layer["mark"] for layer in spec["layer"] if layer["mark"]["type"] == "line")
+    assert not line.get("point")                                 # sem um ponto por leitura (eram 360)
+    assert 1.75 <= line["strokeWidth"] <= 2                      # fina, mas não a ponto de sumir
+    selections = [p["select"] for p in spec["params"]]           # o Altair junta as seleções no topo da especificação
+    assert any(s["type"] == "point" and s["nearest"] and s["on"] == "pointerover" for s in selections)  # o ponto sob o mouse
+
+
+def test_leitura_isolada_no_grafico_de_seis_horas_continua_com_o_seu_ponto(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=0.02)           # uma leitura só, sem vizinhas para ligar a uma linha
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    chart = at.get("vega_lite_chart")[0].proto            # o Streamlit manda os dados à parte da especificação
+    rows = pa.ipc.open_stream(chart.datasets[0].data.data).read_all().to_pandas()
+    assert set(rows.loc[rows["isolado"], "device_id"]) == {"no-02"}   # as 180 leituras seguidas do no-01 formam uma linha
+    layers = json.loads(chart.spec)["layer"]
+    assert any("isolado" in json.dumps(layer.get("transform", [])) for layer in layers)    # e só as isoladas têm ponto fixo
+
+
+def test_cabecalho_do_grafico_explica_o_no_que_nao_enviou_nada(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     add_last_reading(app_env, "no-02", hours_ago=27)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert [c.value for c in at.caption if "sem leituras nas últimas" in c.value] == [
-        "no-02: sem leituras nas últimas 6 horas."]
+    head = trend_head(at)
+    assert "no-02 · sem leituras neste período" in head and "no-01 · sem" not in head
+    assert not any("sem leituras nas últimas" in c.value for c in at.caption)   # o aviso saiu de baixo do gráfico
 
 
-def test_grafico_de_seis_horas_nao_avisa_quando_todos_os_nos_enviaram(app_env):
+def test_cabecalho_do_grafico_nao_avisa_quando_todos_os_nos_enviaram(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert not any("sem leituras nas últimas" in c.value for c in at.caption)
+    head = trend_head(at)
+    assert "sem leituras" not in head and "no-01" in head and "no-02" in head
 
 
-def test_grafico_de_seis_horas_avisa_quando_nenhum_no_enviou(app_env):
+def test_cabecalho_do_grafico_avisa_quando_nenhum_no_enviou(app_env):
     conn = db.connect(str(app_env))
     db.init_db(conn)
     conn.close()
@@ -336,7 +456,7 @@ def test_grafico_de_seis_horas_avisa_quando_nenhum_no_enviou(app_env):
     add_last_reading(app_env, "no-02", hours_ago=27)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
-    assert any(c.value == "no-01, no-02: sem leituras nas últimas 6 horas." for c in at.caption)
+    assert "no-01, no-02 · sem leituras neste período" in trend_head(at)
 
 
 def test_aviso_das_horas_suspeitas_separa_a_contagem_por_no(app_env):
@@ -404,7 +524,7 @@ def test_no_em_operacao_com_leitura_zerada_fica_sem_faixa_e_diz_por_que(app_env)
     assert not at.exception, at.exception
 
     pm25 = [m for m in at.metric if m.label == "PM2,5"]
-    assert pm25[1].value == "0,0 µg/m³"          # o valor segue visível: é o que o nó enviou
+    assert pm25[1].value == "0,0"                # o valor segue visível: é o que o nó enviou
     assert not pm25[1].delta                     # mas sem o selo "Boa", que um sensor parado em zero não merece
     assert len(aq_scales(at)) == 1               # a escala é só do no-01
     notes = [c.value for c in at.caption if "Leitura zerada" in c.value]
@@ -465,6 +585,52 @@ def test_tabela_de_saude_escreve_os_numeros_com_virgula_e_mantem_a_barra(app_env
     assert not has_decimal_point(text), text
 
 
+def test_tabela_de_saude_escreve_a_maior_lacuna_em_horas_e_minutos(app_env):
+    populate(app_env)                                            # o no-02 ficou uma hora sem dados
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert "Maior lacuna" in at.dataframe[0].value.columns and "Maior lacuna (min)" not in at.dataframe[0].value.columns
+    text = shown(at.dataframe[0]).set_index("Sensor")
+    assert text.loc["no-02", "Maior lacuna"] == "1 h"
+    assert re.fullmatch(r"\d+ min", text.loc["no-01", "Maior lacuna"]), text.loc["no-01", "Maior lacuna"]
+
+
+def test_no_que_nao_mandou_nada_em_24_horas_tem_a_maior_lacuna_de_24_h(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=27)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    text = shown(at.dataframe[0]).set_index("Sensor")
+    assert text.loc["no-02", "Maior lacuna"] == "24 h"           # em vez de 1440 (min)
+
+
+def test_explicacao_da_tabela_de_saude_vai_num_expansor_e_nao_afirma_a_causa(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    box = [e for e in at.expander if e.label == "Como interpretar os indicadores"]
+    assert len(box) == 1
+    text = " ".join(c.value for c in box[0].caption)
+    assert "lacunas de sequência" in text                       # o que são as mensagens perdidas
+    assert "sugerem falha do sensor" in text and "não confirma a causa" in text    # uma hipótese, não uma causa
+    assert "indicam falha do sensor" not in text
+    inside = {c.value for c in box[0].caption}
+    assert not any("lacunas de sequência" in c.value for c in at.caption if c.value not in inside)   # nada solto sob a tabela
+
+
+def test_explicacao_da_tabela_de_saude_define_cada_indicador_da_tabela(app_env):
+    populate(app_env)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    box = next(e for e in at.expander if e.label == "Como interpretar os indicadores")
+    text = " ".join(c.value for c in box.caption)
+    indicators = [c for c in at.dataframe[0].value.columns if c not in ("Sensor", "%")]   # "%" repete a completude
+    assert len(indicators) == 6
+    for name in indicators:
+        assert f"**{name}:**" in text, f"a tabela tem a coluna {name} e a explicação não a define"
+    assert "minutos esperados" in text and "implausíveis" in text        # o que são a completude e as leituras marcadas
+
+
 def test_tabela_de_previsao_escreve_os_numeros_com_virgula(app_env):
     populate(app_env)
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
@@ -473,3 +639,98 @@ def test_tabela_de_previsao_escreve_os_numeros_com_virgula(app_env):
     for column in ("MAE (µg/m³)", "RMSE (µg/m³)", "Skill score"):
         assert text[column].str.fullmatch(r"-?\d+,\d\d").all(), (column, list(text[column]))
     assert not has_decimal_point(text), text
+
+
+def page_style(at) -> str:
+    return next(h.proto.body for h in at.get("html") if "stMainBlockContainer" in h.proto.body)
+
+
+def wide_screen_rules(at) -> str:
+    """As regras que valem a partir de 640 px, a largura em que o Streamlit deixa de empilhar as colunas."""
+    block = re.search(r"@media \(min-width: 640px\) \{(.*?)\n\}", page_style(at), re.S)
+    assert block, "faltam as regras do cabeçalho para telas largas"
+    return block.group(1)
+
+
+def rem_of(rules: str, selector: str, prop: str) -> float:
+    match = re.search(rf"{re.escape(selector)}\s*\{{[^}}]*?{prop}:\s*([\d.]+)rem", rules)
+    assert match, f"{selector} sem {prop} em rem"
+    return float(match.group(1))
+
+
+def test_estilo_da_pagina_nao_tem_sinal_de_menor_dentro_do_css(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    css = re.fullmatch(r"<style>(.*)</style>", page_style(at), re.S)
+    assert css, "o estilo precisa ser um bloco <style> só"
+    # O sanitizador do st.html joga fora o <style> inteiro se achar um "<" dentro dele, até num comentário: a página
+    # fica sem nenhum dos estilos, e nenhum teste que leia o texto do CSS percebe.
+    assert "<" not in css.group(1)
+
+
+def test_cabecalho_em_tela_larga_gasta_menos_altura(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    rules = wide_screen_rules(at)
+    assert 1.5 <= rem_of(rules, "[data-testid='stMainBlockContainer']", "padding-top") <= 2.0   # 24 a 32 px (era 56)
+    assert 1.625 <= rem_of(rules, "h1", "font-size") <= 1.75                                   # 26 a 28 px (era 44)
+    assert rem_of(rules, "h1", "padding-bottom") <= 0.5                                         # o título junto das abas
+    assert rem_of(rules, "[role='tabpanel']", "padding-top") <= 0.5                             # e as abas, do conteúdo
+    # A barra do Streamlit fica por cima do conteúdo e tem fundo sólido: com a margem menor ela esconderia o título.
+    assert re.search(r"\[data-testid='stHeader'\]\s*\{[^}]*background:\s*transparent", rules)
+
+
+def test_cabecalho_no_celular_segue_como_esta(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    # Fora da regra de tela larga a margem de cima fica em 3,5rem: no celular a barra do Streamlit cobriria uma menor.
+    assert "padding-top: 3.5rem" in page_style(at).split("@media")[0]
+
+
+def set_location(path: Path, device: str, location: str) -> None:
+    conn = db.connect(str(path))
+    db.set_location(conn, device, location)
+    conn.close()
+
+
+def test_cartao_junta_nome_e_local_no_titulo(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 2)))
+    set_location(app_env, "no-01", "Osasco")
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert [s.value for s in at.subheader][:2] == ["no-01 · Osasco", "no-02"]   # sem local, só o nome
+    assert "Osasco" not in [c.value for c in at.caption]                          # o local não ganha uma linha só dele
+
+
+def test_unidade_do_pm25_vai_menor_ao_lado_do_valor(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    pm25 = [m for m in at.metric if m.label == "PM2,5"][0]
+    assert re.fullmatch(r"\d+,\d", pm25.value), pm25.value        # o valor é só o número...
+    # ...e a unidade é escrita pelo estilo, menor e com peso normal, só onde há uma leitura (não no "—" do nó sem dados).
+    unit = re.search(r"st-key-hero-'\]:not\(\[class\*='st-key-hero-empty-'\]\)[^{]*::after\s*\{([^}]*)\}", page_style(at))
+    assert unit, "falta a regra que escreve a unidade ao lado do valor"
+    assert 'content: " µg/m³"' in unit.group(1) and "font-weight: 400" in unit.group(1)
+
+
+def test_cartao_do_no_em_tela_larga_tem_blocos_mais_juntos(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    rules = wide_screen_rules(at)
+    node = "[data-testid='stVerticalBlock'][class*='st-key-node-']"
+    assert rem_of(rules, node, "gap") <= 0.75                                   # 12 px entre os grupos (eram 16)
+    assert rem_of(rules, node, "padding") <= 0.75                               # e 12 px de margem interna
+    assert rem_of(rules, "[data-testid='stHeading'] h3", "font-size") <= 1.5   # o nome do nó não domina o cartão
+    # O selo da faixa fica ao lado do valor, não numa linha só dele: a grade põe o rótulo em cima e os dois embaixo.
+    grid = re.search(r"\[data-testid='stMetric'\] > div \{([^}]*)\}", rules)
+    assert grid and "display: grid" in grid.group(1), "falta a grade do PM2,5 com o selo da faixa ao lado do valor"
+    # A escala junto das métricas. O seletor leva o cartão: a regra-base da escala vem depois no CSS e venceria um empate.
+    assert rem_of(rules, "[class*='st-key-hero-'] .aq-scale", "margin-bottom") <= 0.5
+    # O Streamlit tira 16 px da altura do título para compensar o espaço que ele mesmo põe embaixo; sem esse espaço, a
+    # compensação encurtaria a caixa do título e o texto cairia sobre a linha do estado.
+    assert re.search(r"\[data-testid='stMarkdownContainer'\]\s*\{[^}]*margin-bottom:\s*0[;} ]", rules)
