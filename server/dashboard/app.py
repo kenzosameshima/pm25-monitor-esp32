@@ -273,13 +273,19 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
                domain: list[str] | None = None, compact: bool = False) -> alt.Chart:
     """Linhas por nó, uma cor fixa para cada. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
     fixa o eixo do tempo. `compact` é o gráfico das últimas 6 horas: só a hora nos rótulos e sem título nem legenda,
-    que a página escreve numa linha acima."""
+    que a página escreve numa linha acima. Ele leva uma linha fina de 30 em 30 minutos no eixo e mostra o ponto
+    só sob o mouse (o do tooltip), menos os das leituras isoladas, que sem vizinhas não formariam linha."""
     data = with_segments(data[[x, y, color]].dropna(), x, color, max_gap)
     data = data.assign(valor=data[y].map(decimal_comma))      # o tooltip do Vega escreveria o ponto decimal
     names = sorted(data[color].unique())
     sensors = color == "device_id"
-    chart = alt.Chart(data).mark_line(point=len(data) <= 400).encode(
-        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%H:%M" if compact else "%d/%m %H:%M"),
+    if compact:                                               # uma leitura sem vizinha dentro do intervalo não forma linha
+        data = data.assign(isolado=data.groupby("segmento")[x].transform("size") == 1)
+    # Doze marcas em 6 horas: uma a cada 30 minutos. O intervalo explícito (`TimeIntervalStep`) deixa o gráfico em
+    # branco no Streamlit; a contagem numérica não.
+    ticks = 12 if compact else alt.Undefined
+    base = alt.Chart(data).encode(
+        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%H:%M" if compact else "%d/%m %H:%M", tickCount=ticks),
                 scale=alt.Scale(domain=domain) if domain else alt.Undefined),
         y=alt.Y(f"{y}:Q", title=None, scale=alt.Scale(zero=False),
                 axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')", minExtent=Y_AXIS_WIDTH)),
@@ -293,6 +299,15 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
             alt.Tooltip("valor:N", title=title),
         ],
     )
+    if compact:
+        hover = alt.selection_point(name="hover", fields=[x], nearest=True, on="pointerover", clear="pointerout",
+                                    empty=False)
+        dots = base.mark_point(filled=True, size=36)
+        chart = (base.mark_line(strokeWidth=2)
+                 + dots.encode(opacity=alt.condition(hover, alt.value(1), alt.value(0))).add_params(hover)
+                 + dots.transform_filter("datum.isolado"))
+    else:
+        chart = base.mark_line(point=len(data) <= 400)
     if rule is not None:
         chart = chart + alt.Chart(pd.DataFrame({"limite": [rule]})).mark_rule(
             strokeDash=[4, 4], color="gray").encode(y="limite:Q")

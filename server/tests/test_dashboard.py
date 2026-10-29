@@ -338,6 +338,46 @@ def test_grafico_de_seis_horas_nao_repete_titulo_e_legenda_dentro_do_grafico(app
     assert colors and all(c.get("legend") is None for c in colors)     # e a legenda também
 
 
+def status_chart(at) -> dict:
+    """A especificação do gráfico de 6 horas, o primeiro da página."""
+    return json.loads(at.get("vega_lite_chart")[0].proto.spec)
+
+
+def test_eixo_do_grafico_de_seis_horas_marca_de_meia_em_meia_hora(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    spec = status_chart(at)
+    axes = [layer["encoding"]["x"]["axis"] for layer in spec.get("layer", [spec]) if "x" in layer.get("encoding", {})]
+    # Doze marcas em 6 horas dão uma a cada 30 minutos (eram 24, de 15 em 15). Um intervalo explícito no eixo
+    # (`{"interval": "minute", "step": 30}`) deixa o gráfico em branco no Streamlit, por isso a contagem é numérica.
+    assert any(axis.get("tickCount") == 12 for axis in axes)
+
+
+def test_linha_do_grafico_de_seis_horas_e_fina_e_so_mostra_o_ponto_sob_o_mouse(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    spec = status_chart(at)
+    line = next(layer["mark"] for layer in spec["layer"] if layer["mark"]["type"] == "line")
+    assert not line.get("point")                                 # sem um ponto por leitura (eram 360)
+    assert 1.75 <= line["strokeWidth"] <= 2                      # fina, mas não a ponto de sumir
+    selections = [p["select"] for p in spec["params"]]           # o Altair junta as seleções no topo da especificação
+    assert any(s["type"] == "point" and s["nearest"] and s["on"] == "pointerover" for s in selections)  # o ponto sob o mouse
+
+
+def test_leitura_isolada_no_grafico_de_seis_horas_continua_com_o_seu_ponto(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_last_reading(app_env, "no-02", hours_ago=0.02)           # uma leitura só, sem vizinhas para ligar a uma linha
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    chart = at.get("vega_lite_chart")[0].proto            # o Streamlit manda os dados à parte da especificação
+    rows = pa.ipc.open_stream(chart.datasets[0].data.data).read_all().to_pandas()
+    assert set(rows.loc[rows["isolado"], "device_id"]) == {"no-02"}   # as 180 leituras seguidas do no-01 formam uma linha
+    layers = json.loads(chart.spec)["layer"]
+    assert any("isolado" in json.dumps(layer.get("transform", [])) for layer in layers)    # e só as isoladas têm ponto fixo
+
+
 def test_cabecalho_do_grafico_explica_o_no_que_nao_enviou_nada(app_env):
     populate(app_env, hours=3, devices=(("no-01", 1),))
     add_last_reading(app_env, "no-02", hours_ago=27)
