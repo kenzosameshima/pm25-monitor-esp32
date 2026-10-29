@@ -2,8 +2,9 @@
 
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pyarrow as pa
 import pytest
@@ -576,6 +577,78 @@ def test_expansor_diz_que_o_branco_da_faixa_tambem_e_antes_da_primeira_leitura_e
     # A faixa só pinta as horas sem média, e o dashboard só conta as horas entre a primeira e a última leitura de cada
     # sensor: o branco nem sempre é hora válida, e a legenda curta não pode prometer isso sem a exceção por perto.
     assert "em branco" in text and "antes da primeira leitura" in text and "hora em andamento" in text
+
+
+def series_axes(at) -> list[dict]:
+    """O eixo do tempo dos gráficos da aba Séries: PM2,5, a faixa das horas sem média e a umidade, na ordem da página."""
+    specs = [json.loads(c.proto.spec) for c in at.get("vega_lite_chart")][1:]            # o primeiro é o de 6 horas
+    mine = [s for s in specs if "por sensor" in s["description"] or s["description"].startswith("Faixa das horas")]
+    return [next(layer["encoding"]["x"]["axis"] for layer in spec.get("layer", [spec])
+                 if "axis" in layer.get("encoding", {}).get("x", {})) for spec in mine]
+
+
+def tick_dates(axis: dict) -> list[date]:
+    return [date(v["year"], v["month"], v["date"]) for v in axis["values"]]
+
+
+def local_today() -> date:
+    return datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+
+
+def test_eixo_dos_graficos_de_sete_dias_marca_so_a_data_de_cada_dia(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    axes = series_axes(at)
+    assert len(axes) == 3                                        # PM2,5, a faixa das horas sem média e a umidade
+    week = [local_today() - timedelta(days=n) for n in range(6, -1, -1)]
+    for axis in axes:
+        assert axis["format"] == "%d/%m"                         # sem "00:00" repetido em cada marca
+        assert tick_dates(axis) == week                          # uma por dia, as mesmas nos três painéis
+
+
+def test_a_hora_exata_continua_no_balao_do_grafico_que_perdeu_a_hora_no_eixo(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    spec = next(json.loads(c.proto.spec) for c in at.get("vega_lite_chart")[1:] if "por sensor" in c.proto.spec)
+    tips = next(layer["encoding"]["tooltip"] for layer in spec.get("layer", [spec]) if "tooltip" in layer["encoding"])
+    assert any(t["title"] == "Horário" and t["format"] == "%d/%m %H:%M" for t in tips)
+
+
+def test_periodo_de_30_dias_marca_uma_data_por_semana(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.segmented_control[0].set_value("30 dias").run()
+    assert not at.exception, at.exception
+    for axis in series_axes(at):
+        dates = tick_dates(axis)
+        assert dates[0] == local_today() - timedelta(days=29) and len(dates) == 5
+        assert {(b - a).days for a, b in zip(dates, dates[1:])} == {7}      # 30 marcas diárias não caberiam
+
+
+def test_periodo_de_um_dia_e_pouco_para_marcar_so_a_data_e_mantem_a_hora_nos_rotulos(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.segmented_control[0].set_value("Personalizado").run()
+    at.date_input[0].set_value((local_today() - timedelta(days=1), local_today())).run()
+    assert not at.exception, at.exception
+    axes = series_axes(at)
+    assert axes and all("%H:%M" in axis["format"] and "values" not in axis for axis in axes)
+
+
+def test_um_minuto_com_dias_de_dados_tambem_marca_so_a_data(app_env):
+    populate(app_env, hours=72, devices=(("no-01", 1),))
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.segmented_control[1].set_value("1 minuto").run()
+    assert not at.exception, at.exception
+    axes = series_axes(at)
+    assert len(axes) == 2                                        # PM2,5 e umidade: a faixa não existe nessa resolução
+    for axis in axes:
+        dates = tick_dates(axis)
+        assert axis["format"] == "%d/%m" and len(dates) >= 2
+        assert {(b - a).days for a, b in zip(dates, dates[1:])} == {1}
 
 
 def test_explicacao_da_umidade_fica_logo_abaixo_do_grafico_de_umidade(app_env):

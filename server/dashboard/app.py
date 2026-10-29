@@ -23,6 +23,7 @@ from app.config import get_settings  # noqa: E402
 from dashboard.duration import duration_text  # noqa: E402
 from dashboard.last_reading import last_reading_html  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
+from dashboard.time_axis import day_ticks  # noqa: E402
 from dashboard.trend import period_text, trend_head_html  # noqa: E402
 
 LOCAL_TZ = "America/Sao_Paulo"
@@ -306,6 +307,15 @@ def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta)
     return d
 
 
+def time_axis(first: datetime, last: datetime) -> alt.Axis:
+    """O eixo do tempo de um gráfico de vários dias: a data de cada dia, na meia-noite, e nada mais; a hora exata fica no
+    balão do ponto. Num período curto, em que a data sozinha marcaria só um ou dois dias, o rótulo leva data e hora."""
+    ticks = [] if pd.isna(first) or pd.isna(last) else day_ticks(first, last)
+    if not ticks:
+        return alt.Axis(format="%d/%m %H:%M")
+    return alt.Axis(format="%d/%m", values=[alt.DateTime(year=t.year, month=t.month, date=t.day) for t in ticks])
+
+
 def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timedelta,
                rule: float | None = None, rule_label: str | None = None, color: str = "device_id",
                legend: str = "Sensor", domain: list[str] | None = None, compact: bool = False,
@@ -321,11 +331,15 @@ def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timed
     sensors = color == "device_id"
     if compact:                                               # uma leitura sem vizinha a menos de `max_gap` não forma linha
         data = data.assign(isolado=data.groupby("segmento")[x].transform("size") == 1)
-    # Doze marcas em 6 horas: uma a cada 30 minutos. O intervalo explícito (`TimeIntervalStep`) deixa o gráfico em
-    # branco no Streamlit; a contagem numérica não.
-    ticks = 12 if compact else alt.Undefined
+    if compact:
+        # Doze marcas em 6 horas: uma a cada 30 minutos. O intervalo explícito (`TimeIntervalStep`) deixa o gráfico em
+        # branco no Streamlit; a contagem numérica não.
+        axis = alt.Axis(format="%H:%M", tickCount=12)
+    else:
+        first, last = map(datetime.fromisoformat, domain) if domain else (data[x].min(), data[x].max())
+        axis = time_axis(first, last)
     base = alt.Chart(data).encode(
-        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%H:%M" if compact else "%d/%m %H:%M", tickCount=ticks),
+        x=alt.X(f"{x}:T", title=None, axis=axis,
                 scale=alt.Scale(domain=domain) if domain else alt.Undefined),
         y=alt.Y(f"{y}:Q", title=None, scale=alt.Scale(zero=False),
                 axis=alt.Axis(labelExpr="replace(datum.label, '.', ',')", minExtent=Y_AXIS_WIDTH)),
@@ -407,7 +421,8 @@ def exclusion_strip(exclusions: pd.DataFrame, domain: list[str]) -> alt.Chart:
     hours = exclusions.assign(hora_local=local_naive(exclusions["hora"]))
     hours["fim_local"] = hours["hora_local"] + pd.Timedelta(hours=1)
     return alt.Chart(hours).mark_rect().encode(
-        x=alt.X("hora_local:T", title=None, scale=alt.Scale(domain=domain), axis=alt.Axis(format="%d/%m %H:%M")),
+        x=alt.X("hora_local:T", title=None, scale=alt.Scale(domain=domain),
+                axis=time_axis(*map(datetime.fromisoformat, domain))),
         x2="fim_local:T",
         y=alt.Y("device_id:N", title=None, axis=alt.Axis(minExtent=Y_AXIS_WIDTH)),
         color=alt.Color("causa:N", title=None, legend=None,
