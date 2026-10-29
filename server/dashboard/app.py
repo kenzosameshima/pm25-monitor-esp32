@@ -292,8 +292,9 @@ def with_segments(data: pd.DataFrame, x: str, color: str, max_gap: pd.Timedelta)
 
 
 def line_chart(data: pd.DataFrame, x: str, y: str, title: str, max_gap: pd.Timedelta,
-               rule: float | None = None, rule_label: str | None = None, color: str = "device_id", legend: str = "Sensor",
-               domain: list[str] | None = None, compact: bool = False, headless: bool = False) -> alt.Chart:
+               rule: float | None = None, rule_label: str | None = None, color: str = "device_id",
+               legend: str = "Sensor", domain: list[str] | None = None, compact: bool = False,
+               headless: bool = False) -> alt.Chart:
     """Linhas por nó, uma cor fixa para cada. O título fica acima, na horizontal; `domain` (datas ISO sem fuso)
     fixa o eixo do tempo. `headless` tira o título e a legenda de dentro do gráfico: a página os escreve numa linha
     acima e a área das linhas fica do mesmo tamanho. `compact` é o gráfico das últimas 6 horas: só a hora nos
@@ -516,22 +517,25 @@ def status_tab() -> None:
 def series_tab(devices_all: list[str]) -> None:
     today = datetime.now(ZoneInfo(LOCAL_TZ)).date()
     # Duas linhas: o que olhar (sensores e variáveis, cada um em metade da largura) e o recorte dos dados (período,
-    # resolução e leituras marcadas), alinhados pela base para a caixa de datas do período personalizado não os soltar.
+    # resolução e leituras marcadas, mais a exportação do que eles mostram). A segunda é uma linha que dá a cada controle
+    # o que o conteúdo pede e quebra se não couber: em colunas de largura fixa, o botão "1 minuto" e o rótulo do filtro
+    # apareciam cortados numa janela de 1024 px. Alinhada pela base, a caixa de datas do período personalizado não solta
+    # os demais controles.
     c1, c2 = st.columns(2)
     devices = c1.multiselect("Sensores", devices_all, default=devices_all)
     variables = c2.multiselect("Variáveis", list(VARIABLES), default=["pm25", "humidity"], format_func=VARIABLES.get)
-    c3, c4, c5 = st.columns([3, 2, 2], vertical_alignment="bottom")
-    choice = c3.segmented_control("Período", [*PERIOD_PRESETS, "Personalizado"], default="7 dias") or "7 dias"
+    row = st.container(horizontal=True, vertical_alignment="bottom", gap="medium")
+    choice = row.segmented_control("Período", [*PERIOD_PRESETS, "Personalizado"], default="7 dias") or "7 dias"
     if choice == "Personalizado":
-        period = c3.date_input("Datas", value=(today - timedelta(days=6), today), max_value=today,
-                               format="DD/MM/YYYY")
+        period = row.date_input("Datas", value=(today - timedelta(days=6), today), max_value=today,
+                                format="DD/MM/YYYY", width=260)
     else:
         period = (today - timedelta(days=PERIOD_PRESETS[choice] - 1), today)
-    resolution = (c4.segmented_control("Resolução", ["Média horária", "1 minuto"], default="Média horária")
+    resolution = (row.segmented_control("Resolução", ["Média horária", "1 minuto"], default="Média horária")
                   or "Média horária")
-    only_ok = c5.checkbox("Ocultar leituras marcadas", value=True,
-                          help="Leituras que o servidor marcou como implausíveis: valor fora da faixa física ou horário "
-                               "impossível. Ficam guardadas; desmarque para incluí-las nos gráficos.")
+    only_ok = row.checkbox("Ocultar leituras marcadas", value=True,
+                           help="Leituras que o servidor marcou como implausíveis: valor fora da faixa física ou horário "
+                                "impossível. Ficam guardadas; desmarque para incluí-las nos gráficos.")
 
     if not isinstance(period, tuple) or len(period) != 2:
         st.info("Escolha a data inicial e a final.")
@@ -585,14 +589,16 @@ def series_tab(devices_all: list[str]) -> None:
         st.html(trend_head_html(VARIABLES[var], [(n, sensor_color(n)) for n in nodes]))
         st.altair_chart(line_chart(data, "hora_local", var, VARIABLES[var], max_gap, rule=rule, domain=domain,
                                    rule_label=f"{rule:.0f}%" if rule else None, headless=True), width="stretch")
-        if var == "humidity" and data["humidity"].notna().any():     # a explicação fica junto do gráfico a que se refere
+        if var == "humidity" and data["humidity"].notna().any():    # a explicação fica junto do gráfico a que se refere
             st.caption(humidity_note(data))
         if i == 0 and strip is not None:      # a faixa vale para todas as variáveis: as horas sem média são as mesmas
             st.altair_chart(strip, width="stretch")
 
+    # O botão entra no fim da linha dos filtros, lá em cima, e só existe quando há dados a exportar.
     export = data.drop(columns=["hora_local"])
-    st.download_button("Baixar dados (CSV)", export.to_csv(index=False).encode("utf-8"),
-                       file_name=f"pm25_{period[0]}_{period[1]}.csv", mime="text/csv")
+    row.download_button("Exportar CSV", export.to_csv(index=False).encode("utf-8"),
+                        file_name=f"pm25_{period[0]}_{period[1]}.csv", mime="text/csv",
+                        help="Baixa os dados dos gráficos, no período e na resolução escolhidos.")
 
 
 def evaluation_note(table: pd.DataFrame, metrics: pd.DataFrame) -> str:

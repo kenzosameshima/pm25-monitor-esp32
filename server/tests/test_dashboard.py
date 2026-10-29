@@ -274,17 +274,21 @@ def test_numeros_do_painel_usam_virgula_decimal(app_env):
     assert len(stale) == 1 and re.search(r"último envio há \d+,\d h", stale[0]), stale
 
 
+def control_labels(el) -> list[str]:
+    """Os rótulos dos controles de um elemento da aba, na ordem em que aparecem, dentro de colunas ou não."""
+    if el.type in ("multiselect", "button_group", "checkbox", "download_button", "date_input"):
+        return [el.label]
+    return [label for child in getattr(el, "children", {}).values() for label in control_labels(child)]
+
+
 def series_rows(at) -> list[list[str]]:
-    """Os rótulos dos controles do topo da aba Séries, uma lista por linha (as colunas de uma linha ficam juntas)."""
+    """Os rótulos dos controles do topo da aba Séries, uma lista por linha."""
     rows = []
     for key in sorted(at.tabs[1].children):
         el = at.tabs[1].children[key]
-        if el.type == "flex_container":
-            rows.append([c.label for column in el.children.values() for c in column.children.values()])
-        elif el.type in ("multiselect", "button_group", "checkbox", "download_button"):
-            rows.append([el.label])
-        else:
+        if el.type != "flex_container":
             break                                   # o primeiro aviso ou gráfico encerra os controles
+        rows.append(control_labels(el))
     return rows
 
 
@@ -296,6 +300,33 @@ def test_filtros_da_aba_series_ficam_em_duas_linhas(app_env):
     assert rows[0] == ["Sensores", "Variáveis"]                                 # quem e o quê, lado a lado
     assert rows[1][:3] == ["Período", "Resolução", "Ocultar leituras marcadas"]   # o recorte dos dados, em outra linha
     assert len(rows) == 2
+
+
+def test_segunda_linha_de_filtros_quebra_em_vez_de_cortar_os_controles(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    row = at.tabs[1].children[sorted(at.tabs[1].children)[1]]
+    # Cada controle ocupa o que o seu conteúdo pede e, se a linha não couber, o último desce: com colunas de largura
+    # fixa, o botão "1 minuto" e o rótulo do filtro apareciam cortados numa janela de 1024 px.
+    assert "direction: HORIZONTAL" in str(row.proto) and "wrap: true" in str(row.proto)
+    assert not any(child.type == "column" for child in row.children.values())      # os controles, sem colunas de largura fixa
+
+
+def test_exportacao_fica_na_linha_dos_filtros_e_nao_depois_dos_graficos(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert series_rows(at)[1][-1] == "Exportar CSV"                  # perto dos filtros que definem o que se exporta
+    assert len(at.get("download_button")) == 1                       # e só ali: o botão do fim da página saiu
+
+
+def test_sem_dados_para_mostrar_nao_ha_o_que_exportar(app_env):
+    populate(app_env, hours=3)
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    at.multiselect[0].set_value([]).run()                            # nenhum sensor escolhido
+    assert not at.exception, at.exception
+    assert len(at.get("download_button")) == 0
 
 
 def test_resolucao_vira_botoes_e_sem_escolha_fica_a_media_horaria(app_env):
