@@ -197,6 +197,46 @@ def test_sem_horas_devolve_as_colunas_esperadas(conn):
     assert ex.empty and list(ex.columns) == analytics.EXCLUSION_COLUMNS
 
 
+def states_of(states: pd.DataFrame, device: str = "no-01") -> list[tuple[int, str, int]]:
+    """(hora, estado, minutos com leitura) de um nó, com a hora contada em horas a partir de NOW."""
+    rows = states[states["device_id"] == device]
+    return [(int((h - pd.Timestamp(NOW)).total_seconds() // 3600), s, int(n))
+            for h, s, n in zip(rows["hora"], rows["estado"], rows["n"])]
+
+
+def test_cada_hora_tem_um_estado_e_os_minutos_com_leitura(conn):
+    states = analytics.hour_states(mixed_hours(conn))
+    assert list(states.columns) == analytics.STATE_COLUMNS
+    assert states_of(states) == [(-5, "válida", 60), (-4, "sem leituras", 0), (-3, "poucas leituras", 30),
+                                 (-2, "suspeita", 60), (-1, "válida", 60)]          # a suspeita tem as 60 leituras: o que falha é a regra
+
+
+def test_as_horas_sem_media_dos_estados_sao_as_mesmas_de_hour_exclusions(conn):
+    h = mixed_hours(conn)
+    states = analytics.hour_states(h, until=NOW + timedelta(hours=3, minutes=30))
+    ex = analytics.hour_exclusions(h, until=NOW + timedelta(hours=3, minutes=30))
+    without_average = states[states["estado"] != analytics.VALID_HOUR]
+    assert list(zip(without_average["device_id"], without_average["hora"], without_average["estado"])) == list(
+        zip(ex["device_id"], ex["hora"], ex["causa"]))
+
+
+def test_no_que_parou_estende_as_horas_com_zero_minutos_sem_tirar_as_validas(conn):
+    states = analytics.hour_states(mixed_hours(conn), until=NOW + timedelta(hours=3, minutes=30))
+    assert states_of(states)[-4:] == [(-1, "válida", 60), (0, "sem leituras", 0), (1, "sem leituras", 0), (2, "sem leituras", 0)]
+
+
+def test_hora_em_andamento_valida_continua_valida_e_a_curta_nao_aparece_ainda(conn):
+    insert(conn, hour_with([10.0] * 60, start=-60) + hour_with([10.0] * 20, start=0))     # a hora 0 está na metade
+    h = analytics.hourly_means(conn, NOW - timedelta(hours=2), NOW + timedelta(hours=1), ["no-01"])
+    assert states_of(analytics.hour_states(h, until=NOW + timedelta(minutes=20))) == [(-1, "válida", 60)]
+    assert states_of(analytics.hour_states(h)) == [(-1, "válida", 60), (0, "poucas leituras", 20)]   # sem `until`, é só uma hora curta
+
+
+def test_sem_horas_os_estados_vem_vazios_com_as_colunas(conn):
+    states = analytics.hour_states(analytics.hourly_means(conn, NOW - timedelta(hours=1), NOW))
+    assert states.empty and list(states.columns) == analytics.STATE_COLUMNS
+
+
 # ---------------------------------------------------------------- estado dos nós
 
 @pytest.mark.parametrize("minutes_after, expected", [(2, "em_operacao"), (10, "atrasado"), (20, "sem_dados")])

@@ -181,6 +181,29 @@ def hour_exclusions(hourly: pd.DataFrame, *, until: datetime | None = None,
             [EXCLUSION_COLUMNS])
 
 
+STATE_COLUMNS = ["hora", "device_id", "estado", "n"]
+VALID_HOUR = "válida"
+
+
+def hour_states(hourly: pd.DataFrame, *, until: datetime | None = None,
+                min_readings: int = MIN_READINGS_PER_HOUR) -> pd.DataFrame:
+    """Todas as horas do `hourly_means` com o estado de cada uma e os minutos que tiveram leitura (`n`).
+
+    O estado é VALID_HOUR para a hora com média, ou a causa de a hora ter ficado sem média (EXCLUSION_CAUSES), a mesma de
+    `hour_exclusions`, que decide quais horas são essas, inclusive o que fazer com `until`. As horas que `until` estende
+    para um nó que parou têm 0 minutos. A hora em andamento só aparece se já tem média: sem ela, fica de fora.
+    """
+    if hourly.empty:
+        return pd.DataFrame(columns=STATE_COLUMNS)
+    excluded = hour_exclusions(hourly, until=until, min_readings=min_readings).rename(columns={"causa": "estado"})
+    minutes = hourly.set_index(["device_id", "hora"])["n"]
+    excluded["n"] = [int(minutes.get((device, hour), 0)) for device, hour in zip(excluded["device_id"], excluded["hora"])]
+    valid = hourly[~hourly["suspeita"].astype(bool) & (hourly["n"] >= min_readings)]
+    valid = pd.DataFrame({"hora": valid["hora"], "device_id": valid["device_id"], "estado": VALID_HOUR, "n": valid["n"]})
+    return (pd.concat([excluded, valid], ignore_index=True).sort_values(["device_id", "hora"], ignore_index=True)
+            [STATE_COLUMNS].astype({"n": int}))
+
+
 def _status(last_received, now: datetime) -> tuple[str, float]:
     if last_received is None or pd.isna(last_received):
         return "sem_dados", np.nan
