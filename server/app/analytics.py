@@ -226,6 +226,32 @@ def state_runs(states: pd.DataFrame) -> pd.DataFrame:
     return runs.reset_index(drop=True)[RUN_COLUMNS]
 
 
+BEFORE_FIRST_READING, HOUR_IN_PROGRESS = "antes da primeira leitura", "hora em andamento"
+UNRATED_COLUMNS = ["device_id", "inicio", "fim", "motivo", "n"]
+
+
+def unrated_spans(hourly: pd.DataFrame, states: pd.DataFrame, *, start: datetime, until: datetime) -> pd.DataFrame:
+    """Os trechos do período em que um nó ainda não tem estado em `hour_states`, cada um com o motivo.
+
+    BEFORE_FIRST_READING: de `start` até a primeira hora com leitura do nó. HOUR_IN_PROGRESS: da hora que está passando
+    até `until`, quando ela ainda não tem a média (se já tem, é uma hora válida e não um trecho). `n` são os minutos com
+    leitura que a hora em andamento tem até agora, e 0 no trecho antes da primeira leitura. Só entram nós com estados.
+    """
+    if states.empty:
+        return pd.DataFrame(columns=UNRATED_COLUMNS)
+    start, until = pd.Timestamp(start), pd.Timestamp(until)
+    current = until.floor("h")
+    minutes = hourly.set_index(["device_id", "hora"])["n"]
+    rows = []
+    for device, hours in states.groupby("device_id")["hora"]:
+        first = hours.min()
+        if first > start:
+            rows.append((device, start, first, BEFORE_FIRST_READING, 0))
+        if current < until and current not in set(hours):
+            rows.append((device, current, until, HOUR_IN_PROGRESS, int(minutes.get((device, current), 0))))
+    return pd.DataFrame(rows, columns=UNRATED_COLUMNS)
+
+
 def _status(last_received, now: datetime) -> tuple[str, float]:
     if last_received is None or pd.isna(last_received):
         return "sem_dados", np.nan

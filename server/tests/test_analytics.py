@@ -274,6 +274,54 @@ def test_sem_estados_nao_ha_blocos_mas_as_colunas_estao_la():
     assert runs.empty and list(runs.columns) == analytics.RUN_COLUMNS
 
 
+def spans_of(spans: pd.DataFrame, device: str = "no-01") -> list[tuple[int, int, str, int]]:
+    """(início, fim, motivo, minutos) dos trechos sem avaliação de um nó, com início e fim em minutos a partir de NOW."""
+    def offset(t):
+        return int((t - pd.Timestamp(NOW)).total_seconds() // 60)
+    rows = spans[spans["device_id"] == device]
+    return [(offset(a), offset(b), m, int(n)) for a, b, m, n in zip(rows["inicio"], rows["fim"], rows["motivo"], rows["n"])]
+
+
+def unrated(conn, hours_of_data, *, start_hours: int, until_minutes: int, after: int = 1) -> pd.DataFrame:
+    insert(conn, hours_of_data)
+    hourly = analytics.hourly_means(conn, NOW - timedelta(hours=start_hours), NOW + timedelta(hours=after), ["no-01"])
+    until = NOW + timedelta(minutes=until_minutes)
+    states = analytics.hour_states(hourly, until=until)
+    return analytics.unrated_spans(hourly, states, start=NOW - timedelta(hours=start_hours), until=until)
+
+
+def test_antes_da_primeira_leitura_o_no_fica_sem_avaliacao_desde_o_comeco_do_periodo(conn):
+    spans = unrated(conn, hour_with([10.0] * 60, start=-300) + hour_with([10.0] * 60, start=-60), start_hours=8, until_minutes=0)
+    assert list(spans.columns) == analytics.UNRATED_COLUMNS
+    assert spans_of(spans) == [(-480, -300, "antes da primeira leitura", 0)]
+
+
+def test_periodo_que_ja_comeca_com_leitura_nao_tem_trecho_antes_da_primeira(conn):
+    spans = unrated(conn, hour_with([10.0] * 60, start=-300) + hour_with([10.0] * 60, start=-60), start_hours=5, until_minutes=0)
+    assert spans_of(spans) == []
+
+
+def test_hora_em_andamento_sem_as_leituras_minimas_fica_sem_avaliacao_com_os_minutos_ate_agora(conn):
+    spans = unrated(conn, hour_with([10.0] * 60, start=-60) + hour_with([10.0] * 20, start=0), start_hours=1, until_minutes=20)
+    assert spans_of(spans) == [(0, 20, "hora em andamento", 20)]
+
+
+def test_hora_em_andamento_que_ja_tem_media_e_valida_e_nao_fica_sem_avaliacao(conn):
+    spans = unrated(conn, hour_with([10.0] * 60, start=-60) + hour_with([10.0] * 50, start=0), start_hours=1, until_minutes=50)
+    assert spans_of(spans) == []
+
+
+def test_no_que_parou_tem_a_hora_atual_em_andamento_com_zero_minutos(conn):
+    spans = unrated(conn, hour_with([10.0] * 60, start=-60), start_hours=1, until_minutes=150, after=3)
+    assert spans_of(spans) == [(120, 150, "hora em andamento", 0)]
+
+
+def test_sem_estados_nao_ha_trechos_sem_avaliacao(conn):
+    hourly = analytics.hourly_means(conn, NOW - timedelta(hours=1), NOW)
+    spans = analytics.unrated_spans(hourly, analytics.hour_states(hourly), start=NOW - timedelta(hours=1), until=NOW)
+    assert spans.empty and list(spans.columns) == analytics.UNRATED_COLUMNS
+
+
 # ---------------------------------------------------------------- estado dos nós
 
 @pytest.mark.parametrize("minutes_after, expected", [(2, "em_operacao"), (10, "atrasado"), (20, "sem_dados")])

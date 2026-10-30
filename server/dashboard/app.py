@@ -22,7 +22,7 @@ from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSIS
 from app.config import get_settings  # noqa: E402
 from dashboard.duration import duration_text  # noqa: E402
 from dashboard.evaluation import (evaluated_text, evaluation_guide, notice_html, pending_band,  # noqa: E402
-                                  small_sample_note)
+                                  small_sample_note, span_hover)
 from dashboard.last_reading import last_reading_html  # noqa: E402
 from dashboard.scale import band_scale_html  # noqa: E402
 from dashboard.time_axis import day_ticks  # noqa: E402
@@ -199,7 +199,7 @@ def strip_note(causes: set[str]) -> str:
     a hora que não acabou fica de fora até ter as leituras mínimas."""
     states = ["válida (com média)", *[cause for cause in analytics.EXCLUSION_CAUSES if cause in causes]]
     listed = states[0] if len(states) == 1 else ", ".join(states[:-1]) + " ou " + states[-1]
-    return (f"Na faixa, cada hora tem uma cor: {listed}. Fica em branco só o que ainda não tem estado: as horas antes da "
+    return (f"Na faixa, cada hora tem uma cor: {listed}. Fica sem avaliação (em branco) só o que ainda não tem estado: as horas antes da "
             "primeira leitura de cada sensor no período e a hora em andamento, enquanto não tem as leituras mínimas para a "
             "média.")
 
@@ -303,6 +303,10 @@ SENSOR_PALETTE = ["#22b8cf", "#e0529c", "#8b93a1", "#c9a227"]
 STATE_COLORS = {analytics.VALID_HOUR: "#5fb88a", analytics.NO_READINGS: "#8b93a1", analytics.FEW_READINGS: "#6aa6c8",
                 analytics.SUSPECT_HOUR: "#e2b53b"}
 VALID_OPACITY = 0.35
+UNRATED_STATE = "sem avaliação"      # o que a faixa chama o trecho em branco: sem cor, mas com balão
+UNRATED_HELP = ("Sem avaliação: trecho que ainda não tem estado. Pode ser antes da primeira leitura do sensor no período "
+                "ou a hora em andamento, que ainda não tem as leituras mínimas para a média. Passe o mouse sobre o trecho "
+                "para ver qual.")
 STRIP_STEP = 26    # altura de cada sensor na faixa: com 25% de espaço entre uma e outra, a barra fica com uns 20 px
 PERIOD_PRESETS = {"7 dias": 7, "30 dias": 30}
 Y_AXIS_WIDTH = 48  # largura mínima do eixo vertical: faz a faixa das horas sem média alinhar com os gráficos de linha
@@ -437,17 +441,34 @@ def exclusion_details(exclusions: pd.DataFrame) -> str:
     return "Por sensor:" + "\n" + "\n".join(lines)
 
 
-def quality_strip(states: pd.DataFrame, exclusions: pd.DataFrame, domain: list[str]) -> alt.LayerChart:
-    """Uma faixa por nó com o estado de cada hora (`analytics.hour_states`), alinhada ao eixo dos gráficos. São duas
-    camadas: os blocos de horas seguidas do mesmo estado, sem emendas entre elas, e por cima as horas, uma a uma e quase
-    invisíveis, que dão o balão com o motivo. A legenda fica na linha de cima (`show_quality_strip`)."""
-    runs = analytics.state_runs(states)
-    runs = runs.assign(inicio_local=local_naive(runs["inicio"]), fim_local=local_naive(runs["fim"]))
-    hours = states.assign(hora_local=local_naive(states["hora"]))
+def hover_rows(states: pd.DataFrame, spans: pd.DataFrame) -> pd.DataFrame:
+    """As linhas que dão o balão da faixa: uma por hora com estado e uma por trecho sem avaliação (que continua em
+    branco no desenho, mas diz no balão se é antes da primeira leitura ou a hora em andamento)."""
+    hours = states.assign(hora_local=local_naive(states["hora"]), estado_texto=states["estado"])
     hours["fim_local"] = hours["hora_local"] + pd.Timedelta(hours=1)
     hours["hora_texto"] = hours["hora_local"].dt.strftime("%d/%m, %Hh") + "–" + hours["fim_local"].dt.strftime("%Hh")
     hours["leituras"] = hours["n"].astype(str) + " de 60 minutos"
     hours["minimo"] = f"{MIN_READINGS_PER_HOUR} minutos"
+    columns = ["device_id", "estado", "estado_texto", "hora_local", "fim_local", "hora_texto", "leituras", "minimo"]
+    if spans.empty:
+        return hours[columns]
+    blanks = spans.assign(hora_local=local_naive(spans["inicio"]), fim_local=local_naive(spans["fim"]), estado=UNRATED_STATE)
+    texts = [span_hover(row.motivo, row.hora_local, row.fim_local, row.n, MIN_READINGS_PER_HOUR)
+             for row in blanks.itertuples()]
+    blanks = blanks.assign(estado_texto=[t["estado"] for t in texts], hora_texto=[t["hora"] for t in texts],
+                           leituras=[t["leituras"] for t in texts], minimo=[t["minimo"] for t in texts])
+    return pd.concat([hours[columns], blanks[columns]], ignore_index=True)
+
+
+def quality_strip(states: pd.DataFrame, spans: pd.DataFrame, exclusions: pd.DataFrame,
+                  domain: list[str]) -> alt.LayerChart:
+    """Uma faixa por nó com o estado de cada hora (`analytics.hour_states`), alinhada ao eixo dos gráficos. São duas
+    camadas: os blocos de horas seguidas do mesmo estado, sem emendas entre elas, e por cima as horas e os trechos sem
+    avaliação, um a um e quase invisíveis, que dão o balão com o motivo. A legenda fica na linha de cima
+    (`show_quality_strip`)."""
+    runs = analytics.state_runs(states)
+    runs = runs.assign(inicio_local=local_naive(runs["inicio"]), fim_local=local_naive(runs["fim"]))
+    hours = hover_rows(states, spans)
     colors = alt.Scale(domain=list(STATE_COLORS), range=list(STATE_COLORS.values()))
     # Um quarto do passo vira espaço entre as faixas dos nós; antes elas ocupavam o passo inteiro e se encostavam.
     y = alt.Y("device_id:N", title=None, axis=alt.Axis(minExtent=Y_AXIS_WIDTH),
@@ -458,10 +479,12 @@ def quality_strip(states: pd.DataFrame, exclusions: pd.DataFrame, domain: list[s
     blocks = alt.Chart(runs).mark_rect().encode(
         x=alt.X("inicio_local:T", title=None, scale=scale, axis=axis), x2="fim_local:T", y=y, color=state,
         opacity=alt.condition(alt.datum.estado == analytics.VALID_HOUR, alt.value(VALID_OPACITY), alt.value(1)))
+    # Cor fixa, e não por estado: o trecho sem avaliação não tem cor na escala, e um retângulo sem preenchimento não recebe
+    # o mouse, então o balão só apareceria nas horas com estado.
     by_hour = alt.Chart(hours).mark_rect(opacity=0.01).encode(
-        x=alt.X("hora_local:T", title=None, scale=scale, axis=axis), x2="fim_local:T", y=y, color=state,
+        x=alt.X("hora_local:T", title=None, scale=scale, axis=axis), x2="fim_local:T", y=y, color=alt.value("#8b93a1"),
         tooltip=[alt.Tooltip("device_id:N", title="Sensor"), alt.Tooltip("hora_texto:N", title="Hora"),
-                 alt.Tooltip("estado:N", title="Estado"), alt.Tooltip("leituras:N", title="Leituras"),
+                 alt.Tooltip("estado_texto:N", title="Estado"), alt.Tooltip("leituras:N", title="Leituras"),
                  alt.Tooltip("minimo:N", title="Mínimo para média")])
     nodes = ", ".join(sorted(states["device_id"].unique()))
     return alt.layer(blocks, by_hour).properties(
@@ -470,16 +493,16 @@ def quality_strip(states: pd.DataFrame, exclusions: pd.DataFrame, domain: list[s
                      f"ou suspeita. {exclusion_note(exclusions)}"))
 
 
-def show_quality_strip(states: pd.DataFrame, exclusions: pd.DataFrame, domain: list[str]) -> None:
-    """A faixa de qualidade com o título, os estados que ela mostra e o que o espaço em branco quer dizer. A hora válida
-    leva na legenda o mesmo tom claro da faixa."""
+def show_quality_strip(states: pd.DataFrame, spans: pd.DataFrame, exclusions: pd.DataFrame, domain: list[str]) -> None:
+    """A faixa de qualidade com o título, os estados que ela mostra e o item "Sem avaliação" para o que está em branco,
+    com os motivos na ajuda dele. A hora válida leva na legenda o mesmo tom claro da faixa."""
     present = set(states["estado"])
     tint = f"color-mix(in srgb, {STATE_COLORS[analytics.VALID_HOUR]} {VALID_OPACITY:.0%}, transparent)"
     legend = [(state, tint if state == analytics.VALID_HOUR else color)
               for state, color in STATE_COLORS.items() if state in present]
-    st.html(trend_head_html("Qualidade da coleta por hora", legend, title=True,
-                            blank="em branco: antes da primeira leitura ou hora em andamento"))
-    st.altair_chart(quality_strip(states, exclusions, domain), width="stretch")
+    st.html(trend_head_html("Qualidade da coleta por hora", legend, title=True, blank="Sem avaliação",
+                            blank_help=UNRATED_HELP))
+    st.altair_chart(quality_strip(states, spans, exclusions, domain), width="stretch")
 
 
 # ---------------------------------------------------------------- abas
@@ -637,11 +660,12 @@ def series_tab(devices_all: list[str]) -> None:
         by_hour = hourly.rename(columns={"minutos": "n"})
         exclusions = analytics.hour_exclusions(by_hour, until=until)
         states = analytics.hour_states(by_hour, until=until)
+        spans = analytics.unrated_spans(by_hour, states, start=start, until=until)
         if data.empty:
             st.info(f"Sem horas com pelo menos {MIN_READINGS_PER_HOUR} minutos de leitura no período escolhido.")
             show_hour_notes(exclusions)
             if not exclusions.empty:
-                show_quality_strip(states, exclusions, domain)
+                show_quality_strip(states, spans, exclusions, domain)
             return
         data["hora_local"] = local_naive(data["hora"])
         show_hour_notes(exclusions)
@@ -671,7 +695,7 @@ def series_tab(devices_all: list[str]) -> None:
             st.caption(humidity_note(data))
         # A faixa vale para todas as variáveis: as horas sem média são as mesmas.
         if i == 0 and exclusions is not None and not exclusions.empty:
-            show_quality_strip(states, exclusions, domain)
+            show_quality_strip(states, spans, exclusions, domain)
 
     # O botão entra no fim da linha dos filtros, lá em cima, e só existe quando há dados a exportar.
     export = data.drop(columns=["hora_local"])

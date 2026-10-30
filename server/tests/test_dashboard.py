@@ -604,8 +604,11 @@ def test_faixa_das_horas_sem_media_tem_titulo_legenda_das_causas_e_diz_o_que_e_o
     assert "</i>sem leituras</span>" in head and "background:#8b93a1" in head       # cada estado, com a cor da faixa
     assert "</i>suspeita</span>" in head and "background:#e2b53b" in head
     assert "</i>válida</span>" in head and "background:color-mix(in srgb, #5fb88a" in head   # a válida, em tom claro
-    assert "em branco: antes da primeira leitura ou hora em andamento</span>" in head           # o que sobra sem cor
-    assert "hora válida" not in head                                                            # o branco não é mais isso
+    # O branco leva um nome curto e um ⓘ; os dois motivos vão na ajuda do item e no balão do trecho.
+    assert '<i class="aq-blank" aria-hidden="true"></i>Sem avaliação <span class="aq-help" aria-hidden="true">ⓘ</span>' in head
+    help_text = re.search('<span class="aq-key" title="([^"]*)"><i class="aq-blank"', head).group(1)
+    assert "antes da primeira leitura" in help_text and "hora em andamento" in help_text
+    assert "em branco" not in head and "hora válida" not in head
 
 
 def test_faixa_das_horas_sem_media_nao_repete_a_legenda_dentro_do_grafico(app_env):
@@ -616,7 +619,8 @@ def test_faixa_das_horas_sem_media_nao_repete_a_legenda_dentro_do_grafico(app_en
     specs = [json.loads(c.proto.spec) for c in at.get("vega_lite_chart")]
     strip = next(s for s in specs if s["description"].startswith(STRIP_DESCRIPTION))
     for layer in strip["layer"]:
-        assert layer["encoding"]["color"].get("legend", "padrão") is None         # a legenda vai na linha de cima
+        color = layer["encoding"]["color"]
+        assert "field" not in color or color.get("legend", "padrão") is None      # a legenda vai na linha de cima
 
 
 def test_sem_a_faixa_das_horas_sem_media_nao_ha_titulo_dela(app_env):
@@ -638,7 +642,7 @@ def test_expansor_diz_que_o_branco_da_faixa_tambem_e_antes_da_primeira_leitura_e
     # as horas entre a primeira e a última leitura de cada sensor e a hora que não acabou fica de fora.
     assert "em branco" in text and "antes da primeira leitura" in text and "hora em andamento" in text
     assert "cada hora tem uma cor" in text and "o espaço em branco é hora válida" not in text
-    assert "ou suspeita. Fica em branco" in text                                    # a suspeita entra na lista quando existe uma
+    assert "ou suspeita. Fica sem avaliação (em branco)" in text                    # a suspeita entra na lista quando existe uma
 
 
 STRIP_DESCRIPTION = "Faixa do estado de cada hora"
@@ -709,6 +713,36 @@ def test_balao_de_cada_hora_diz_sensor_hora_estado_leituras_e_o_minimo(app_env):
     assert re.fullmatch("[0-9]{2}/[0-9]{2}, [0-9]{2}h–[0-9]{2}h", suspect["hora_texto"])
     silent = hours[hours["estado"] == "sem leituras"].iloc[0]
     assert silent["leituras"] == "0 de 60 minutos"
+
+
+def test_trecho_sem_avaliacao_tem_balao_que_diz_qual_e_o_motivo(app_env):
+    at = strip_page(app_env)
+    runs, hours = strip_tables(at)
+    assert "sem avaliação" not in set(runs["estado"])                          # o branco continua em branco: só o balão é novo
+    blank = hours[hours["estado"] == "sem avaliação"]
+    before = blank[blank["estado_texto"] == "sem avaliação: antes da primeira leitura"]
+    assert set(before["device_id"]) == {"no-01", "no-02"}                      # os dois começam depois do início dos 7 dias
+    assert (before["leituras"] == "—").all() and (before["minimo"] == "—").all()
+    assert re.fullmatch("[0-9]{2}/[0-9]{2}, [0-9]{2}h – [0-9]{2}/[0-9]{2}, [0-9]{2}h", before.iloc[0]["hora_texto"])
+    # A hora em andamento só aparece nos primeiros 45 minutos da hora; quando aparece, diz os minutos até agora.
+    assert set(blank["estado_texto"]) <= {"sem avaliação: antes da primeira leitura", "sem avaliação: hora em andamento"}
+    running = blank[blank["estado_texto"] == "sem avaliação: hora em andamento"]
+    assert running["leituras"].str.fullmatch("[0-9]+ minutos? até agora").all() and (running["minimo"] == "45 minutos").all()
+    rated = hours[hours["estado"] != "sem avaliação"]
+    assert (rated["estado_texto"] == rated["estado"]).all()                    # nas horas com estado, o balão diz o próprio estado
+
+
+def test_camada_das_horas_tem_cor_fixa_para_o_balao_pegar_tambem_nos_trechos_em_branco(app_env):
+    layers = strip_spec(strip_page(app_env))["layer"]
+    # Colorida por estado, o trecho "sem avaliação" (que não tem cor na escala) ficava sem preenchimento, e o navegador não
+    # entrega o mouse a um retângulo sem preenchimento: o balão só aparecia nas horas com estado.
+    assert "field" not in layers[1]["encoding"]["color"] and "value" in layers[1]["encoding"]["color"]
+
+
+def test_balao_da_faixa_mostra_o_estado_com_o_motivo(app_env):
+    at = strip_page(app_env)
+    tooltip = strip_spec(at)["layer"][1]["encoding"]["tooltip"]
+    assert [t["field"] for t in tooltip] == ["device_id", "hora_texto", "estado_texto", "leituras", "minimo"]
 
 
 def series_axes(at) -> list[dict]:

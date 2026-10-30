@@ -40,6 +40,18 @@ def test_o_espaco_em_branco_vem_explicado_ao_lado_das_cores():
     assert html.count("background:") == 1                             # e só a causa tem cor: o branco é o que sobra
 
 
+def test_o_branco_pode_levar_uma_ajuda_curta_no_item_da_legenda_em_vez_de_uma_frase():
+    html = trend_head_html("Qualidade da coleta por hora", [("válida", "#5fb88a")], title=True, blank="Sem avaliação",
+                           blank_help="Antes da primeira leitura <ou> hora em andamento.")
+    assert '<span class="aq-key" title="Antes da primeira leitura &lt;ou&gt; hora em andamento.">' in html
+    assert '</i>Sem avaliação <span class="aq-help" aria-hidden="true">ⓘ</span></span>' in html     # o ⓘ avisa que há ajuda
+
+
+def test_sem_ajuda_o_item_do_branco_nao_leva_title_nem_o_i():
+    html = trend_head_html("PM2,5", [], blank="em branco: hora válida")
+    assert "title=" not in html and "aq-help" not in html
+
+
 def test_sem_explicacao_do_branco_a_legenda_nao_traz_a_marca():
     assert "aq-blank" not in trend_head_html("PM2,5", [("no-01", "#22b8cf")])
 
