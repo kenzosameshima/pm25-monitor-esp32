@@ -1,11 +1,11 @@
-"""Os textos da avaliação de previsões: quantas horas entraram nas contas e quando a amostra é pequena demais."""
+"""Os textos da avaliação de previsões e do balão dos trechos sem avaliação da faixa de qualidade."""
 
 from datetime import datetime
 
 import pytest
 
 from dashboard.evaluation import (SMALL_SAMPLE_HOURS, evaluated_text, evaluation_guide, hours_text, notice_html,
-                                  pending_band, small_sample_note)
+                                  pending_band, small_sample_note, span_hover)
 
 FIRST, LAST = datetime(2026, 10, 28, 20), datetime(2026, 10, 29, 6)
 
@@ -37,6 +37,29 @@ def test_a_faixa_sem_observacao_cobre_as_horas_depois_da_ultima_observada_de_pon
 
 def test_sem_nada_alem_da_ultima_observacao_nao_ha_faixa():
     assert pending_band(datetime(2026, 10, 29, 10), datetime(2026, 10, 29, 10)) is None
+
+
+def test_balao_do_trecho_antes_da_primeira_leitura_diz_o_intervalo_e_o_motivo_sem_contar_leituras():
+    hover = span_hover("antes da primeira leitura", datetime(2026, 10, 23), datetime(2026, 10, 24, 2), 0, 45)
+    assert hover == {"hora": "23/10, 00h – 24/10, 02h", "estado": "sem avaliação: antes da primeira leitura",
+                     "leituras": "—", "minimo": "—"}                  # não há leitura a contar nem média a pedir
+
+
+def test_trecho_de_um_dia_so_nao_repete_a_data_no_balao():
+    hover = span_hover("antes da primeira leitura", datetime(2026, 10, 23), datetime(2026, 10, 23, 20), 0, 45)
+    assert hover["hora"] == "23/10, 00h – 20h"
+
+
+def test_balao_da_hora_em_andamento_diz_os_minutos_ate_agora_e_o_minimo_para_a_media():
+    hover = span_hover("hora em andamento", datetime(2026, 10, 29, 15), datetime(2026, 10, 29, 15, 42), 20, 45)
+    assert hover == {"hora": "29/10, 15h00–15h42", "estado": "sem avaliação: hora em andamento",
+                     "leituras": "20 minutos até agora", "minimo": "45 minutos"}
+
+
+def test_um_minuto_so_no_singular_e_nenhum_tambem():
+    one = span_hover("hora em andamento", datetime(2026, 10, 29, 15), datetime(2026, 10, 29, 15, 1), 1, 45)
+    none = span_hover("hora em andamento", datetime(2026, 10, 29, 15), datetime(2026, 10, 29, 15, 1), 0, 45)
+    assert one["leituras"] == "1 minuto até agora" and none["leituras"] == "0 minutos até agora"
 
 
 def test_o_aviso_leva_a_frase_principal_e_o_detalhe_no_mesmo_bloco():

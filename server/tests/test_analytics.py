@@ -197,6 +197,131 @@ def test_sem_horas_devolve_as_colunas_esperadas(conn):
     assert ex.empty and list(ex.columns) == analytics.EXCLUSION_COLUMNS
 
 
+def states_of(states: pd.DataFrame, device: str = "no-01") -> list[tuple[int, str, int]]:
+    """(hora, estado, minutos com leitura) de um nó, com a hora contada em horas a partir de NOW."""
+    rows = states[states["device_id"] == device]
+    return [(int((h - pd.Timestamp(NOW)).total_seconds() // 3600), s, int(n))
+            for h, s, n in zip(rows["hora"], rows["estado"], rows["n"])]
+
+
+def test_cada_hora_tem_um_estado_e_os_minutos_com_leitura(conn):
+    states = analytics.hour_states(mixed_hours(conn))
+    assert list(states.columns) == analytics.STATE_COLUMNS
+    assert states_of(states) == [(-5, "válida", 60), (-4, "sem leituras", 0), (-3, "poucas leituras", 30),
+                                 (-2, "suspeita", 60), (-1, "válida", 60)]          # a suspeita tem as 60 leituras: o que falha é a regra
+
+
+def test_as_horas_sem_media_dos_estados_sao_as_mesmas_de_hour_exclusions(conn):
+    h = mixed_hours(conn)
+    states = analytics.hour_states(h, until=NOW + timedelta(hours=3, minutes=30))
+    ex = analytics.hour_exclusions(h, until=NOW + timedelta(hours=3, minutes=30))
+    without_average = states[states["estado"] != analytics.VALID_HOUR]
+    assert list(zip(without_average["device_id"], without_average["hora"], without_average["estado"])) == list(
+        zip(ex["device_id"], ex["hora"], ex["causa"]))
+
+
+def test_no_que_parou_estende_as_horas_com_zero_minutos_sem_tirar_as_validas(conn):
+    states = analytics.hour_states(mixed_hours(conn), until=NOW + timedelta(hours=3, minutes=30))
+    assert states_of(states)[-4:] == [(-1, "válida", 60), (0, "sem leituras", 0), (1, "sem leituras", 0), (2, "sem leituras", 0)]
+
+
+def test_hora_em_andamento_valida_continua_valida_e_a_curta_nao_aparece_ainda(conn):
+    insert(conn, hour_with([10.0] * 60, start=-60) + hour_with([10.0] * 20, start=0))     # a hora 0 está na metade
+    h = analytics.hourly_means(conn, NOW - timedelta(hours=2), NOW + timedelta(hours=1), ["no-01"])
+    assert states_of(analytics.hour_states(h, until=NOW + timedelta(minutes=20))) == [(-1, "válida", 60)]
+    assert states_of(analytics.hour_states(h)) == [(-1, "válida", 60), (0, "poucas leituras", 20)]   # sem `until`, é só uma hora curta
+
+
+def test_sem_horas_os_estados_vem_vazios_com_as_colunas(conn):
+    states = analytics.hour_states(analytics.hourly_means(conn, NOW - timedelta(hours=1), NOW))
+    assert states.empty and list(states.columns) == analytics.STATE_COLUMNS
+
+
+def state_rows(rows: list[tuple[str, int, str]]) -> pd.DataFrame:
+    """Estados de (nó, hora a partir de NOW, estado), com 60 minutos em cada um: o que importa aqui é a sequência."""
+    return pd.DataFrame({"hora": [pd.Timestamp(NOW) + pd.Timedelta(hours=h) for _, h, _ in rows],
+                         "device_id": [d for d, _, _ in rows], "estado": [s for _, _, s in rows], "n": 60})
+
+
+def runs_of(runs: pd.DataFrame) -> list[tuple[str, str, int, int, int]]:
+    """(nó, estado, início, fim, horas) de cada bloco, com início e fim contados em horas a partir de NOW."""
+    def offset(t):
+        return int((t - pd.Timestamp(NOW)).total_seconds() // 3600)
+    return [(d, s, offset(a), offset(b), int(n)) for d, s, a, b, n in zip(
+        runs["device_id"], runs["estado"], runs["inicio"], runs["fim"], runs["horas"])]
+
+
+def test_horas_seguidas_do_mesmo_estado_viram_um_bloco_que_vai_do_comeco_da_primeira_ao_fim_da_ultima():
+    runs = analytics.state_runs(state_rows([("no-01", -5, "válida"), ("no-01", -4, "válida"), ("no-01", -3, "sem leituras"),
+                                            ("no-01", -2, "sem leituras"), ("no-01", -1, "válida")]))
+    assert list(runs.columns) == analytics.RUN_COLUMNS
+    assert runs_of(runs) == [("no-01", "válida", -5, -3, 2), ("no-01", "sem leituras", -3, -1, 2), ("no-01", "válida", -1, 0, 1)]
+
+
+def test_uma_hora_que_falta_no_meio_separa_os_blocos_mesmo_com_o_mesmo_estado():
+    runs = analytics.state_runs(state_rows([("no-01", -5, "válida"), ("no-01", -4, "válida"), ("no-01", -2, "válida")]))
+    assert runs_of(runs) == [("no-01", "válida", -5, -3, 2), ("no-01", "válida", -2, -1, 1)]
+
+
+def test_os_blocos_nao_atravessam_de_um_no_para_o_outro():
+    runs = analytics.state_runs(state_rows([("no-01", -2, "válida"), ("no-01", -1, "válida"),
+                                            ("no-02", -2, "válida"), ("no-02", -1, "suspeita")]))
+    assert runs_of(runs) == [("no-01", "válida", -2, 0, 2), ("no-02", "válida", -2, -1, 1), ("no-02", "suspeita", -1, 0, 1)]
+
+
+def test_sem_estados_nao_ha_blocos_mas_as_colunas_estao_la():
+    runs = analytics.state_runs(pd.DataFrame(columns=analytics.STATE_COLUMNS))
+    assert runs.empty and list(runs.columns) == analytics.RUN_COLUMNS
+
+
+def spans_of(spans: pd.DataFrame, device: str = "no-01") -> list[tuple[int, int, str, int]]:
+    """(início, fim, motivo, minutos) dos trechos sem avaliação de um nó, com início e fim em minutos a partir de NOW."""
+    def offset(t):
+        return int((t - pd.Timestamp(NOW)).total_seconds() // 60)
+    rows = spans[spans["device_id"] == device]
+    return [(offset(a), offset(b), m, int(n)) for a, b, m, n in zip(rows["inicio"], rows["fim"], rows["motivo"], rows["n"])]
+
+
+def unrated(conn, hours_of_data, *, start_hours: int, until_minutes: int, after: int = 1) -> pd.DataFrame:
+    insert(conn, hours_of_data)
+    hourly = analytics.hourly_means(conn, NOW - timedelta(hours=start_hours), NOW + timedelta(hours=after), ["no-01"])
+    until = NOW + timedelta(minutes=until_minutes)
+    states = analytics.hour_states(hourly, until=until)
+    return analytics.unrated_spans(hourly, states, start=NOW - timedelta(hours=start_hours), until=until)
+
+
+def test_antes_da_primeira_leitura_o_no_fica_sem_avaliacao_desde_o_comeco_do_periodo(conn):
+    spans = unrated(conn, hour_with([10.0] * 60, start=-300) + hour_with([10.0] * 60, start=-60), start_hours=8, until_minutes=0)
+    assert list(spans.columns) == analytics.UNRATED_COLUMNS
+    assert spans_of(spans) == [(-480, -300, "antes da primeira leitura", 0)]
+
+
+def test_periodo_que_ja_comeca_com_leitura_nao_tem_trecho_antes_da_primeira(conn):
+    spans = unrated(conn, hour_with([10.0] * 60, start=-300) + hour_with([10.0] * 60, start=-60), start_hours=5, until_minutes=0)
+    assert spans_of(spans) == []
+
+
+def test_hora_em_andamento_sem_as_leituras_minimas_fica_sem_avaliacao_com_os_minutos_ate_agora(conn):
+    spans = unrated(conn, hour_with([10.0] * 60, start=-60) + hour_with([10.0] * 20, start=0), start_hours=1, until_minutes=20)
+    assert spans_of(spans) == [(0, 20, "hora em andamento", 20)]
+
+
+def test_hora_em_andamento_que_ja_tem_media_e_valida_e_nao_fica_sem_avaliacao(conn):
+    spans = unrated(conn, hour_with([10.0] * 60, start=-60) + hour_with([10.0] * 50, start=0), start_hours=1, until_minutes=50)
+    assert spans_of(spans) == []
+
+
+def test_no_que_parou_tem_a_hora_atual_em_andamento_com_zero_minutos(conn):
+    spans = unrated(conn, hour_with([10.0] * 60, start=-60), start_hours=1, until_minutes=150, after=3)
+    assert spans_of(spans) == [(120, 150, "hora em andamento", 0)]
+
+
+def test_sem_estados_nao_ha_trechos_sem_avaliacao(conn):
+    hourly = analytics.hourly_means(conn, NOW - timedelta(hours=1), NOW)
+    spans = analytics.unrated_spans(hourly, analytics.hour_states(hourly), start=NOW - timedelta(hours=1), until=NOW)
+    assert spans.empty and list(spans.columns) == analytics.UNRATED_COLUMNS
+
+
 # ---------------------------------------------------------------- estado dos nós
 
 @pytest.mark.parametrize("minutes_after, expected", [(2, "em_operacao"), (10, "atrasado"), (20, "sem_dados")])

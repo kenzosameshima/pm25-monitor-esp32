@@ -1,7 +1,10 @@
-"""Os textos da avaliação de previsões: quantas horas entraram nas contas e quando a amostra é pequena demais."""
+"""Os textos de duas telas do dashboard: a avaliação de previsões (quantas horas entraram nas contas, quando a amostra é
+pequena demais, o aviso acima da tabela) e o balão dos trechos sem avaliação da faixa de qualidade."""
 
 from datetime import datetime, timedelta
 from html import escape
+
+from app.analytics import HOUR_IN_PROGRESS
 
 # Menos que um dia de horas: o ciclo diário do PM2,5 nem fecha. É um aviso de tela, não um teste estatístico.
 SMALL_SAMPLE_HOURS = 24
@@ -36,6 +39,19 @@ def pending_band(last_observed: datetime, last_plotted: datetime) -> tuple[datet
         return None
     half = timedelta(minutes=30)
     return last_observed + half, last_plotted + half
+
+
+def span_hover(reason: str, first: datetime, last: datetime, minutes: int, minimum: int) -> dict[str, str]:
+    """O balão de um trecho sem avaliação da faixa de qualidade (`analytics.unrated_spans`), com o motivo no estado.
+    A hora em andamento diz os minutos com leitura até agora e o mínimo para a média; o trecho antes da primeira leitura
+    não tem leitura a contar nem média a pedir. `first` e `last` são o começo e o fim do trecho, no horário local."""
+    if reason == HOUR_IN_PROGRESS:
+        unit = "minuto" if minutes == 1 else "minutos"
+        return {"hora": f"{first:%d/%m, %Hh%M}–{last:%Hh%M}", "estado": f"sem avaliação: {reason}",
+                "leituras": f"{minutes} {unit} até agora", "minimo": f"{minimum} minutos"}
+    until = f"{last:%Hh}" if first.date() == last.date() else f"{last:%d/%m, %Hh}"
+    return {"hora": f"{first:%d/%m, %Hh} – {until}", "estado": f"sem avaliação: {reason}",
+            "leituras": "—", "minimo": "—"}
 
 
 def small_sample_note(hours: int) -> str:
