@@ -306,7 +306,7 @@ def test_todo_grafico_tem_descricao_para_o_leitor_de_tela(app_env):
     descriptions = [json.loads(c.proto.spec).get("description") for c in at.get("vega_lite_chart")]
     assert len(descriptions) == 5 and all(descriptions), descriptions     # 6 h, PM2,5, umidade, faixa e previsão
     assert any(d.startswith("Gráfico de linhas") and "PM2,5" in d and "no-01" in d for d in descriptions)
-    assert any(d.startswith("Faixa das horas sem média") for d in descriptions)
+    assert any(d.startswith("Faixa do estado de cada hora") for d in descriptions)
     assert any("observado" in d.lower() and "persistência" in d.lower() for d in descriptions)
 
 
@@ -598,12 +598,14 @@ def test_faixa_das_horas_sem_media_tem_titulo_legenda_das_causas_e_diz_o_que_e_o
     assert not at.exception, at.exception
     flow = series_flow(at)
     title = flow.index(("linha", STRIP_TITLE))
-    assert flow[title + 1][0] == "grafico" and flow[title + 1][1].startswith("Faixa das horas sem média")  # colado nela
+    assert flow[title + 1][0] == "grafico" and flow[title + 1][1].startswith(STRIP_DESCRIPTION)         # colado nela
     head = next(h for h in chart_heads(at) if STRIP_TITLE in h)
     assert 'class="aq-label aq-title"' in head                                       # com o destaque dos outros títulos
-    assert "</i>sem leituras</span>" in head and "background:#8b93a1" in head       # cada causa, com a cor da faixa
+    assert "</i>sem leituras</span>" in head and "background:#8b93a1" in head       # cada estado, com a cor da faixa
     assert "</i>suspeita</span>" in head and "background:#e2b53b" in head
-    assert "em branco: hora válida</span>" in head                                   # e o que o espaço vazio quer dizer
+    assert "</i>válida</span>" in head and "background:color-mix(in srgb, #5fb88a" in head   # a válida, em tom claro
+    assert "em branco: antes da primeira leitura ou hora em andamento</span>" in head           # o que sobra sem cor
+    assert "hora válida" not in head                                                            # o branco não é mais isso
 
 
 def test_faixa_das_horas_sem_media_nao_repete_a_legenda_dentro_do_grafico(app_env):
@@ -612,8 +614,9 @@ def test_faixa_das_horas_sem_media_nao_repete_a_legenda_dentro_do_grafico(app_en
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     specs = [json.loads(c.proto.spec) for c in at.get("vega_lite_chart")]
-    strip = next(s for s in specs if s["description"].startswith("Faixa das horas sem média"))
-    assert strip["encoding"]["color"].get("legend", "padrão") is None             # a legenda vai na linha de cima
+    strip = next(s for s in specs if s["description"].startswith(STRIP_DESCRIPTION))
+    for layer in strip["layer"]:
+        assert layer["encoding"]["color"].get("legend", "padrão") is None         # a legenda vai na linha de cima
 
 
 def test_sem_a_faixa_das_horas_sem_media_nao_ha_titulo_dela(app_env):
@@ -631,15 +634,87 @@ def test_expansor_diz_que_o_branco_da_faixa_tambem_e_antes_da_primeira_leitura_e
     at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
     assert not at.exception, at.exception
     text = hours_details(at)
-    # A faixa só pinta as horas sem média, e o dashboard só conta as horas entre a primeira e a última leitura de cada
-    # sensor: o branco nem sempre é hora válida, e a legenda curta não pode prometer isso sem a exceção por perto.
+    # A faixa pinta todas as horas, as válidas também: o branco é só o que ainda não tem estado, porque o dashboard só conta
+    # as horas entre a primeira e a última leitura de cada sensor e a hora que não acabou fica de fora.
     assert "em branco" in text and "antes da primeira leitura" in text and "hora em andamento" in text
+    assert "cada hora tem uma cor" in text and "o espaço em branco é hora válida" not in text
+    assert "ou suspeita. Fica em branco" in text                                    # a suspeita entra na lista quando existe uma
+
+
+STRIP_DESCRIPTION = "Faixa do estado de cada hora"
+
+
+def strip_chart(at):
+    return next(c for c in at.get("vega_lite_chart") if json.loads(c.proto.spec).get("description", "").startswith(STRIP_DESCRIPTION))
+
+
+def strip_spec(at) -> dict:
+    return json.loads(strip_chart(at).proto.spec)
+
+
+def strip_tables(at) -> list:
+    """Os dados de cada camada da faixa: primeiro os blocos de horas iguais, depois as horas, uma por linha."""
+    chart = strip_chart(at)
+    by_name = {d.name: pa.ipc.open_stream(d.data.data).read_all().to_pandas() for d in chart.proto.datasets}
+    return [by_name[layer["data"]["name"]] for layer in json.loads(chart.proto.spec)["layer"]]
+
+
+def strip_page(app_env):
+    """no-01 com uma hora zerada há 10 horas e três horas de dados: tem horas válidas, sem leituras e suspeitas."""
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    add_dead_hours(app_env, "no-01", [10])
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    return at
+
+
+def test_faixa_tem_uma_barra_por_sensor_com_espaco_entre_elas(app_env):
+    spec = strip_spec(strip_page(app_env))
+    assert spec["height"] == {"step": 26}                                      # 26 px por sensor, como antes
+    for layer in spec["layer"]:
+        padding = layer["encoding"]["y"]["scale"]["paddingInner"]
+        assert 18 <= 26 * (1 - padding) <= 24 and 26 * padding >= 4            # barras de 18 a 24 px e pelo menos 4 px entre elas
+
+
+def test_faixa_pinta_tambem_as_horas_validas_com_um_tom_claro(app_env):
+    at = strip_page(app_env)
+    encoding = strip_spec(at)["layer"][0]["encoding"]
+    scale = encoding["color"]["scale"]
+    assert scale["domain"] == ["válida", "sem leituras", "poucas leituras", "suspeita"]
+    assert scale["range"][1:] == ["#8b93a1", "#6aa6c8", "#e2b53b"] and scale["range"][0] == "#5fb88a"
+    condition = encoding["opacity"]["condition"]
+    assert condition["value"] <= 0.5 and encoding["opacity"]["value"] == 1       # só a válida é apagada: os problemas saltam aos olhos
+    assert "válida" in set(strip_tables(at)[1]["estado"])
+
+
+def test_horas_seguidas_do_mesmo_estado_viram_um_bloco_so_e_o_balao_fica_em_cada_hora(app_env):
+    at = strip_page(app_env)
+    runs, hours = strip_tables(at)
+    assert len(runs) < len(hours)                                              # as horas iguais e seguidas foram juntadas
+    no_readings = runs[runs["estado"] == "sem leituras"]
+    assert (no_readings["horas"] >= 5).any()                                   # as horas entre a hora zerada e os dados
+    assert no_readings["horas"].sum() == (hours["estado"] == "sem leituras").sum()
+    layers = strip_spec(at)["layer"]
+    assert "tooltip" not in layers[0]["encoding"]                              # o bloco desenha...
+    assert "tooltip" in layers[1]["encoding"] and layers[1]["mark"]["opacity"] <= 0.05      # ...e as horas, invisíveis, dão o balão
+
+
+def test_balao_de_cada_hora_diz_sensor_hora_estado_leituras_e_o_minimo(app_env):
+    at = strip_page(app_env)
+    tooltip = strip_spec(at)["layer"][1]["encoding"]["tooltip"]
+    assert [t["title"] for t in tooltip] == ["Sensor", "Hora", "Estado", "Leituras", "Mínimo para média"]
+    hours = strip_tables(at)[1]
+    suspect = hours[(hours["estado"] == "suspeita") & (hours["device_id"] == "no-01")].iloc[0]
+    assert suspect["leituras"] == "60 de 60 minutos" and suspect["minimo"] == "45 minutos"
+    assert re.fullmatch("[0-9]{2}/[0-9]{2}, [0-9]{2}h–[0-9]{2}h", suspect["hora_texto"])
+    silent = hours[hours["estado"] == "sem leituras"].iloc[0]
+    assert silent["leituras"] == "0 de 60 minutos"
 
 
 def series_axes(at) -> list[dict]:
     """O eixo do tempo dos gráficos da aba Séries: PM2,5, a faixa das horas sem média e a umidade, na ordem da página."""
     specs = [json.loads(c.proto.spec) for c in at.get("vega_lite_chart")][1:]            # o primeiro é o de 6 horas
-    mine = [s for s in specs if "por sensor" in s["description"] or s["description"].startswith("Faixa das horas")]
+    mine = [s for s in specs if "por sensor" in s["description"] or s["description"].startswith(STRIP_DESCRIPTION)]
     return [next(layer["encoding"]["x"]["axis"] for layer in spec.get("layer", [spec])
                  if "axis" in layer.get("encoding", {}).get("x", {})) for spec in mine]
 
