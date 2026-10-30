@@ -237,6 +237,43 @@ def test_sem_horas_os_estados_vem_vazios_com_as_colunas(conn):
     assert states.empty and list(states.columns) == analytics.STATE_COLUMNS
 
 
+def state_rows(rows: list[tuple[str, int, str]]) -> pd.DataFrame:
+    """Estados de (nó, hora a partir de NOW, estado), com 60 minutos em cada um: o que importa aqui é a sequência."""
+    return pd.DataFrame({"hora": [pd.Timestamp(NOW) + pd.Timedelta(hours=h) for _, h, _ in rows],
+                         "device_id": [d for d, _, _ in rows], "estado": [s for _, _, s in rows], "n": 60})
+
+
+def runs_of(runs: pd.DataFrame) -> list[tuple[str, str, int, int, int]]:
+    """(nó, estado, início, fim, horas) de cada bloco, com início e fim contados em horas a partir de NOW."""
+    def offset(t):
+        return int((t - pd.Timestamp(NOW)).total_seconds() // 3600)
+    return [(d, s, offset(a), offset(b), int(n)) for d, s, a, b, n in zip(
+        runs["device_id"], runs["estado"], runs["inicio"], runs["fim"], runs["horas"])]
+
+
+def test_horas_seguidas_do_mesmo_estado_viram_um_bloco_que_vai_do_comeco_da_primeira_ao_fim_da_ultima():
+    runs = analytics.state_runs(state_rows([("no-01", -5, "válida"), ("no-01", -4, "válida"), ("no-01", -3, "sem leituras"),
+                                            ("no-01", -2, "sem leituras"), ("no-01", -1, "válida")]))
+    assert list(runs.columns) == analytics.RUN_COLUMNS
+    assert runs_of(runs) == [("no-01", "válida", -5, -3, 2), ("no-01", "sem leituras", -3, -1, 2), ("no-01", "válida", -1, 0, 1)]
+
+
+def test_uma_hora_que_falta_no_meio_separa_os_blocos_mesmo_com_o_mesmo_estado():
+    runs = analytics.state_runs(state_rows([("no-01", -5, "válida"), ("no-01", -4, "válida"), ("no-01", -2, "válida")]))
+    assert runs_of(runs) == [("no-01", "válida", -5, -3, 2), ("no-01", "válida", -2, -1, 1)]
+
+
+def test_os_blocos_nao_atravessam_de_um_no_para_o_outro():
+    runs = analytics.state_runs(state_rows([("no-01", -2, "válida"), ("no-01", -1, "válida"),
+                                            ("no-02", -2, "válida"), ("no-02", -1, "suspeita")]))
+    assert runs_of(runs) == [("no-01", "válida", -2, 0, 2), ("no-02", "válida", -2, -1, 1), ("no-02", "suspeita", -1, 0, 1)]
+
+
+def test_sem_estados_nao_ha_blocos_mas_as_colunas_estao_la():
+    runs = analytics.state_runs(pd.DataFrame(columns=analytics.STATE_COLUMNS))
+    assert runs.empty and list(runs.columns) == analytics.RUN_COLUMNS
+
+
 # ---------------------------------------------------------------- estado dos nós
 
 @pytest.mark.parametrize("minutes_after, expected", [(2, "em_operacao"), (10, "atrasado"), (20, "sem_dados")])

@@ -204,6 +204,28 @@ def hour_states(hourly: pd.DataFrame, *, until: datetime | None = None,
             [STATE_COLUMNS].astype({"n": int}))
 
 
+RUN_COLUMNS = ["device_id", "estado", "inicio", "fim", "horas"]
+
+
+def state_runs(states: pd.DataFrame) -> pd.DataFrame:
+    """Os blocos de horas seguidas do mesmo estado em cada nó, a partir de `hour_states`.
+
+    `inicio` é o começo da primeira hora do bloco e `fim`, o fim da última (uma hora depois do começo dela); `horas` é
+    quantas há. Uma hora que falta no meio, ou a troca de nó, começa outro bloco.
+    """
+    if states.empty:
+        return pd.DataFrame(columns=RUN_COLUMNS)
+    ordered = states.sort_values(["device_id", "hora"], ignore_index=True)
+    new_run = ((ordered["device_id"] != ordered["device_id"].shift())
+               | (ordered["estado"] != ordered["estado"].shift())
+               | (ordered["hora"].diff() != pd.Timedelta(hours=1)))
+    runs = ordered.groupby(new_run.cumsum(), sort=True).agg(
+        device_id=("device_id", "first"), estado=("estado", "first"), inicio=("hora", "min"), ultima=("hora", "max"),
+        horas=("hora", "size"))
+    runs["fim"] = runs["ultima"] + pd.Timedelta(hours=1)
+    return runs.reset_index(drop=True)[RUN_COLUMNS]
+
+
 def _status(last_received, now: datetime) -> tuple[str, float]:
     if last_received is None or pd.isna(last_received):
         return "sem_dados", np.nan
