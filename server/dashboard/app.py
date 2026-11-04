@@ -603,8 +603,9 @@ def status_tab() -> None:
     with st.expander("Como interpretar os indicadores"):
         # Uma definição por coluna da tabela, no vocabulário do glossário.
         st.caption(
-            "- **Completude:** fração dos minutos esperados que têm leitura; a barra e o percentual mostram o mesmo valor.\n"
-            "- **Maior lacuna:** o maior período seguido sem leitura na janela.\n"
+            "- **Completude:** fração dos minutos esperados da janela que têm leitura (num nó novo, os minutos antes da "
+            "primeira leitura contam como esperados); a barra e o percentual mostram o mesmo valor.\n"
+            "- **Maior lacuna:** o maior período seguido sem leitura na janela, inclusive no começo e no fim dela.\n"
             "- **Mensagens perdidas:** lacunas de sequência dentro de uma mesma inicialização do nó.\n"
             "- **Reinícios:** inicializações do nó além da primeira.\n"
             "- **Duplicatas descartadas:** leituras reenviadas por um nó e ignoradas pelo servidor por já estarem "

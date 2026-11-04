@@ -4,8 +4,9 @@ Cada função recebe a conexão e o instante de referência e devolve um DataFra
 com horários em UTC. Formatação, rótulos e fuso de exibição ficam com quem chama.
 """
 
+import math
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable, NamedTuple
 
 import numpy as np
@@ -283,13 +284,71 @@ def device_status(conn: sqlite3.Connection, now: datetime) -> pd.DataFrame:
     return out[STATUS_COLUMNS]
 
 
+def minute_of(ts: datetime) -> int:
+    """Minuto de relógio (inteiro, desde a época) de um instante."""
+    return int(ts.timestamp() // 60)
+
+
+def window_minutes(start: datetime, end: datetime) -> tuple[int, int]:
+    """Primeiro minuto esperado e primeiro minuto fora da janela [start, end).
+
+    O minuto que `start` corta ao meio não conta (a leitura dele tem horário anterior a `start`), nem o que `end`
+    está fechando: só entram os minutos inteiros dentro da janela."""
+    return math.ceil(start.timestamp() / 60), minute_of(end)
+
+
+def minute_health(readings: Iterable[tuple[int, int, int]], start_min: int, end_min: int) -> dict:
+    """A saúde da coleta de um nó numa janela fixa de minutos [start_min, end_min): a definição única.
+
+    `readings` são (minuto, boot_id, seq); as de fora da janela são ignoradas. Esperados são todos os minutos da
+    janela, mesmo os de antes da primeira leitura e os de depois da última (um nó que só entrou no meio da janela
+    tem completude menor). A maior lacuna inclui esses dois trechos de borda. Os minutos sem leitura entre duas
+    leituras são classificados pela origem: reinício (mudou o `boot_id`), comunicação (salto de `seq` na mesma
+    inicialização, até o tamanho da lacuna) ou aquisição (o resto, sem salto de `seq`: falha do sensor, não da rede).
+    Mensagens perdidas são os saltos de `seq` dentro de uma mesma inicialização, e reinícios, as trocas de `boot_id`.
+    """
+    ordered = sorted(r for r in readings if start_min <= r[0] < end_min)
+    expected = max(0, end_min - start_min)
+    minutes = {m for m, _, _ in ordered}
+    gaps = {"comunicacao": 0, "aquisicao": 0, "reinicio": 0}
+    lost = restarts = 0
+    if ordered:
+        lead = ordered[0][0] - start_min
+        trail = end_min - ordered[-1][0] - 1
+        largest = max(lead, trail)
+        for (m_a, boot_a, seq_a), (m_b, boot_b, seq_b) in zip(ordered, ordered[1:]):
+            missing = max(0, m_b - m_a - 1)
+            largest = max(largest, missing)
+            if boot_a != boot_b:
+                restarts += 1
+                gaps["reinicio"] += missing
+            else:
+                seq_skipped = max(0, seq_b - seq_a - 1)
+                lost += seq_skipped
+                comm = min(seq_skipped, missing)
+                gaps["comunicacao"] += comm
+                gaps["aquisicao"] += missing - comm
+        edges = lead + trail
+    else:
+        largest = edges = expected
+    return {
+        "minutos_esperados": expected,
+        "minutos_com_leitura": len(minutes),
+        "completude": len(minutes) / expected if expected else 1.0,
+        "maior_lacuna_min": largest,
+        "mensagens_perdidas": lost,
+        "reinicios": restarts,
+        "lacunas_min": {**gaps, "bordas": edges, "total": sum(gaps.values()) + edges},
+    }
+
+
 def collection_health(conn: sqlite3.Connection, start: datetime, now: datetime,
                       devices: Iterable[str] | None = None) -> pd.DataFrame:
     """Saúde da coleta de cada nó em produção (ou só dos `devices` pedidos, de teste ou não) entre `start` e `now`.
 
-    A completude conta minutos com leitura sobre os esperados desde `start` (ou desde a primeira
-    leitura do nó, se for depois). Mensagens perdidas são lacunas de `seq` dentro de uma mesma
-    inicialização; reinícios são as inicializações além da primeira.
+    A definição é a de `minute_health`, a mesma do `period_metrics`: a janela é fixa, então o trecho anterior à
+    primeira leitura do nó conta como minutos esperados e sem leitura. Duplicatas são as dos lotes recebidos de
+    `start` até `now`, inclusive.
     """
     overview = _frame(db.device_overview(conn), ["first_ts"])
     if not overview.empty:
@@ -299,33 +358,22 @@ def collection_health(conn: sqlite3.Connection, start: datetime, now: datetime,
             overview = overview[overview["device_id"].isin(list(devices))]
     if overview.empty:
         return pd.DataFrame(columns=HEALTH_COLUMNS)
-    df = _measurements(conn, start, now + pd.Timedelta(minutes=1), list(overview["device_id"]))
-    batches = _frame(db.fetch_ingest_batches(conn, start), ["received_at"])
+    df = _measurements(conn, start, now, list(overview["device_id"]))
+    start_min, end_min = window_minutes(start, now)
     rows = []
     for _, dev in overview.iterrows():
         d = df[df["device_id"] == dev["device_id"]] if not df.empty else df
-        first = max(start, dev["first_ts"].to_pydatetime())
-        expected = max(1, int((now - first).total_seconds() // 60))
-        minutes = d["ts_sensor"].drop_duplicates().sort_values() if not d.empty else pd.Series(dtype="object")
-        if len(minutes):
-            gaps = (minutes.diff().dt.total_seconds() / 60 - 1).fillna(0)
-            trailing = (now - minutes.iloc[-1]).total_seconds() / 60 - 1
-            largest_gap = max(gaps.max(), trailing, 0)
-            per_boot = d.groupby("boot_id")["seq"].agg(["min", "max", "nunique"])
-            lost = int((per_boot["max"] - per_boot["min"] + 1 - per_boot["nunique"]).sum())
-            restarts = max(0, d["boot_id"].nunique() - 1)
-        else:
-            largest_gap, lost, restarts = (now - first).total_seconds() / 60, 0, 0
-        dup = 0
-        if not batches.empty:
-            dup = int(batches.loc[batches["device_id"] == dev["device_id"], "n_duplicates"].sum())
+        readings = [] if d.empty else [(minute_of(ts), boot, seq)
+                                       for ts, boot, seq in zip(d["ts_sensor"], d["boot_id"], d["seq"])]
+        health = minute_health(readings, start_min, end_min)
         rows.append({
             "device_id": dev["device_id"],
-            "completude": min(1.0, len(minutes) / expected),
-            "maior_lacuna_min": int(round(largest_gap)),
-            "mensagens_perdidas": lost,
-            "reinicios": restarts,
-            "duplicatas_descartadas": dup,
+            "completude": health["completude"],
+            "maior_lacuna_min": health["maior_lacuna_min"],
+            "mensagens_perdidas": health["mensagens_perdidas"],
+            "reinicios": health["reinicios"],
+            "duplicatas_descartadas": int(db.duplicates_discarded(conn, dev["device_id"], start,
+                                                                  now + timedelta(seconds=1))),
             "leituras_marcadas": int((d["quality"] != "ok").sum()) if not d.empty else 0,
         })
     return pd.DataFrame(rows, columns=HEALTH_COLUMNS)

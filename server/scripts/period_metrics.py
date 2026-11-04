@@ -84,34 +84,12 @@ def _minute(ts: datetime) -> int:
 def operational_metrics(conn, device: str, start: datetime, end: datetime, days: int):
     """Métricas operacionais e completude diária de um nó. Retorna (dict, linhas diárias)."""
     rows = db.fetch_measurements(conn, start, end, [device])
-    start_min, end_min = _minute(start), _minute(end)
-    expected = days * MINUTES_PER_DAY
+    start_min, _ = analytics.window_minutes(start, end)
 
     readings = [(_minute(db.parse_iso(r["ts_sensor"])), r["boot_id"], r["seq"]) for r in rows]
-    readings.sort()
     minutes = {m for m, _, _ in readings}
-
-    gaps = {"comunicacao": 0, "aquisicao": 0, "reinicio": 0}
-    lost = restarts = 0
-    if readings:
-        lead = readings[0][0] - start_min
-        trail = end_min - readings[-1][0] - 1
-        largest = max(lead, trail)
-        for (m_a, boot_a, seq_a), (m_b, boot_b, seq_b) in zip(readings, readings[1:]):
-            missing = max(0, m_b - m_a - 1)
-            largest = max(largest, missing)
-            if boot_a != boot_b:
-                restarts += 1
-                gaps["reinicio"] += missing
-            else:
-                seq_skipped = max(0, seq_b - seq_a - 1)
-                lost += seq_skipped
-                comm = min(seq_skipped, missing)
-                gaps["comunicacao"] += comm
-                gaps["aquisicao"] += missing - comm
-        edges = lead + trail
-    else:
-        largest = edges = expected
+    # A definição de completude, lacunas, perdas e reinícios é a do painel e da API: analytics.minute_health.
+    health = analytics.minute_health(readings, *analytics.window_minutes(start, end))
 
     duplicates = db.duplicates_discarded(conn, device, start, end)
     rssi = [r["rssi"] for r in rows if r["rssi"] is not None]
@@ -126,15 +104,15 @@ def operational_metrics(conn, device: str, start: datetime, end: datetime, days:
 
     metrics = {
         "periodo_dias": days,
-        "leituras_esperadas": expected,
-        "minutos_com_leitura": len(minutes),
-        "completude": round(len(minutes) / expected, 4),
-        "maior_lacuna_min": largest,
-        "mensagens_perdidas": lost,
-        "reinicios": restarts,
+        "leituras_esperadas": health["minutos_esperados"],
+        "minutos_com_leitura": health["minutos_com_leitura"],
+        "completude": round(health["completude"], 4),
+        "maior_lacuna_min": health["maior_lacuna_min"],
+        "mensagens_perdidas": health["mensagens_perdidas"],
+        "reinicios": health["reinicios"],
         "duplicatas_descartadas": int(duplicates),
         "rssi_medio_dbm": round(sum(rssi) / len(rssi), 2) if rssi else None,
-        "lacunas_min": {**gaps, "bordas": edges, "total": sum(gaps.values()) + edges},
+        "lacunas_min": health["lacunas_min"],
     }
     return metrics, daily
 
