@@ -55,6 +55,7 @@ O vocabulário do projeto está em [GLOSSARY.md](../GLOSSARY.md), e as decisões
 | Túnel gerenciado (Tailscale Funnel) com certificado público, API presa ao loopback | Sem porta aberta, IP fixo, domínio ou CA própria; o túnel publica só `/v1/measurements`, `/v1/devices` e `/health` |
 | Token de leitura separado dos tokens dos nós | Um nó não lê e o app não grava; a configuração recusa um token de leitura igual ao de um nó |
 | Regras de análise num módulo só (`analytics.py`) | A hora válida (45 leituras), o estado do nó, a saúde da coleta e as métricas de previsão dão o mesmo número no painel, nos scripts e no app |
+| Saúde da coleta em janela fixa (`analytics.minute_health`) | Painel, API/app e `period_metrics` usam a mesma conta: os minutos esperados são todos os da janela, também os de antes da primeira leitura de um nó novo (as "bordas"). Contar só desde a primeira leitura escondia a lacuna de instalação e dava 98,19% em vez de 97,53% para o `no-01` em 09/10 a 03/11. Ver `docs/adr/0005-…` |
 | Hora suspeita (sensor quase sem partículas) fica sem média na análise, não no banco | Em episódios, o `no-01` leu 0,0 em todos os canais por horas. A regra (25% das leituras abaixo de 0,5 µg/m³, ou média abaixo de 1,0) vale em `analytics.hourly_means`, então painel, API, treino, job e métricas usam as mesmas horas; o banco imutável e o congelado ficam intactos. Detalhes em `docs/adr/0004-…` |
 | Skill score calculado sobre as mesmas horas da persistência | Comparar RMSEs de horas diferentes distorcia o resultado; o painel e a avaliação offline usam agora a mesma função |
 | `generated_at` (relógio do servidor) em toda resposta de leitura | O app calcula a idade dos dados sem depender do relógio do celular |
@@ -87,7 +88,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | API de leitura | pronto | `/v1/devices`, `/hourly` (`start`/`end` ou `hours`), `/health`, `/forecast`, token de leitura, banco somente leitura | Testes da API e teste de ponta a ponta com o simulador e `curl` | ETag/respostas condicionais (opcional) |
 | Banco | pronto | Esquema com `measurements`, `ingest_batches`, `invalid_messages`, `forecasts` e `devices.location` | Testes | Coordenadas para mapa (exigiria migração) |
 | Backup e dashboard | pronto | Backup diário com verificação de integridade; dashboard local de 3 abas | Dashboard testado com o AppTest do Streamlit; backup e cópia íntegra do banco com testes automáticos | — |
-| Regras de análise (`analytics.py`) | pronto | Hora válida, estado, saúde da coleta, comparação de previsões, métricas | Testes próprios e comparação com a implementação anterior | Unificar a saúde da coleta do painel com a do `period_metrics` (definições diferentes; decisão pendente) |
+| Regras de análise (`analytics.py`) | pronto | Hora válida, estado, saúde da coleta, comparação de previsões, métricas | Testes próprios e comparação com a implementação anterior; a saúde da coleta do painel, da API e do `period_metrics` dá o mesmo número (`test_saude_unificada.py`) | — |
 | Avaliação de modelos (`train_forecast.py`) | parcial | Persistência, Ridge, gradient boosting e MLP (scikit-learn), validação progressiva, teste final, relatório reproduzível | Testes com dados sintéticos | **Rodar com os dados reais da coleta** |
 | Job horário de previsão (`fit_forecast.py`, `forecast_job.py`) | parcial | Treino e gravação do modelo versionado, job a cada hora (HH:05) na tarefa `pm25-forecast` e no crontab, `ridge v0` provisório | Testes com dados sintéticos; uma execução pelo `run-forecast.cmd` no banco local, vista na série `ridge v0` do previsto × observado | **Treinar o modelo do TCC e instalar a tarefa no servidor** |
 | Métricas do período e comparação CETESB | pronto | `period_metrics.py` (com congelamento do banco) e `compare_cetesb.py` | Testes | Rodar com os dados reais e o CSV do QUALAR |
@@ -112,8 +113,7 @@ Em ordem de prioridade:
 2. **Túnel em produção.** Seguir o passo a passo do README e testar de outra rede, com `check_https.py` para a ingestão e `curl` para `/v1/devices` e seus subcaminhos.
 3. **Modelo do TCC em produção.** O job horário e o `ridge v0` provisório estão prontos. Falta escolher o modelo na avaliação offline, com os dados coletados até 27 ou 28/10/2026, treiná-lo numa versão nova e instalar a tarefa `pm25-forecast` no servidor.
 4. **Atraso dos alertas no celular.** Os alertas funcionam no emulador e no Galaxy S23 Ultra pelo túnel, inclusive com um alerta real de PM2,5 Ruim. Falta acompanhar a checagem periódica por alguns dias e medir o atraso com a economia de bateria da Samsung.
-5. **Saúde da coleta com duas definições.** O painel e o `period_metrics` calculam completude e maior lacuna de jeitos diferentes; os números do app (que segue o painel) podem não bater com os do capítulo de resultados. Decidir se unifica.
-6. **Release do app.** Assinar o APK e testar a versão de release, que exige HTTPS.
+5. **Release do app.** Assinar o APK e testar a versão de release, que exige HTTPS.
 
 Riscos já conhecidos:
 

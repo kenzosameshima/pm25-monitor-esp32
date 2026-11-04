@@ -53,11 +53,11 @@ O conjunto de indicadores de uma janela de tempo de um nó: completude, maior la
 _Avoid_: qualidade da coleta (qualidade é da leitura)
 
 **Completude**:
-A fração dos minutos esperados que têm leitura.
+A fração dos minutos esperados que têm leitura. A janela é fixa: todos os minutos dela são esperados, também os de antes da primeira leitura de um nó que entrou no meio. É a mesma conta no painel, na API, no app e no `period_metrics`.
 _Avoid_: cobertura, disponibilidade
 
 **Lacuna**:
-Uma sequência de minutos sem leitura. A maior lacuna da janela é um indicador da saúde da coleta.
+Uma sequência de minutos sem leitura. A maior lacuna da janela, que inclui o trecho antes da primeira leitura e o depois da última (as bordas), é um indicador da saúde da coleta.
 _Avoid_: buraco, falha
 
 **Mensagem perdida**:
