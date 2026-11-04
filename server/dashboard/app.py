@@ -20,6 +20,7 @@ import streamlit as st  # noqa: E402
 from app import analytics, db  # noqa: E402
 from app.analytics import HIGH_HUMIDITY, MIN_READINGS_PER_HOUR, OBSERVED, PERSISTENCE  # noqa: E402
 from app.config import get_settings  # noqa: E402
+from dashboard.bridges import retro_bridges  # noqa: E402
 from dashboard.duration import duration_text  # noqa: E402
 from dashboard.evaluation import (evaluated_text, evaluation_guide, notice_html, pending_band,  # noqa: E402
                                   small_sample_note, span_hover)
@@ -780,6 +781,12 @@ def forecast_tab(devices_all: list[str]) -> None:
         tooltip=[alt.Tooltip("hora_local:T", title="Hora", format="%d/%m %H:%M"), alt.Tooltip("serie:N", title="Série"),
                  alt.Tooltip("valor:N", title="PM2,5")],
     )
+    bridges = retro_bridges(long)
+    if not bridges.empty:                # metades de linha ligando a previsão ao vivo à retroativa, só em horas seguidas
+        lines = lines + alt.Chart(bridges).mark_line().encode(
+            x=alt.X("hora_local:T", title=None), y=alt.Y("pm25:Q", title=None, scale=alt.Scale(zero=False)),
+            color=alt.Color("serie:N", legend=None, scale=alt.Scale(domain=list(colors), range=list(colors.values()))),
+            detail="segmento:N", strokeDash=alt.value([5, 4]))
     first, last = long["hora_local"].min(), long["hora_local"].max()
     # As previsões depois da última hora observada ainda não têm com o que ser comparadas: uma faixa clara atrás delas
     # separa o que já dá para avaliar do que está pendente.
