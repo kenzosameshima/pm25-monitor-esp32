@@ -198,9 +198,13 @@ def test_saude_da_coleta(client):
     insert_hours(client, [60, 60])
     body = client.get("/v1/devices/no-01/health", headers=READ, params={"hours": 3}).json()
     assert body["lost_messages"] == 0 and body["restarts"] == 0 and body["duplicates_discarded"] == 0
-    since_first = (db.parse_iso(body["end"]) - (HOUR - timedelta(hours=2))).total_seconds() // 60
-    assert body["completeness"] == pytest.approx(120 / since_first)  # os minutos desde a hora cheia também contam
-    assert abs(body["largest_gap_min"] - (since_first - 120)) <= 1
+    end, start = db.parse_iso(body["end"]), db.parse_iso(body["start"])
+    window = end.timestamp() // 60 - -(-start.timestamp() // 60)   # a janela é fixa: os minutos antes das 2 horas de dados contam
+    assert body["completeness"] == pytest.approx(120 / window)
+    first_minute = -(-start.timestamp() // 60)                      # primeiro minuto esperado da janela
+    before_first = HOUR.timestamp() // 60 - 120 - first_minute      # borda anterior à primeira leitura
+    after_last = end.timestamp() // 60 - HOUR.timestamp() // 60     # borda posterior à última
+    assert body["largest_gap_min"] == max(before_first, after_last)
 
 
 def test_previsao_com_persistencia_e_modelo(client):
