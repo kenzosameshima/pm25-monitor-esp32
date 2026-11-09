@@ -4,6 +4,7 @@ server/.env
 # dados e backups
 server/data/
 server/backups/
+resultados/
 *.db
 *.db-wal
 *.db-shm
