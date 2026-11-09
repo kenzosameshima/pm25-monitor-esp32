@@ -16,7 +16,15 @@ Uso: python -m scripts.train_forecast [--db CAMINHO] [--out relatorio.json] [--n
                                       [--predictions-csv previsao_teste.csv] [--seeds N]
                                       [--devices no-01,no-02]
 Sem --devices, avalia todos os nós de produção juntos; com ele, só os listados (um modelo para o
-conjunto escolhido). Requer as dependências de requirements-ml.txt.
+conjunto escolhido).
+
+--tune GRADE.json acrescenta uma segunda trilha, ajustada, sem alterar a primeira (hiperparâmetros
+fixos). A grade lista valores por modelo e hiperparâmetro (ver docs/grade-hiperparametros.json); para
+cada modelo, vale a combinação de menor RMSE na validação progressiva, com empate para a primeira da
+grade. O teste final não participa da escolha: ele é avaliado uma vez por trilha, nas mesmas horas. O
+relatório traz, em "tuned", a grade, as tentativas, as melhores combinações e os resultados, e
+--predictions-csv grava também <nome>_ajustado.csv. Registre a grade antes de rodar com os dados reais.
+Requer as dependências de requirements-ml.txt.
 
 O relatório JSON registra as versões de Python, numpy, pandas e scikit-learn e o hash
 SHA-256 do arquivo de banco lido. Para o hash identificar o conjunto de dados, passe o banco
@@ -34,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import platform
@@ -161,6 +170,70 @@ def run_seeds(frame, folds, final, fn, first_seed: int, n_seeds: int, reference:
     return aggregate_seeds(per_seed)
 
 
+TUNING_CRITERION = ("RMSE na validação progressiva (todas as dobras juntas); o teste final não participa; "
+                    "empate fica com o primeiro valor da grade")
+
+
+def load_grid(path: str) -> dict:
+    """Lê a grade de hiperparâmetros: {"ridge": {"alpha": [1, 10]}, "mlp": {"hidden": [[16], [32, 16]]}}.
+
+    Só entram os modelos e os hiperparâmetros de `forecasting.DEFAULTS`, exceto a semente; cada valor é uma
+    lista não vazia. Levanta ValueError com a mensagem do problema."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            grid = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"Grade ilegível ({path}): {exc}") from exc
+    if not isinstance(grid, dict) or not grid:
+        raise ValueError("Grade vazia: informe ao menos um modelo (ridge, gboost ou mlp).")
+    for kind, params in grid.items():
+        if kind not in forecasting.DEFAULTS:
+            raise ValueError(f"Grade com modelo desconhecido: {kind!r} (use {', '.join(forecasting.DEFAULTS)}).")
+        if not isinstance(params, dict) or not params:
+            raise ValueError(f"Grade de {kind} vazia: informe ao menos um hiperparâmetro.")
+        for name, values in params.items():
+            if name == "seed" or name not in forecasting.DEFAULTS[kind]:
+                valid = ", ".join(n for n in forecasting.DEFAULTS[kind] if n != "seed")
+                raise ValueError(f"Grade: {kind} não tem o hiperparâmetro {name!r} (use {valid}).")
+            if not isinstance(values, list) or not values:
+                raise ValueError(f"Grade: {kind}.{name} precisa ser uma lista não vazia de valores.")
+    return grid
+
+
+def _as_kwargs(params: dict) -> dict:
+    """Valores de JSON para argumentos: as listas (camadas da MLP) viram tuplas."""
+    return {name: tuple(value) if isinstance(value, list) else value for name, value in params.items()}
+
+
+def _combinations(params: dict):
+    """Combinações da grade de um modelo, na ordem em que foram escritas (o primeiro valor varia mais devagar)."""
+    names = list(params)
+    for values in itertools.product(*(params[name] for name in names)):
+        yield dict(zip(names, values))
+
+
+def tune(frame: pd.DataFrame, folds, grid: dict, predictors: dict, **base_kw) -> tuple[dict, dict]:
+    """Escolhe, para cada modelo da grade, a combinação de menor RMSE na validação progressiva.
+
+    O teste final não é usado: a avaliação roda com uma janela de teste vazia. Em empate vale a primeira
+    combinação da grade. Retorna (melhores hiperparâmetros por modelo, tentativas por modelo com RMSE e skill)."""
+    cut = folds[-1][1]
+    best, trials = {}, {}
+    for kind, params in grid.items():
+        rows = []
+        for combo in _combinations(params):
+            kw = {**base_kw, **_as_kwargs(combo)}
+            score = evaluate(frame, {"m": predictors[kind]}, folds, (cut, cut), **kw)["m"]["validation"]
+            rows.append({"params": combo, "n": score and score["n"], "rmse": score and score["rmse"],
+                         "skill": score and score["skill"]})
+        scored = [r for r in rows if r["rmse"] is not None]
+        if not scored:
+            raise ValueError(f"Sem validação avaliável para ajustar {kind}.")
+        best[kind] = min(scored, key=lambda r: r["rmse"])["params"]      # min devolve o primeiro em empate
+        trials[kind] = rows
+    return best, trials
+
+
 def package_version(*names: str) -> str | None:
     for name in names:
         try:
@@ -259,6 +332,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--no-mlp", action="store_true", help="não treina a MLP (a etapa mais demorada)")
     p.add_argument("--devices", default=None,
                    help="nós avaliados, separados por vírgula (padrão: todos os nós de produção)")
+    p.add_argument("--tune", default=None, metavar="GRADE.json",
+                   help="ajusta hiperparâmetros só na validação com a grade do arquivo e avalia também essa trilha")
     p.add_argument("--predictions-csv", default=None, help="grava as previsões do teste final em CSV")
     p.add_argument("--seeds", type=int, default=1, help="sementes da MLP (consecutivas a partir de --seed; padrão 1)")
     return p.parse_args(argv)
@@ -272,6 +347,16 @@ def main(argv=None) -> int:
     if args.seeds > 1 and args.no_mlp:
         print("--seeds repete o treino da MLP e não vale com --no-mlp.", file=sys.stderr)
         return 1
+    grid = None
+    if args.tune:
+        try:
+            grid = load_grid(args.tune)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        if args.no_mlp and "mlp" in grid:
+            print("Grade com a MLP não vale com --no-mlp.", file=sys.stderr)
+            return 1
     path = args.db or get_settings().db_path
     if not os.path.exists(path):
         print(f"Banco não encontrado: {path}", file=sys.stderr)
@@ -296,6 +381,10 @@ def main(argv=None) -> int:
         return 1
 
     folds, final = make_splits(frame.index, args.test_days, args.min_train_days, args.fold_days)
+    if grid and not folds:
+        print("O ajuste (--tune) exige ao menos uma dobra de validação; os dados não bastam "
+              f"(mínimo de {args.min_train_days + args.fold_days + args.test_days} dias).", file=sys.stderr)
+        return 1
     models = {PERSISTENCE: predict_persistence, "Ridge": predict_ridge, GBOOST: predict_gboost}
     hyper = {"seed": args.seed, "ridge_alpha": args.ridge_alpha, "gb_lr": args.gb_lr, "gb_max_iter": args.gb_max_iter,
              "gb_max_leaf_nodes": args.gb_max_leaf_nodes, "gb_min_samples_leaf": args.gb_min_samples_leaf}
@@ -312,15 +401,40 @@ def main(argv=None) -> int:
     if args.seeds > 1:
         results[MLP]["seeds"] = run_seeds(frame, folds, final, predict_mlp, args.seed, args.seeds, results[MLP], **kw)
 
+    tuned = tuned_predictions = None
+    if grid:
+        predictors = {"ridge": predict_ridge, "gboost": predict_gboost, "mlp": predict_mlp}
+        best, trials = tune(frame, folds, grid, predictors, **kw)
+        tuned_kw = {**kw, **{n: v for params in best.values() for n, v in _as_kwargs(params).items()}}
+        tuned_predictions = {}
+        tuned_results = evaluate(frame, models, folds, final, predictions=tuned_predictions, **tuned_kw)
+        if args.seeds > 1:
+            tuned_results[MLP]["seeds"] = run_seeds(frame, folds, final, predict_mlp, args.seed, args.seeds,
+                                                    tuned_results[MLP], **tuned_kw)
+        tuned = {"criterion": TUNING_CRITERION, "grid": grid, "best": best, "trials": trials,
+                 "results": tuned_results}
+
     print(f"Horas completas: {len(frame)} ({', '.join(devices)}); dobras de validação: {len(folds)}; "
           f"teste final: {final[0]:%Y-%m-%d} a {final[1]:%Y-%m-%d}\n")
     print(format_table(results))
     if args.seeds > 1:
         print(format_seeds(results))
+    if tuned:
+        print("\nTrilha ajustada: hiperparâmetros escolhidos só na validação (o teste final não participou)")
+        for kind, params in tuned["best"].items():
+            print(f"  {kind}: {json.dumps(params, ensure_ascii=False)} "
+                  f"({len(tuned['trials'][kind])} combinações na grade)")
+        print(format_table(tuned["results"]))
+        if args.seeds > 1:
+            print(format_seeds(tuned["results"]))
     if args.predictions_csv:
         if predictions:
             rows = write_predictions_csv(args.predictions_csv, predictions)
             print(f"\nPrevisões do teste final: {args.predictions_csv} ({rows} linhas)")
+            if tuned_predictions:
+                root, ext = os.path.splitext(args.predictions_csv)
+                rows = write_predictions_csv(f"{root}_ajustado{ext}", tuned_predictions)
+                print(f"Previsões da trilha ajustada: {root}_ajustado{ext} ({rows} linhas)")
         else:
             print("\nSem teste final avaliável: o CSV de previsões não foi gerado.", file=sys.stderr)
     if args.out:
@@ -328,6 +442,8 @@ def main(argv=None) -> int:
                   "horizon_hours": 1, "features": forecasting.FEATURES, "folds": len(folds),
                   "test_window": [str(final[0]), str(final[1])], "hyperparameters": hyper,
                   "environment": environment_info(), "database": database_info(path), "results": results}
+        if tuned:
+            report["tuned"] = tuned
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(report, fh, ensure_ascii=False, indent=2)
         print(f"\nRelatório: {args.out}")
