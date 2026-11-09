@@ -16,7 +16,7 @@ Rascunho em português para virar a seção de limitações. Os números vêm do
 
 **O que é.** Em episódios, o sensor do `no-01` leu 0,0 µg/m³ em PM1, PM2,5 e PM10 enquanto respondia. Uma hora com pelo menos 25% das leituras abaixo de 0,5 µg/m³, ou média abaixo de 1,0 µg/m³, é suspeita e fica sem média na análise (o banco imutável não é alterado; ver `docs/adr/0004`).
 
-**Evidência.** 70 horas suspeitas de 744 esperadas (9,4%; eram 26 em 26/10 e 44 em 04/11), além de 23 horas sem média por falta ou escassez de leituras; restam 651 válidas. A causa não está decidida: pode ser defeito do sensor ou ar muito limpo. Na comparação com a CETESB Osasco, incluir as horas suspeitas melhora o ajuste (711 horas pareadas, viés de +6,8 µg/m³ e r de 0,45, contra 641 horas, +8,3 µg/m³ e r de 0,43 sem elas). É uma pista de que parte dos episódios pode ser ar limpo, ainda não verificada hora a hora.
+**Evidência.** 70 horas suspeitas de 744 esperadas (9,4%; eram 26 em 26/10 e 44 em 04/11), além de 23 horas sem média por falta ou escassez de leituras; restam 651 válidas. A causa não está decidida: pode ser defeito do sensor ou ar muito limpo. Na comparação com a CETESB Osasco, incluir as horas suspeitas melhora o ajuste (711 horas pareadas, viés de +6,8 µg/m³ e r de 0,45, contra 641 horas, +8,3 µg/m³ e r de 0,43 sem elas). Conferidas hora a hora contra a CETESB Osasco, as 70 horas suspeitas formam 17 episódios (os maiores, de 14, 13 e 9 horas), com média do nó de 0,69 µg/m³ (mediana de 0,25). Nelas a estação está mais baixa (mediana de 7,0 µg/m³, contra 12,0 nas horas válidas; 44% das horas com 5 ou menos, contra 16%), mas em 33% das horas suspeitas ela marca 10 ou mais, com máximos de até 27. Um nó que lê zero em PM1, PM2,5 e PM10 por horas enquanto a estação marca de 5 a 27 não é compatível só com ar limpo; a explicação mais provável é falha intermitente do sensor, talvez coincidente com momentos de ar mais limpo, mas isso não está provado.
 
 **Efeito na conclusão.** Retirar essas horas pode enviesar para cima as médias e as comparações, se o ar estava de fato limpo, ou, ao contrário, mantê-las pode subestimar o PM2,5 se o sensor falhou. O resultado depende dessa escolha.
 
@@ -26,7 +26,9 @@ Rascunho em português para virar a seção de limitações. Os números vêm do
 
 **O que é.** Em 17 e 18/10, uma queda do túnel deixou 5 horas-alvo sem previsão; elas foram recalculadas depois, só com as leituras anteriores a cada hora-alvo, e gravadas na versão `v0-retro`, à parte das previsões em tempo real (`v0`, 28 na data do registro).
 
-**Efeito na conclusão.** As previsões retroativas não são validação prospectiva e não podem entrar no mesmo conjunto das em tempo real. Desde 20/10 os scripts agendados recalculam sozinhos quedas de até 24 horas, também na versão `-retro`.
+**Evidência.** O `ridge v0`, treinado em 17/10 com cerca de 8 dias de dados e nunca retreinado, teve no `no-01` desempenho pior que a persistência na validação prospectiva: nas 304 horas avaliáveis (17/10 a 07/11), RMSE de 8,83 µg/m³ contra 8,42 da persistência, skill de −0,049 (intervalo de −0,094 a −0,015 por bootstrap em blocos diários, aproximado porque dias seguidos são correlacionados). A versão `v0-retro` teve skill de +0,034 em 171 horas (intervalo de −0,060 a +0,069, que inclui zero), mas cobre só horas de lacuna e não é comparável. As previsões do `no-02` (18 horas) não servem: o modelo foi treinado no `no-01` e o `no-02` está em outro local.
+
+**Efeito na conclusão.** O `v0` é um modelo provisório e não representa os modelos da avaliação offline (o Ridge ficou acima da persistência no teste, com treino maior); um resultado não se transfere para o outro. A validação prospectiva dos modelos finais só começa quando as versões novas entrarem em produção. As previsões retroativas não são validação prospectiva e não podem entrar no mesmo conjunto das em tempo real. Desde 20/10 os scripts agendados recalculam sozinhos quedas de até 24 horas, também na versão `-retro`.
 
 **Mitigação.** Versões separadas, identificadas no painel e no app, e esta ressalva no texto.
 
@@ -82,6 +84,7 @@ Rascunho em português para virar a seção de limitações. Os números vêm do
 
 - Concordância entre dois nós: depende de levar o `no-02` para junto do `no-01` e de um período de sobreposição estável; os nós estão hoje em locais diferentes.
 - Escolha do modelo do TCC e treino de uma versão nova para o job horário; decisão sobre a busca de hiperparâmetros.
-- Causa das horas suspeitas e dos reinícios do `no-01`, e conferência hora a hora dos episódios suspeitos contra a CETESB.
+- Causa das horas suspeitas (a conferência hora a hora contra a CETESB sugere falha intermitente do sensor, sem prova) e dos reinícios do `no-01`.
+- Validação prospectiva dos modelos finais, que depende de treinar e instalar as versões novas.
 - Coordenadas oficiais da estação Osasco, para substituir a distância estimada de 4,4 km; confirmação da convenção de hora do QUALAR.
 - Posição do BME280 e o que a umidade medida representa.
