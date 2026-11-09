@@ -12,7 +12,7 @@ nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──
 
 ```
 firmware/     código do ESP32 (PlatformIO); host_tests/ testa a parte sem hardware no computador
-server/app/   API (main.py), rotas de leitura (read_api.py), contrato de dados (models.py), acesso ao banco (db.py), regras de análise (analytics.py), dados e modelos de previsão (forecasting.py), esquema (schema.sql)
+server/app/   API (main.py), rotas de leitura (read_api.py), página pública (public_page.py), contrato de dados (models.py), acesso ao banco (db.py), regras de análise (analytics.py), dados e modelos de previsão (forecasting.py), esquema (schema.sql)
 server/scripts/  backup.py, simulate_sensor.py, set_location.py, check_https.py, train_forecast.py, fit_forecast.py, forecast_job.py, period_metrics.py, compare_cetesb.py
 server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
@@ -99,7 +99,7 @@ Os horários são UTC, em ISO 8601 com `Z`, e cada resposta traz `generated_at`,
 curl -H "Authorization: Bearer <token de leitura>" http://localhost:8000/v1/devices
 ```
 
-O local de cada nó aparece no app e no dashboard. Ele é gravado depois da primeira leitura do nó, que o cadastra no banco:
+O local de cada nó aparece no app e no dashboard. Ele é gravado depois da primeira leitura do nó, que o cadastra no banco. A página pública mostra só o texto antes do primeiro parêntese, então descreva a instalação entre parênteses:
 
 ```bash
 python -m scripts.set_location no-01 "EE Exemplo, Vila Mariana (fachada, 3 m do chão)"
@@ -181,6 +181,12 @@ FROM ingest_batches GROUP BY device_id;
 
 O dashboard lê o banco em modo somente leitura e tem três abas. Status mostra, para cada nó, a última leitura, há quanto tempo chegou o último envio e uma tabela de saúde da coleta nas últimas 24 horas: completude, maior lacuna, mensagens perdidas, reinícios, duplicatas descartadas e leituras marcadas; a aba se atualiza sozinha a cada minuto. Dispositivos de teste (identificadores que começam com `teste`, como o `teste-https`) não aparecem no painel, e um nó cadastrado em `PM25_DEVICE_TOKENS` que ainda não enviou leituras aparece com um card reservado, "aguardando instalação". Séries mostra PM2,5, PM10, PM1,0, temperatura e umidade por período, em médias horárias (só horas com pelo menos 45 minutos de leitura e sem as horas suspeitas, que um aviso conta nó a nó) ou minuto a minuto (períodos de até 7 dias), com a linha de 75% de umidade e a parcela de registros acima dela, e exporta os dados em CSV. Previsto × observado compara as últimas 48 horas com a previsão de persistência, calculada na hora, e com as previsões que o job horário gravar na tabela `forecasts`, com MAE, RMSE e skill score. Cada previsor é medido só nas horas que têm observação, persistência e previsão dele, para o skill score comparar o modelo e a persistência nas mesmas horas, como em `train_forecast.py`. As linhas são interrompidas onde faltam dados, em vez de ligar pontos distantes. Os horários aparecem no fuso de Brasília; no banco, tudo continua em UTC.
 
+## Página pública
+
+`GET /public` devolve uma página só de leitura, para qualquer pessoa ver os dados sem instalar o Tailscale nem pedir um token (ADR 0006). Para cada nó em produção, ela mostra o estado do nó, o PM2,5 da última leitura com a faixa da CETESB (sem o valor quando o nó está sem dados, e sem a faixa numa leitura zerada), PM10, temperatura e umidade, com o aviso de umidade acima de 75%, a média das últimas 24 horas (só as horas válidas, com quantas entraram), o gráfico das médias horárias dessas 24 horas e a previsão da hora em andamento, se houver. O local aparece só até o primeiro parêntese.
+
+A página não mostra a versão do firmware, o sinal Wi-Fi, a saúde da coleta, as leituras por minuto, as horas sem média nem a avaliação dos modelos: isso fica no dashboard. Ela é gerada no servidor, com o gráfico em SVG, sem JavaScript nem recurso externo (`Content-Security-Policy: default-src 'none'`), abre o banco só para leitura e fica em cache por 60 s. Localmente, ela está em `http://localhost:8000/public`; para publicá-la, veja o passo 6 de "Transporte HTTPS entre redes".
+
 ## Firmware
 
 | PMS5003 | ESP32 |
@@ -259,10 +265,10 @@ Os nós ficam em redes diferentes da do servidor, então a leitura viaja pela in
                        internet                                    computador do servidor (Windows)
 nó ESP32 ──HTTPS──▶ Funnel (retransmissão da Tailscale) ──TCP cifrado──▶ tailscaled ──HTTP──▶ API (127.0.0.1:8000) ──▶ SQLite
  valida o certificado    https://MAQUINA.TAILNET.ts.net                  termina o TLS            uvicorn --proxy-headers
- (ISRG Root X1)          /v1/measurements, /v1/devices e /health         coloca X-Forwarded-For   (o dashboard, :8501, não é publicado)
+ (ISRG Root X1)          /v1/measurements, /v1/devices, /health, /public coloca X-Forwarded-For   (o dashboard, :8501, não é publicado)
 ```
 
-O túnel publica só três caminhos: `/v1/measurements` (ingestão), `/v1/devices` (leitura, para o app de consulta) e `/health`. A documentação e o painel interativo da API (`/docs`, `/openapi.json`) não passam, e o dashboard Streamlit não é exposto. A API continua escutando apenas em `127.0.0.1`, e o `--proxy-headers` do uvicorn (aceito só de `127.0.0.1`) faz o IP gravado em `ingest_batches` e `invalid_messages` ser o do nó, não o do túnel.
+O túnel publica só quatro caminhos: `/v1/measurements` (ingestão), `/v1/devices` (leitura, para o app de consulta), `/health` e `/public` (a página pública, sem token). A documentação e o painel interativo da API (`/docs`, `/openapi.json`) não passam, e o dashboard Streamlit não é exposto. A API continua escutando apenas em `127.0.0.1`, e o `--proxy-headers` do uvicorn (aceito só de `127.0.0.1`) faz o IP gravado em `ingest_batches` e `invalid_messages` ser o do nó, não o do túnel.
 
 ### Passos do usuário
 
@@ -273,17 +279,18 @@ Nada disto foi executado na implementação: dependem da sua conta e do computad
 3. Ative a exposição pública (o atributo `funnel`). Ao rodar o primeiro `tailscale funnel`, o cliente abre uma página para aprovar. Também dá para editar a política da conta (Access controls) e acrescentar `"nodeAttrs": [{"target": ["autogroup:member"], "attr": ["funnel"]}]`; restrinja `target` ao seu usuário ou à máquina do servidor se a conta tiver outros membros.
 4. Atualize o servidor: reinstale as tarefas com `server\deploy\windows\install.ps1` (a API passa a escutar só em `127.0.0.1` e a regra de firewall da porta 8000 é removida), e reinicie a API.
 5. Cadastre um token para o dispositivo de teste e um para cada nó em `server\.env`, por exemplo `PM25_DEVICE_TOKENS=no-01:<token>,no-02:<token>,teste-https:<token>`. Gere cada token com `python -c "import secrets; print(secrets.token_urlsafe(24))"`. A API só inicia com tokens de pelo menos 32 caracteres e 10 distintos, o que o comando atende; um token mais curto de uma instalação anterior precisa ser trocado no `.env` e no `config.h` do nó. Para o app de consulta, gere mais um e grave em `PM25_READ_TOKEN`.
-6. Publique só os três caminhos, apontando para a API local (PowerShell, no servidor):
+6. Publique só os quatro caminhos, apontando para a API local (PowerShell, no servidor):
 
    ```powershell
    tailscale funnel --bg --set-path=/v1/measurements http://127.0.0.1:8000/v1/measurements
    tailscale funnel --bg --set-path=/v1/devices http://127.0.0.1:8000/v1/devices
    tailscale funnel --bg --set-path=/health http://127.0.0.1:8000/health
+   tailscale funnel --bg --set-path=/public http://127.0.0.1:8000/public
    tailscale funnel status
    ```
 
    O Funnel só aceita as portas 443, 8443 e 10000 (a padrão é a 443, sem porta na URL). O `--bg` mantém a publicação depois de reinicializações. O prefixo do caminho é removido antes de a requisição chegar à API, por isso o destino repete o caminho. A URL pública é `https://<máquina>.<tailnet>.ts.net`, exibida pelo `status`. Para desfazer: repita o comando com `off` no fim.
-7. Confira o isolamento, de qualquer rede: `curl -i https://<URL pública>/health` deve responder 200, e `/docs` e `/` devem responder 404. `/v1/devices` deve responder 401 sem token e 200 com `-H "Authorization: Bearer <token de leitura>"`; `/v1/devices/<id>/hourly` com o mesmo token confirma que os subcaminhos passam pelo túnel (o código-fonte do cliente repassa o resto do caminho, mas isso não foi testado com o Funnel).
+7. Confira o isolamento, de qualquer rede: `curl -i https://<URL pública>/health` e `/public` devem responder 200, e `/docs` e `/` devem responder 404. `/v1/devices` deve responder 401 sem token e 200 com `-H "Authorization: Bearer <token de leitura>"`; `/v1/devices/<id>/hourly` com o mesmo token confirma que os subcaminhos passam pelo túnel (o código-fonte do cliente repassa o resto do caminho, mas isso não foi testado com o Funnel).
 8. Teste o caminho completo, **de outra rede** (por exemplo, o celular como roteador ou outro computador), com o `check_https.py`:
 
    ```bash
