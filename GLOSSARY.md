@@ -128,6 +128,10 @@ _Avoid_: nó de referência
 Uma das cinco faixas da CETESB para o PM2,5 (Boa, Moderada, Ruim, Muito ruim, Péssima). A CETESB as define para a média de 24 horas; aplicadas a uma leitura ou a uma média horária, servem só de referência visual.
 _Avoid_: nível, índice de qualidade
 
+**Página pública**:
+Página só de leitura, aberta a qualquer pessoa, com o estado do ar medido pelos nós: última leitura, média de 24 horas, médias horárias e previsão. Não mostra a saúde da coleta nem a avaliação dos modelos, que ficam no dashboard.
+_Avoid_: dashboard público, painel público, site
+
 **Token do nó**:
 Segredo que identifica um nó ao enviar leituras. Cada nó tem o seu.
 _Avoid_: chave do dispositivo
