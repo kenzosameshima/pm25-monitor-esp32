@@ -41,6 +41,7 @@ python -m scripts.train_forecast --db ../resultados/pm25-congelado-<início>_<fi
 ## Produção
 
 - O `ridge v0` provisório continua gerando previsões prospectivas e não influenciou nenhuma escolha de hiperparâmetro.
+- Em 09/11/2026 entrou em produção o `ridge v1`, treinado só com o `no-01` (494 horas, de 10/10 a 07/11, Ridge com alpha 10 fixo), para acumular validação prospectiva antes da rodada final. Como o `v0`, ele não influencia nenhuma escolha de hiperparâmetro nem a avaliação offline, que usa o banco congelado; o `v0` provisório (treinado em 17/10) teve skill de −0,049 na validação prospectiva, e as previsões do `v1` valem como validação prospectiva só a partir de sua instalação.
 - Depois da rodada final, treinam-se versões novas dos três modelos (`fit_forecast`), que o job horário grava ao lado do `v0`, para acumular validação prospectiva de todos. Não há uma regra de escolha de um único modelo. Se for preciso indicar um recomendado, a regra é: Ridge, a menos que outro tenha RMSE de validação pelo menos 5% menor e melhor em todas as dobras (a MLP, pela média das sementes).
 
 ## O que não será feito
