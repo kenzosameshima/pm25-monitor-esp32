@@ -60,4 +60,11 @@ class ForecastScreenTest {
         compose.onNode(hasContentDescription("Observado: 2 horas, média 15,0, máxima 20,0.", substring = true)).assertExists()
         compose.onNode(hasContentDescription("ridge v1: 2 horas, média 18,5, máxima 19,0.", substring = true)).assertExists()
     }
+
+    @Test
+    fun desempenhoDizOPeriodoEAAmostraPequena() {
+        compose.onAllNodes(hasScrollAction()).onFirst().performScrollToNode(hasText("na mesma hora", substring = true))
+        compose.onNode(hasText("Todos os previsores foram avaliados na mesma hora", substring = true)).assertExists()
+        compose.onAllNodes(hasText("Amostra de apenas 1 hora")).onFirst().assertExists()
+    }
 }
