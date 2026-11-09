@@ -14,7 +14,9 @@ tabela `forecasts`: ela é reservada às previsões prospectivas de um job horá
 
 Uso: python -m scripts.train_forecast [--db CAMINHO] [--out relatorio.json] [--no-mlp]
                                       [--predictions-csv previsao_teste.csv] [--seeds N]
-Requer as dependências de requirements-ml.txt.
+                                      [--devices no-01,no-02]
+Sem --devices, avalia todos os nós de produção juntos; com ele, só os listados (um modelo para o
+conjunto escolhido). Requer as dependências de requirements-ml.txt.
 
 O relatório JSON registra as versões de Python, numpy, pandas e scikit-learn e o hash
 SHA-256 do arquivo de banco lido. Para o hash identificar o conjunto de dados, passe o banco
@@ -255,6 +257,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=mlp["batch_size"])
     p.add_argument("--patience", type=int, default=mlp["patience"])
     p.add_argument("--no-mlp", action="store_true", help="não treina a MLP (a etapa mais demorada)")
+    p.add_argument("--devices", default=None,
+                   help="nós avaliados, separados por vírgula (padrão: todos os nós de produção)")
     p.add_argument("--predictions-csv", default=None, help="grava as previsões do teste final em CSV")
     p.add_argument("--seeds", type=int, default=1, help="sementes da MLP (consecutivas a partir de --seed; padrão 1)")
     return p.parse_args(argv)
@@ -275,6 +279,14 @@ def main(argv=None) -> int:
     conn = db.connect(path, readonly=True)
     try:
         devices = analytics.production_devices(conn)
+        if args.devices:
+            wanted = [d.strip() for d in args.devices.split(",") if d.strip()]
+            unknown = [d for d in wanted if d not in devices]
+            if unknown:
+                print(f"Nós sem leituras ou de teste: {', '.join(unknown)}. Disponíveis: {', '.join(devices)}.",
+                      file=sys.stderr)
+                return 1
+            devices = sorted(set(wanted))
         frame = forecasting.dataset(conn, devices, args.min_samples)
     finally:
         conn.close()
