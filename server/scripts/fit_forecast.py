@@ -1,8 +1,10 @@
 """Treina um modelo de previsão para produção e o grava na pasta de modelos do job horário.
 
-Uso: python -m scripts.fit_forecast --model ridge --version v0 [--db CAMINHO] [--models-dir PASTA]
+Uso: python -m scripts.fit_forecast --model ridge --version v0 [--devices no-01] [--db CAMINHO]
+                                    [--models-dir PASTA]
 
-Treina com todas as horas completas do banco (sem os nós de teste) e com os hiperparâmetros fixos de
+Treina com todas as horas completas do banco (sem os nós de teste; com --devices, só as dos nós
+listados) e com os hiperparâmetros fixos de
 app.forecasting.DEFAULTS, e grava <modelo>-<versão>.joblib em PM25_MODELS_DIR (padrão data/models).
 O job horário (scripts.forecast_job) usa todos os modelos da pasta; para aposentar um, tire o arquivo
 de lá. Uma versão nunca é sobrescrita: um modelo novo, ou o mesmo modelo treinado com mais dados, ganha
@@ -19,7 +21,7 @@ import os
 import sys
 from pathlib import Path
 
-from app import db, forecasting
+from app import analytics, db, forecasting
 from app.config import get_settings
 
 
@@ -27,6 +29,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--model", required=True, choices=list(forecasting.DEFAULTS))
     p.add_argument("--version", required=True, help="ex.: v0; vira model_version em forecasts")
+    p.add_argument("--devices", default=None,
+                   help="nós usados no treino, separados por vírgula (padrão: todos os nós de produção)")
     p.add_argument("--db", default=None, help="caminho do SQLite (padrão: PM25_DB_PATH)")
     p.add_argument("--models-dir", default=None, help="pasta dos modelos (padrão: PM25_MODELS_DIR)")
     return p.parse_args(argv)
@@ -51,7 +55,17 @@ def main(argv=None) -> int:
 
     conn = db.connect(path, readonly=True)
     try:
-        frame = forecasting.dataset(conn)
+        devices = None
+        if args.devices:
+            wanted = [d.strip() for d in args.devices.split(",") if d.strip()]
+            available = analytics.production_devices(conn)
+            unknown = [d for d in wanted if d not in available]
+            if unknown:
+                print(f"Nós sem leituras ou de teste: {', '.join(unknown)}. Disponíveis: {', '.join(available)}.",
+                      file=sys.stderr)
+                return 1
+            devices = sorted(set(wanted))
+        frame = forecasting.dataset(conn, devices)
     finally:
         conn.close()
     if len(frame) < forecasting.MIN_TRAIN_ROWS:
