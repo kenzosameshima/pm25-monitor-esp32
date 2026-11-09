@@ -150,6 +150,28 @@ def test_predictions_csv_traz_previsoes_do_teste_final(conn, tmp_path):
         assert (g["persistencia"][consecutive] == g["observado"].shift(1)[consecutive]).all()
 
 
+def test_devices_restringe_a_avaliacao_a_um_no(conn, tmp_path):
+    csv_path = tmp_path / "previsao_teste.csv"
+    rc, report = run_main(conn, tmp_path, "--no-mlp", "--devices", "no-01", "--predictions-csv", str(csv_path))
+    assert rc == 0
+    assert report["devices"] == ["no-01"]
+    df = pd.read_csv(csv_path)
+    assert set(df["no"]) == {"no-01"}
+    assert len(df) == report["results"]["Ridge"]["test"]["n"]
+
+
+def test_sem_devices_usa_todos_os_nos_de_producao(conn, tmp_path):
+    rc, report = run_main(conn, tmp_path, "--no-mlp")
+    assert rc == 0
+    assert report["devices"] == ["no-01", "no-02"]
+
+
+def test_devices_com_no_inexistente_retorna_erro(conn, tmp_path, capsys):
+    rc, report = run_main(conn, tmp_path, "--no-mlp", "--devices", "no-01,no-99")
+    assert rc == 1 and report is None
+    assert "no-99" in capsys.readouterr().err
+
+
 def test_sem_predictions_csv_nenhum_arquivo_e_criado(conn, tmp_path):
     rc, _ = run_main(conn, tmp_path, "--no-mlp")
     assert rc == 0
