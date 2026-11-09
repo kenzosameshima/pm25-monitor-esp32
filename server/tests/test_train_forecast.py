@@ -249,3 +249,96 @@ def test_seeds_invalido_retorna_erro(conn, tmp_path, capsys):
 
 def db_conn(conn):
     return db.connect(db_path(conn), readonly=True)
+
+
+# ---------------- Ajuste de hiperparâmetros só na validação (--tune) ----------------
+
+def write_grid(tmp_path, grid: dict) -> str:
+    path = tmp_path / "grade.json"
+    path.write_text(json.dumps(grid), encoding="utf-8")
+    return str(path)
+
+
+def test_tune_escolhe_pela_validacao_e_registra_grade_e_tentativas(conn, tmp_path):
+    grid = {"ridge": {"alpha": [1e6, 10.0]}}                      # 1e6 achata o modelo: pior que 10
+    _, fixed = run_main(conn, tmp_path, "--no-mlp")
+    rc, report = run_main(conn, tmp_path, "--no-mlp", "--tune", write_grid(tmp_path, grid))
+    assert rc == 0
+    tuned = report["tuned"]
+    assert tuned["grid"] == grid
+    assert tuned["best"] == {"ridge": {"alpha": 10.0}}
+    trials = tuned["trials"]["ridge"]
+    assert [t["params"] for t in trials] == [{"alpha": 1e6}, {"alpha": 10.0}]
+    assert trials[1]["rmse"] < trials[0]["rmse"]
+    assert tuned["results"]["Ridge"]["test"]["n"] == report["results"]["Ridge"]["test"]["n"]
+    assert report["results"] == fixed["results"]                  # a trilha fixa não muda com --tune
+
+
+def test_tune_so_ajusta_os_modelos_da_grade(conn, tmp_path):
+    rc, report = run_main(conn, tmp_path, "--no-mlp", "--tune", write_grid(tmp_path, {"ridge": {"alpha": [1.0, 10.0]}}))
+    assert rc == 0
+    assert set(report["tuned"]["best"]) == {"ridge"}
+    assert report["tuned"]["results"][tf.GBOOST] == report["results"][tf.GBOOST]    # sem grade, os padrões
+
+
+def test_tune_empate_fica_com_o_primeiro_da_grade(conn, tmp_path, mlp_falsa):
+    grid = {"mlp": {"hidden": [[8], [16, 8]]}}                    # a MLP falsa ignora os hiperparâmetros
+    rc, report = run_main(conn, tmp_path, "--tune", write_grid(tmp_path, grid))
+    assert rc == 0
+    assert report["tuned"]["best"] == {"mlp": {"hidden": [8]}}
+
+
+def test_tune_nao_usa_o_teste_final(tmp_path):
+    def run(name, scale_after_hour):
+        (tmp_path / name).mkdir()
+        c = db.connect(str(tmp_path / name / "pm25.db"))
+        db.init_db(c)
+        values = [v * (3 if h >= scale_after_hour else 1) for h, v in enumerate(series(24 * 40, seed=2))]
+        insert_hours(c, "no-01", values)
+        out = tmp_path / name / "relatorio.json"
+        grid = write_grid(tmp_path / name, {"ridge": {"alpha": [0.1, 10.0, 1000.0]}})
+        assert tf.main(["--db", db_path(c), "--min-samples", "1", "--no-mlp", "--tune", grid, "--out", str(out)]) == 0
+        c.close()
+        return json.loads(out.read_text(encoding="utf-8"))["tuned"]
+
+    base = run("a", 24 * 40)                    # nada alterado
+    changed = run("b", 24 * 32)                 # só as horas do teste final (a partir do dia 33) mudam
+    assert changed["best"] == base["best"]
+    assert changed["trials"] == base["trials"]  # nem as tentativas veem o teste
+    assert changed["results"]["Ridge"]["test"] != base["results"]["Ridge"]["test"]
+
+
+def test_predictions_csv_da_trilha_ajustada_vai_para_outro_arquivo(conn, tmp_path):
+    csv_path = tmp_path / "previsao_teste.csv"
+    rc, _ = run_main(conn, tmp_path, "--no-mlp", "--predictions-csv", str(csv_path),
+                     "--tune", write_grid(tmp_path, {"ridge": {"alpha": [1.0, 10.0]}}))
+    assert rc == 0
+    tuned_csv = tmp_path / "previsao_teste_ajustado.csv"
+    assert pd.read_csv(tuned_csv).columns.tolist() == pd.read_csv(csv_path).columns.tolist()
+    assert len(pd.read_csv(tuned_csv)) == len(pd.read_csv(csv_path))
+
+
+def test_tune_sem_dobras_de_validacao_retorna_erro(conn, tmp_path, capsys):
+    insert_hours(conn, "no-01", series(24 * 22, seed=2))           # 14 dias de treino + teste de 7: sem dobra
+    grid = write_grid(tmp_path, {"ridge": {"alpha": [1.0, 10.0]}})
+    assert tf.main(["--db", db_path(conn), "--min-samples", "1", "--no-mlp", "--tune", grid]) == 1
+    assert "validação" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("grid", [
+    {"arvore": {"alpha": [1.0]}},                                  # modelo desconhecido
+    {"ridge": {"beta": [1.0]}},                                    # hiperparâmetro que o modelo não tem
+    {"mlp": {"seed": [1, 2]}},                                     # semente não é hiperparâmetro
+    {"ridge": {"alpha": []}},                                      # lista vazia
+    {"ridge": {"alpha": 10.0}},                                    # valores fora de lista
+])
+def test_tune_com_grade_invalida_retorna_erro(conn, tmp_path, capsys, grid):
+    rc, report = run_main(conn, tmp_path, "--no-mlp", "--tune", write_grid(tmp_path, grid))
+    assert rc == 1 and report is None
+    assert "grade" in capsys.readouterr().err.lower()
+
+
+def test_tune_com_arquivo_inexistente_retorna_erro(conn, tmp_path, capsys):
+    rc, report = run_main(conn, tmp_path, "--no-mlp", "--tune", str(tmp_path / "nao-existe.json"))
+    assert rc == 1 and report is None
+    assert "grade" in capsys.readouterr().err.lower()

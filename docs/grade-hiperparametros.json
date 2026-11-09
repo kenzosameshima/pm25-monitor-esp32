@@ -1,0 +1,5 @@
+{
+  "ridge": {"alpha": [10.0, 1.0, 100.0]},
+  "gboost": {"learning_rate": [0.1, 0.05], "max_leaf_nodes": [31, 15]},
+  "mlp": {"hidden": [[32, 16], [16]], "lr": [0.001, 0.01]}
+}
