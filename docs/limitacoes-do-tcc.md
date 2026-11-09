@@ -70,7 +70,7 @@ Rascunho em português para virar a seção de limitações. Os números vêm do
 
 ## 8. Comparação com a estação da CETESB: distância, ambiente e hora
 
-**O que é.** A referência é a estação Osasco da CETESB (código 120, Rua Tomé de Souza, Jardim D'Abril), com as médias horárias de MP2,5 do QUALAR. O `no-01` fica a cerca de 2,5 km dela (estimativa pelos eixos das ruas no OpenStreetMap, sem o número do imóvel, com incerteza de poucas centenas de metros), no apoio externo de uma janela, coberto, a 1,1 m do chão e junto à fachada, enquanto a estação segue o padrão regulatório de instalação. O PMS5003 não foi calibrado.
+**O que é.** A referência é a estação Osasco da CETESB (código 120, Av. dos Autonomistas, esquina com a Rua São Maurício, Vila Quitaúna, segundo documento da CETESB; o endereço não está bem documentado e um segundo candidato, Rua Tomé de Souza, 438, no Jardim D'Abril, foi descartado), com as médias horárias de MP2,5 do QUALAR. O `no-01` fica a cerca de 4,4 km dela (estimativa pelo eixo da Rua São Maurício e da rua do nó no OpenStreetMap, sem o número dos imóveis, com incerteza de poucas centenas de metros; com o segundo candidato seriam cerca de 2,5 km), no apoio externo de uma janela, coberto, a 1,1 m do chão e junto à fachada, enquanto a estação segue o padrão regulatório de instalação. O PMS5003 não foi calibrado.
 
 **Evidência.** 641 horas pareadas (a CETESB tem 10 horas vazias nos 744 do arquivo). Média do nó 21,2 µg/m³ contra 12,9 da CETESB; viés de +8,3 µg/m³; MAE de 12,0; RMSE de 16,0; correlação de Pearson de 0,43 (R² de 0,18); reta do nó em função da CETESB com inclinação 0,82 e intercepto 10,6. Os valores da CETESB são inteiros.
 
@@ -83,5 +83,5 @@ Rascunho em português para virar a seção de limitações. Os números vêm do
 - Concordância entre dois nós: depende de levar o `no-02` para junto do `no-01` e de um período de sobreposição estável; os nós estão hoje em locais diferentes.
 - Escolha do modelo do TCC e treino de uma versão nova para o job horário; decisão sobre a busca de hiperparâmetros.
 - Causa das horas suspeitas e dos reinícios do `no-01`, e conferência hora a hora dos episódios suspeitos contra a CETESB.
-- Coordenadas oficiais da estação Osasco, para substituir a distância estimada; confirmação da convenção de hora do QUALAR.
+- Coordenadas oficiais da estação Osasco, para substituir a distância estimada de 4,4 km; confirmação da convenção de hora do QUALAR.
 - Posição do BME280 e o que a umidade medida representa.
