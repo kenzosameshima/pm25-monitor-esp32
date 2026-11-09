@@ -74,11 +74,15 @@ def hourly_chart_svg(hours: pd.Series) -> str:
         if hour.hour % X_LABEL_EVERY == 0:
             parts.append(f'<text class="tick-x" x="{x(i):.1f}" y="{CHART_H - 6}" text-anchor="middle">{hour.hour}h</text>')
 
+    baseline = PAD_TOP + plot_h
     run: list[tuple[float, float]] = []
     for i, value in enumerate([*hours.to_list(), math.nan]):  # o NaN do fim fecha o último trecho
         if not pd.isna(value):
             run.append((x(i), y(value)))
             continue
+        if i < len(hours):  # a hora sem média ganha uma marca no eixo: o buraco na linha não parece erro do gráfico
+            parts.append(f'<rect class="gap" x="{x(i) - step / 2 + 1:.1f}" y="{baseline + 1:.1f}" '
+                         f'width="{step - 2:.1f}" height="4"/>')
         if len(run) == 1:
             parts.append(f'<circle class="point" cx="{run[0][0]:.1f}" cy="{run[0][1]:.1f}" r="3"/>')
         elif run:
@@ -138,13 +142,56 @@ def _last_hours(conn, device: str, now: datetime) -> pd.Series:
     return hourly.set_index("hora")["pm25"].reindex(slots).astype(float)
 
 
-def _mean_block(hours: pd.Series) -> str:
+def _day_block(hours: pd.Series, forecast: str) -> str:
+    """As últimas 24 horas: a média, de quantas horas ela saiu, o gráfico e a previsão. Vazio sem hora com média e sem
+    previsão (num nó parado há mais de um dia, não há o que mostrar)."""
     valid = hours.dropna()
+    if valid.empty and not forecast:
+        return ""
     if valid.empty:
-        return f'<p class="mean">Média das últimas {WINDOW_HOURS} horas: sem horas com média.</p>'
-    mean = valid.mean()
-    return (f'<p class="mean">Média das últimas {WINDOW_HOURS} horas: <strong>{_number(mean)} µg/m³</strong> '
-            f'{_band(mean)} <span class="muted">({len(valid)} de {WINDOW_HOURS} horas com média)</span></p>')
+        summary = (f'<p>Nenhuma das últimas {WINDOW_HOURS} horas teve leituras suficientes para uma média.</p>')
+    else:
+        mean = valid.mean()
+        coverage = ("" if len(valid) == WINDOW_HOURS else
+                    f' Só {len(valid)} de {WINDOW_HOURS} horas tiveram leituras suficientes para entrar na conta.')
+        summary = f'<p>Média de <strong>{_number(mean)} µg/m³</strong>, {_band(mean)}.{coverage}</p>'
+    chart = hourly_chart_svg(hours)
+    if chart:
+        chart = (f'<figure>{chart}<figcaption>PM2,5 médio de cada hora, em µg/m³, no horário de Brasília. Onde a linha '
+                 'some, a hora não teve leituras suficientes.</figcaption></figure>')
+    return f'<h3>Últimas {WINDOW_HOURS} horas</h3>{summary}{chart}{forecast}'
+
+
+def _scale(pm25) -> str:
+    """A escala da CETESB, com as cinco faixas do mesmo comprimento e um marcador onde o valor cai."""
+    position = analytics.band_position(pm25)
+    if position is None:
+        return ""
+    segments = "".join(f'<span class="{BAND_CLASS[label]}"></span>' for _, label in analytics.AIR_QUALITY_BANDS)
+    share = 100 / len(analytics.AIR_QUALITY_BANDS)
+    ticks = "".join(f'<span style="left:{(i + 1) * share:g}%">{bound:g}</span>' for i, bound in enumerate(BAND_BOUNDS))
+    return (f'<div class="scale" aria-hidden="true"><div class="track">{segments}</div>'
+            f'<div class="marker" style="left:{position * 100:.1f}%"></div><div class="ticks">{ticks}</div></div>')
+
+
+def _now_block(node: pd.Series) -> str:
+    """A última leitura: o veredito da faixa em destaque, a escala e as outras medidas. Leitura zerada fica sem faixa."""
+    reading = f'<span class="num">{_number(node["pm25"])}</span> µg/m³ de PM2,5 na última leitura, a média de 1 minuto.'
+    if analytics.is_zero_reading(node["pm1"], node["pm25"], node["pm10"]):
+        # Tudo em zero não diz se o ar está limpo ou se o sensor parou de ver partículas: sem faixa.
+        verdict = (f'<div class="verdict neutral"><p class="reading">{reading}</p><p class="reading">Leitura zerada: '
+                   'sem faixa, porque o sensor pode ter deixado de ver partículas.</p></div>')
+    else:
+        band = analytics.air_quality(node["pm25"])
+        verdict = (f'<div class="verdict {BAND_CLASS.get(band, "neutral")}"><p class="word">{escape(band or "—")}</p>'
+                   f'<p class="reading">{reading}</p></div>{_scale(node["pm25"])}')
+    others = (f'<dl class="others"><div><dt>PM10</dt><dd>{_number(node["pm10"])} µg/m³</dd></div>'
+              f'<div><dt>Temperatura</dt><dd>{_number(node["temperature"])} °C</dd></div>'
+              f'<div><dt>Umidade</dt><dd>{_number(node["humidity"], 0)}%</dd></div></dl>')
+    if pd.notna(node["humidity"]) and node["humidity"] > analytics.HIGH_HUMIDITY:
+        others += (f'<p class="note">Umidade acima de {analytics.HIGH_HUMIDITY:.0f}%: com o ar úmido, sensores como este '
+                   'tendem a medir PM2,5 a mais.</p>')
+    return f'<h3>Agora</h3>{verdict}{others}'
 
 
 def public_location(location) -> str | None:
@@ -171,93 +218,105 @@ def _forecast_block(conn, device: str, now: datetime) -> str:
     start = pd.Timestamp(target).tz_convert(LOCAL_TZ)
     end = start + pd.Timedelta(hours=1)
     return (f'<p class="forecast">Previsão para a média das {start.hour}h às {end.hour}h: '
-            f'<strong>{_number(chosen["predicted_pm25"])} µg/m³</strong> {_band(chosen["predicted_pm25"])} '
-            '<span class="muted">(experimental: modelo estatístico ainda em avaliação)</span></p>')
+            f'<strong>{_number(chosen["predicted_pm25"])} µg/m³</strong>, {_band(chosen["predicted_pm25"])}. '
+            '<span class="muted">É experimental: um modelo estatístico ainda em avaliação.</span></p>')
 
 
 def _node_card(node: pd.Series, hours: pd.Series, forecast: str = "") -> str:
-    state = f'<p class="state">{STATE_LABELS[node["status"]]} · último envio {_ago(node["minutes_since"])}</p>'
-    if node["status"] == "sem_dados":
-        # Sem envio recente, o último valor não diz como o ar está agora: o cartão fica sem ele, como no painel.
-        reading = '<p class="pm25 muted">Sem leitura recente.</p>'
-    else:
-        reading = f'<p class="pm25"><span class="value">{_number(node["pm25"])}</span> µg/m³</p>'
-        if analytics.is_zero_reading(node["pm1"], node["pm25"], node["pm10"]):
-            # Tudo em zero não diz se o ar está limpo ou se o sensor parou de ver partículas: sem faixa.
-            reading += '<p class="note">Leitura zerada: sem faixa, porque o sensor pode ter deixado de ver partículas.</p>'
-        else:
-            reading += (f'<p class="band">{_band(node["pm25"])} '
-                        '<span class="muted">última leitura (média de 1 minuto)</span></p>')
-        reading += (f'<dl class="others"><div><dt>PM10</dt><dd>{_number(node["pm10"])} µg/m³</dd></div>'
-                    f'<div><dt>Temperatura</dt><dd>{_number(node["temperature"])} °C</dd></div>'
-                    f'<div><dt>Umidade</dt><dd>{_number(node["humidity"], 0)}%</dd></div></dl>')
-        if pd.notna(node["humidity"]) and node["humidity"] > analytics.HIGH_HUMIDITY:
-            reading += (f'<p class="note">Umidade acima de {analytics.HIGH_HUMIDITY:.0f}%: com o ar úmido, sensores como '
-                        'este tendem a medir PM2,5 a mais.</p>')
-    chart = hourly_chart_svg(hours)
-    if chart:
-        chart = f'<figure class="chart">{chart}<figcaption>PM2,5 médio por hora (µg/m³), horário de Brasília</figcaption></figure>'
+    """Um nó: o lugar como título, o estado, e os blocos "Agora" e "Últimas 24 horas". Sem envio recente, o último
+    valor não diz como o ar está agora: o nó fica sem o bloco "Agora", como no painel."""
     place = public_location(node["location"])
-    title = escape(node["device_id"]) + (f' <span class="place">· {escape(place)}</span>' if place else "")
-    return (f'<section class="node"><h2>{title}</h2>{state}{reading}'
-            f'{_mean_block(hours)}{forecast}{chart}</section>')
+    title = escape(place or node["device_id"])
+    sensor = f' <span class="nowrap">(sensor {escape(node["device_id"])})</span>' if place else ""
+    state = f'<p class="state">{STATE_LABELS[node["status"]]}, último envio {_ago(node["minutes_since"])}{sensor}.</p>'
+    offline = node["status"] == "sem_dados"
+    now = "" if offline else _now_block(node)
+    return (f'<section class="node{" off" if offline else ""}"><h2>{title}</h2>{state}{now}'
+            f'{_day_block(hours, forecast)}</section>')
 
 
-PAGE_CSS = """
-:root{--bg:#f5f6f8;--card:#fff;--text:#1c232b;--muted:#5b6571;--border:#e2e5e9;--line:#2563eb;--grid:#d3d8de}
-@media (prefers-color-scheme:dark){:root{--bg:#101317;--card:#191e24;--text:#e6e9ed;--muted:#9ba4ae;--border:#2a3038;
---line:#60a5fa;--grid:#343b44}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-main{max-width:44rem;margin:0 auto;padding:24px 16px 40px}
-h1{font-size:1.5rem;line-height:1.25;margin:0 0 6px}
-h2{font-size:1.15rem;margin:0}
-p{margin:6px 0}
-.lead,.muted,.state,.place,figcaption,footer{color:var(--muted)}
-.place{font-weight:400}
-.node{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin:16px 0}
-.state{font-size:.9rem;margin:2px 0 10px}
-.value{font-size:2.6rem;font-weight:700;line-height:1.1}
-.chip{display:inline-block;padding:0 10px;border-radius:999px;background:var(--c);color:#14181d;font-weight:600;
-font-size:.9rem;white-space:nowrap}
-.b0{--c:#3fae6b}.b1{--c:#e6c445}.b2{--c:#ee8a3a}.b3{--c:#d9483b;color:#fff}.b4{--c:#8e4fb5;color:#fff}
-.others{display:flex;flex-wrap:wrap;gap:8px 24px;margin:12px 0}
-dt{font-size:.8rem;color:var(--muted)}
-dd{margin:0;font-weight:600}
-.note{font-size:.9rem;border-left:3px solid #e6c445;padding-left:8px}
-.mean,.forecast{border-top:1px solid var(--border);padding-top:10px;margin-top:10px}
-figure{margin:12px 0 0}
-svg{display:block;width:100%;height:auto}
-svg .band{opacity:.16}
-svg .grid{stroke:var(--grid);stroke-width:1}
-svg text{fill:var(--muted);font-size:13px}
-@media (max-width:520px){svg text{font-size:21px}}  /* o SVG encolhe com a tela; o texto do eixo, menos */
-svg .line{fill:none;stroke:var(--line);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
-svg .point{fill:var(--line)}
-figcaption{font-size:.85rem}
-.legend{list-style:none;padding:0;margin:8px 0;display:flex;flex-wrap:wrap;gap:6px 14px}
-footer{font-size:.85rem;margin-top:24px}
-"""
+STATE_ORDER = {"em_operacao": 0, "atrasado": 1, "sem_dados": 2}
 
 
 def _legend() -> str:
-    """As faixas da CETESB com os limites de cada uma."""
+    """As faixas da CETESB com os limites de cada uma, na cor da escala."""
     items, low = [], None
     for bound, label in analytics.AIR_QUALITY_BANDS:
         if low is None:
-            span = f"até {bound:g}"
+            span = f"até {bound:g} µg/m³"
         elif bound == math.inf:
-            span = f"acima de {low:g}"
+            span = f"acima de {low:g} µg/m³"
         else:
-            span = f"{low:g} a {bound:g}"
+            span = f"de {low:g} a {bound:g} µg/m³"
         items.append(f'<li><span class="chip {BAND_CLASS[label]}">{escape(label)}</span> {span}</li>')
         low = bound
-    return f'<ul class="legend" aria-label="Faixas de PM2,5 da CETESB, em µg/m³">{"".join(items)}</ul>'
+    return f'<ul class="legend">{"".join(items)}</ul>'
+
+
+PAGE_CSS = """
+:root{--haze:#e8eef2;--ink:#1d2830;--muted:#56646f;--rule:#c5d0d8;--air:#2b5a7a;--gap:#aebbc4;
+--display:Bahnschrift,"DIN Alternate","Franklin Gothic Medium","Nimbus Sans Narrow",sans-serif-condensed,sans-serif;
+--text:Seravek,"Gill Sans Nova",Ubuntu,Calibri,"DejaVu Sans",source-sans-pro,sans-serif}
+@media (prefers-color-scheme:dark){:root{--haze:#11181d;--ink:#e2e8ec;--muted:#95a3ad;--rule:#2c3942;--air:#86b8db;
+--gap:#46545e}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--haze);color:var(--ink);font:1rem/1.55 var(--text)}
+main{max-width:36rem;margin:0 auto;padding:1.5rem 1rem 3rem}
+h1,h2,h3,.word,.num{font-family:var(--display);font-weight:600;line-height:1.15}
+h1{font-size:1.25rem;margin:0}
+h2{font-size:1.95rem;margin:0}
+h3{font-size:1.25rem;margin:1.75rem 0 .6rem}
+p{margin:.4rem 0}
+.lead,.state,.muted,figcaption,footer{color:var(--muted)}
+.lead{font-size:.95rem;margin:.2rem 0 0}
+.node{border-top:1px solid var(--rule);margin-top:1.5rem;padding-top:1.25rem}
+.state{font-size:.9rem;margin:.3rem 0 0}
+.nowrap{white-space:nowrap}
+.b0{--c:#3fae6b}.b1{--c:#e6c445}.b2{--c:#ee8a3a}.b3{--c:#d9483b}.b4{--c:#8e4fb5}
+.verdict{background:var(--c);color:#13202a;border-radius:6px;padding:.85rem 1rem 1rem}
+.verdict.b3,.verdict.b4,.chip.b3,.chip.b4{color:#fff}
+.verdict.neutral{background:none;border:1px solid var(--rule);color:var(--ink)}
+.word{font-size:3.4rem;margin:0;letter-spacing:-.01em}
+.reading{margin:.3rem 0 0}
+.num{font-size:1.6rem;font-variant-numeric:tabular-nums}
+.scale{position:relative;margin:.9rem 0 2.1rem}
+.track{display:flex;height:.55rem;border-radius:3px;overflow:hidden}
+.track span{flex:1;background:var(--c)}
+.marker{position:absolute;top:-.3rem;width:4px;height:1.15rem;margin-left:-2px;background:var(--ink);border-radius:2px;
+box-shadow:0 0 0 2px var(--haze)}
+.ticks span{position:absolute;top:.9rem;transform:translateX(-50%);font-size:.75rem;color:var(--muted)}
+.others{display:flex;flex-wrap:wrap;gap:.4rem 2rem;margin:0}
+dt{font-size:.8rem;color:var(--muted)}
+dd{margin:0;font-weight:600;font-variant-numeric:tabular-nums}
+.note{font-size:.9rem;margin:.8rem 0 0;padding-left:.6rem;border-left:3px solid #e6c445}
+.chip{display:inline-block;padding:0 .45rem;border-radius:3px;background:var(--c);color:#13202a;font-weight:600}
+figure{margin:.9rem 0 0}
+svg{display:block;width:100%;height:auto}
+svg .band{opacity:.09}
+svg .grid{stroke:var(--rule);stroke-width:1}
+svg text{fill:var(--muted);font-family:var(--text);font-size:13px}
+@media (max-width:520px){svg text{font-size:21px}}
+svg .line{fill:none;stroke:var(--air);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+svg .point{fill:var(--air)}
+svg .gap{fill:var(--gap)}
+figcaption{font-size:.85rem;margin-top:.4rem}
+.forecast{margin-top:1rem}
+.node.off h2{font-size:1.25rem}
+.about{border-top:1px solid var(--rule);margin-top:2.25rem;padding-top:1.25rem;font-size:.95rem}
+.about h2{font-size:1.25rem}
+.legend{list-style:none;padding:0;margin:.8rem 0}
+.legend li{margin:.3rem 0}
+.legend .chip{min-width:6.5rem;margin-right:.5rem}
+footer{font-size:.85rem;margin-top:1.75rem}
+"""
 
 
 def render(conn, now: datetime) -> str:
-    """O HTML completo da página no instante `now` (UTC)."""
+    """O HTML completo da página no instante `now` (UTC). Os nós que estão enviando vêm antes dos parados."""
     status = analytics.device_status(conn, now)
+    if not status.empty:
+        status = status.assign(_order=status["status"].map(STATE_ORDER)).sort_values(["_order", "device_id"])
     cards = "".join(_node_card(node, _last_hours(conn, node["device_id"], now),
                                _forecast_block(conn, node["device_id"], now))
                     for _, node in status.iterrows())
@@ -267,19 +326,22 @@ def render(conn, now: datetime) -> str:
     return f"""<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Qualidade do ar · PM2,5</title>
-<meta name="description" content="PM2,5 medido por sensores de baixo custo: última leitura, média de 24 horas e gráfico.">
+<meta name="description" content="PM2,5 medido por sensores de baixo custo: a última leitura, a média de 24 horas e o gráfico.">
 <style>{PAGE_CSS}</style></head>
 <body><main>
-<header><h1>Qualidade do ar: PM2,5</h1>
-<p class="lead">PM2,5 é o material particulado fino, partículas de até 2,5 micrômetros que chegam ao fundo dos pulmões.
-Os valores vêm de sensores de baixo custo de um projeto de TCC, em µg/m³.</p></header>
+<header><h1>Qualidade do ar</h1>
+<p class="lead">PM2,5 medido por sensores de baixo custo de um projeto de TCC.
+Atualizado às {updated:%H:%M}, horário de Brasília.</p></header>
 {cards}
-<section><h2>Faixas de qualidade do ar (µg/m³)</h2>{_legend()}
-<p class="muted">São as faixas da CETESB para a média de 24 horas. Na leitura de um minuto, servem só de referência.</p>
-</section>
-<footer><p>Atualizado às {updated:%H:%M}, horário de Brasília. Recarregue a página para ver dados novos.</p>
+<section class="about"><h2>Como ler</h2>
+<p>PM2,5 é o material particulado fino: partículas de até 2,5 micrômetros, que chegam ao fundo dos pulmões. A medida é
+em microgramas por metro cúbico de ar (µg/m³).</p>
+<p>As cores seguem as faixas da CETESB, que valem para a média de 24 horas. Na leitura de um minuto, servem só de
+referência.</p>
+{_legend()}
 <p>Sensores de baixo custo erram mais que os equipamentos oficiais, principalmente com o ar úmido. Estes dados não
-substituem os da rede de monitoramento da CETESB.</p></footer>
+substituem os da rede de monitoramento da CETESB.</p></section>
+<footer><p>Recarregue a página para ver dados novos.</p></footer>
 </main></body></html>
 """
 
