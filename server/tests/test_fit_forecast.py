@@ -40,3 +40,27 @@ def test_recusa_versao_invalida_e_dados_insuficientes(conn, tmp_path, capsys):
     assert run(conn, tmp_path, "--model", "ridge", "--version", "v0") == 1
     assert "insuficientes" in capsys.readouterr().err
     assert not list(tmp_path.glob("*.joblib"))
+
+
+def test_devices_treina_so_com_os_nos_listados(conn, tmp_path):
+    insert_hours(conn, "no-01", series(24 * 10, seed=1), per_hour=45)
+    insert_hours(conn, "no-02", series(24 * 10, seed=2), per_hour=45)
+    assert run(conn, tmp_path, "--model", "ridge", "--version", "v1", "--devices", "no-01") == 0
+    model = fc.load(tmp_path / "ridge-v1.joblib")
+    assert model.trained_on["devices"] == ["no-01"]
+    assert model.trained_on["rows"] == 24 * 10 - 24 - 1
+
+
+def test_sem_devices_treina_com_todos_os_nos_de_producao(conn, tmp_path):
+    insert_hours(conn, "no-01", series(24 * 10, seed=1), per_hour=45)
+    insert_hours(conn, "no-02", series(24 * 10, seed=2), per_hour=45)
+    assert run(conn, tmp_path, "--model", "ridge", "--version", "v1") == 0
+    assert fc.load(tmp_path / "ridge-v1.joblib").trained_on["devices"] == ["no-01", "no-02"]
+
+
+def test_devices_com_no_inexistente_ou_de_teste_retorna_erro(conn, tmp_path, capsys):
+    insert_hours(conn, "no-01", series(24 * 10, seed=1), per_hour=45)
+    insert_hours(conn, "teste-https", series(24 * 10, seed=2), per_hour=45)
+    assert run(conn, tmp_path, "--model", "ridge", "--version", "v1", "--devices", "no-01,teste-https") == 1
+    assert "teste-https" in capsys.readouterr().err
+    assert not list(tmp_path.glob("*.joblib"))
