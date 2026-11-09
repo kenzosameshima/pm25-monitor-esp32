@@ -14,7 +14,7 @@ from fastapi.exception_handlers import http_exception_handler, request_validatio
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import db, read_api
+from . import db, public_page, read_api
 from .config import get_settings
 from .guard import AuthThrottle, BodySizeLimit, client_ip, require_bearer
 from .models import Batch, IngestResult, quality_flags
@@ -37,6 +37,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="PM2,5 — API de ingestão e consulta", version="1.1.0", lifespan=lifespan)
 app.add_middleware(BodySizeLimit, limit=lambda: get_settings().max_body_bytes)
 app.include_router(read_api.router)
+app.include_router(public_page.router)
 
 
 def get_conn() -> Iterator:
