@@ -24,3 +24,6 @@ android/build/
 android/app/build/
 android/captures/
 *.iml
+
+# roteiro de fala da apresentação do TCC (uso pessoal)
+docs/roteiro-apresentacao-tcc.md
