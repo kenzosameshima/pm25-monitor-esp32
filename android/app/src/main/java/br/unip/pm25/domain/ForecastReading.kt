@@ -7,8 +7,15 @@ import java.time.temporal.ChronoUnit
 
 const val PERSISTENCE = "persistence"
 
-/** Nome do previsor para a tela: a persistência em português; os modelos como o servidor os grava. */
-fun predictorLabel(predictor: String): String = if (predictor == PERSISTENCE) "Persistência" else predictor
+/**
+ * Nome do previsor para a tela: a persistência em português; os modelos como o servidor os grava, e a versão
+ * retroativa marcada como tal, para não passar por previsão feita antes da hora.
+ */
+fun predictorLabel(predictor: String): String = when {
+    predictor == PERSISTENCE -> "Persistência"
+    isRetroactive(predictor) -> "${predictor.removeSuffix(RETRO_SUFFIX)} (retroativa)"
+    else -> predictor
+}
 
 /**
  * A hora em andamento, pelo relógio do servidor: já tem previsões, mas ainda não tem observação

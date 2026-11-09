@@ -36,6 +36,13 @@ import br.unip.pm25.data.ForecastResponse
 import br.unip.pm25.data.PredictorScore
 import br.unip.pm25.data.Timed
 import br.unip.pm25.domain.AirQuality
+import br.unip.pm25.domain.DIFFERENT_PERIODS
+import br.unip.pm25.domain.EvaluationWindow
+import br.unip.pm25.domain.RETRO_NOTE
+import br.unip.pm25.domain.SKILL_NOTE
+import br.unip.pm25.domain.evaluationWindow
+import br.unip.pm25.domain.isRetroactive
+import br.unip.pm25.domain.smallSampleNote
 import br.unip.pm25.domain.PERSISTENCE
 import br.unip.pm25.domain.estimatedServerNow
 import br.unip.pm25.domain.pendingHour
@@ -90,7 +97,7 @@ fun ForecastScreen(state: ForecastUiState, deviceId: String, onBack: () -> Unit,
                         state.error?.let { error -> item { StaleBanner(error, data.generatedAt) } }
                         item { PendingHourCard(data, estimatedServerNow(data.generatedAt, timed.receivedAt, Instant.now())) }
                         item { ComparisonCard(data) }
-                        item { ScoresCard(data.scores) }
+                        item { ScoresCard(data) }
                     }
                     state.error != null -> item { ErrorMessage(state.error, onRefresh, Modifier.fillMaxWidth()) }
                     else -> item {
@@ -115,7 +122,9 @@ private fun predictorColors(predictors: List<String>): Map<String, Color> {
 @Composable
 private fun PendingHourCard(data: ForecastResponse, serverNow: Instant) {
     val pending = pendingHour(data, serverNow)
-    val models = data.predictors.filter { it != PERSISTENCE }
+    // As retroativas são recalculadas depois da hora: não são previsão da hora em andamento.
+    val live = data.predictors.filterNot(::isRetroactive)
+    val models = live.filter { it != PERSISTENCE }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Hora em andamento", style = MaterialTheme.typography.titleMedium, modifier = Modifier.asHeading())
@@ -126,7 +135,7 @@ private fun PendingHourCard(data: ForecastResponse, serverNow: Instant) {
                 val end = pending.hour.plusSeconds(3600)
                 Text("Média prevista de ${CLOCK.format(pending.hour)} às ${CLOCK.format(end)}; a observada só fecha às ${CLOCK.format(end)}.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                data.predictors.forEach { p -> PredictionRow(predictorLabel(p), pending.predictions[p]) }
+                live.forEach { p -> PredictionRow(predictorLabel(p), pending.predictions[p]) }
             }
             if (models.isEmpty()) {
                 Text(
@@ -180,7 +189,10 @@ private fun ComparisonCard(data: ForecastResponse) {
 }
 
 @Composable
-private fun ScoresCard(scores: List<PredictorScore>) {
+private fun ScoresCard(data: ForecastResponse) {
+    val scores = data.scores
+    val note = MaterialTheme.typography.bodySmall
+    val noteColor = MaterialTheme.colorScheme.onSurfaceVariant
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Desempenho nas últimas $FORECAST_HOURS horas", style = MaterialTheme.typography.titleMedium,
@@ -188,6 +200,11 @@ private fun ScoresCard(scores: List<PredictorScore>) {
             if (scores.isEmpty()) {
                 Text("Ainda não há horas com observação e previsão para comparar.",
                     style = MaterialTheme.typography.bodyMedium)
+            }
+            when (val window = evaluationWindow(data)) {
+                is EvaluationWindow.Same -> Text(window.text, style = note, color = noteColor)
+                EvaluationWindow.Different -> Text("$DIFFERENT_PERIODS $SKILL_NOTE", style = note, color = noteColor)
+                null -> Unit
             }
             scores.forEachIndexed { i, s ->
                 if (i > 0) HorizontalDivider()
@@ -199,14 +216,16 @@ private fun ScoresCard(scores: List<PredictorScore>) {
                 }
                 val verdict = if (s.predictor == PERSISTENCE) "referência" else skillVerdict(s.skill).text
                 Metric("Skill score", "${s.skill.format(2)} · $verdict")
+                smallSampleNote(s.hours)?.let { Text(it, style = note, color = noteColor) }
             }
             Text(
                 "MAE é o erro médio e RMSE pesa mais os erros grandes. O skill score compara o RMSE de cada " +
                     "previsor com o da persistência nas mesmas horas: acima de zero, o modelo acerta mais que " +
                     "simplesmente repetir a hora anterior.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = note,
+                color = noteColor,
             )
+            if (scores.any { isRetroactive(it.predictor) }) Text(RETRO_NOTE, style = note, color = noteColor)
         }
     }
 }
