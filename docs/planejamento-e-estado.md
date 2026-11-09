@@ -1,6 +1,6 @@
 # Sistema de monitoramento de PM2,5: planejamento e estado atual
 
-Situação em 26/10/2026, com o job horário de previsão e os alertas do app integrados à `main` e as correções da revisão de segurança aplicadas (resta o risco da implantação no Windows, ver seção 7). O [README](../README.md) é a referência de uso e de detalhes de cada parte; este documento reúne o plano, as decisões e o que está pronto, verificado ou pendente.
+Situação em 09/11/2026, com o banco congelado para o período de 09/10 a 08/11/2026 e as métricas do período, a comparação com a CETESB e a primeira avaliação de modelos calculadas sobre ele. O job horário de previsão e os alertas do app estão integrados à `main` e as correções da revisão de segurança foram aplicadas (resta o risco da implantação no Windows, ver seção 7). O [README](../README.md) é a referência de uso e de detalhes de cada parte; este documento reúne o plano, as decisões e o que está pronto, verificado ou pendente.
 
 ## 1. Objetivo e escopo
 
@@ -89,9 +89,9 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | Banco | pronto | Esquema com `measurements`, `ingest_batches`, `invalid_messages`, `forecasts` e `devices.location` | Testes | Coordenadas para mapa (exigiria migração) |
 | Backup e dashboard | pronto | Backup diário com verificação de integridade; dashboard local de 3 abas | Dashboard testado com o AppTest do Streamlit; backup e cópia íntegra do banco com testes automáticos | — |
 | Regras de análise (`analytics.py`) | pronto | Hora válida, estado, saúde da coleta, comparação de previsões, métricas | Testes próprios e comparação com a implementação anterior; a saúde da coleta do painel, da API e do `period_metrics` dá o mesmo número (`test_saude_unificada.py`) | — |
-| Avaliação de modelos (`train_forecast.py`) | parcial | Persistência, Ridge, gradient boosting e MLP (scikit-learn), validação progressiva, teste final, relatório reproduzível | Testes com dados sintéticos | **Rodar com os dados reais da coleta** |
+| Avaliação de modelos (`train_forecast.py`) | parcial | Persistência, Ridge, gradient boosting e MLP (scikit-learn), validação progressiva, teste final, relatório reproduzível | Testes com dados sintéticos; rodada com os dados reais em 09/11/2026 sobre o banco congelado (só `no-01` e, como sensibilidade, os dois nós), com 5 sementes para a MLP | **Decidir a busca de hiperparâmetros e escolher o modelo do TCC**; nenhum modelo superou a persistência de forma clara nesta amostra (Ridge +0,082 de skill, MLP +0,025 ± 0,021, gradient boosting −0,055) |
 | Job horário de previsão (`fit_forecast.py`, `forecast_job.py`) | parcial | Treino e gravação do modelo versionado, job a cada hora (HH:05) na tarefa `pm25-forecast` e no crontab, `ridge v0` provisório | Testes com dados sintéticos; uma execução pelo `run-forecast.cmd` no banco local, vista na série `ridge v0` do previsto × observado | **Treinar o modelo do TCC e instalar a tarefa no servidor** |
-| Métricas do período e comparação CETESB | pronto | `period_metrics.py` (com congelamento do banco) e `compare_cetesb.py` | Testes | Rodar com os dados reais e o CSV do QUALAR |
+| Métricas do período e comparação CETESB | pronto | `period_metrics.py` (com congelamento do banco) e `compare_cetesb.py` | Testes; rodados em 09/11/2026 sobre o banco congelado e o CSV do QUALAR da estação Osasco (viés de +8,3 µg/m³, r de 0,43 em 641 horas pareadas) | Distância exata até a estação (hoje estimada em ~2,5 km) e confirmação da convenção de hora do QUALAR |
 | Implantação | parcial | Scripts do Windows (tarefas agendadas), serviços systemd e crontab para Linux, passo a passo do túnel | Scripts escritos; em uso desde 09/10/2026, com o nó enviando pelo túnel (Tailscale Funnel) e o app lendo pela URL pública | Testar os subcaminhos de `/v1/devices` de outra rede; segundo nó |
 | App Android (`android/`) | pronto para demonstração | Tela inicial, detalhe com 24 h ou 7 dias e saúde da coleta, previsão previsto × observado, cache offline, permissão de rede local, alertas em segundo plano (nó sem dados, PM2,5 Ruim, servidor sem resposta) | testes de unidade e lint sem problemas; fluxo completo no emulador (API 37) contra a API local, inclusive offline e os alertas; no Galaxy S23 Ultra (Android 16) pelo túnel, com os dados da produção e um alerta real de PM2,5 Ruim | Medir o atraso dos alertas no celular ao longo do tempo; build de release assinado |
 
@@ -103,15 +103,15 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | Firmware | Testes no computador (parser, média, JSON) e compilação nas quatro combinações | — |
 | App Android | Testes de unidade: contrato JSON com respostas geradas pela própria API, erros, rede local, faixas, idade, hora estimada do servidor, resumo, previsão, cache em arquivo, estado das três telas, regras dos alertas e textos das notificações | Emulador: permissão de rede local, as três telas, troca de janela, banco de 3 dias com lacuna e reinício, modelo de demonstração em `forecasts`, queda da API e reabertura sem servidor; alertas de nó sem dados e de volta, ar Ruim, servidor sem resposta e de volta, sem avisos repetidos. Celular (Galaxy S23 Ultra, Android 16, pelo túnel): atualização por cima da versão anterior, dados da produção, permissão pelo cartão e alerta real de PM2,5 Ruim |
 
-**Nunca verificado:** o modelo do TCC em produção; a concordância entre dois nós (há um só); a comparação com a CETESB. O nó `no-01` opera em Osasco desde 09/10/2026 e envia pelo túnel. Os resultados do emulador usaram dados sintéticos e um modelo de demonstração (`demo v1`), que não é o modelo do TCC; no celular, os dados e o alerta foram os reais da produção.
+**Nunca verificado:** o modelo do TCC em produção; a concordância entre dois nós (o `no-01`, em Osasco, e o `no-02`, na zona sul da capital, medem ar diferente; o `no-02` será levado para junto do `no-01`). O nó `no-01` opera em Osasco desde 09/10/2026 e envia pelo túnel. Os resultados do emulador usaram dados sintéticos e um modelo de demonstração (`demo v1`), que não é o modelo do TCC; no celular, os dados e o alerta foram os reais da produção.
 
 ## 7. Pendências e riscos
 
 Em ordem de prioridade:
 
-1. **Coleta contínua.** O nó `no-01` coleta desde 09/10/2026. A coleta segue até 27 ou 28/10/2026 (cerca de 19 dias), quando o banco é congelado para as métricas do período, a avaliação dos modelos e a comparação com a CETESB. É menos que as cerca de 5 semanas recomendadas no README para a avaliação, então os resultados do TCC serão preliminares e a limitação deve constar no texto.
+1. **Coleta contínua.** O nó `no-01` coleta desde 09/10/2026. O banco foi congelado em 09/11/2026 para o período de 09/10 a 08/11 (31 dias), com cópia em dois discos e hash registrado em `periodo.json`; a coleta e o backup diário seguem. São menos que as cerca de 5 semanas recomendadas no README para a avaliação, então os resultados do TCC são preliminares e a limitação consta em `docs/limitacoes-do-tcc.md`.
 2. **Túnel em produção.** Seguir o passo a passo do README e testar de outra rede, com `check_https.py` para a ingestão e `curl` para `/v1/devices` e seus subcaminhos.
-3. **Modelo do TCC em produção.** O job horário e o `ridge v0` provisório estão prontos. Falta escolher o modelo na avaliação offline, com os dados coletados até 27 ou 28/10/2026, treiná-lo numa versão nova e instalar a tarefa `pm25-forecast` no servidor.
+3. **Modelo do TCC em produção.** O job horário e o `ridge v0` provisório estão prontos. A avaliação offline sobre o banco congelado já rodou e nenhum modelo superou a persistência de forma clara. Falta decidir a busca de hiperparâmetros, escolher o modelo, treiná-lo numa versão nova e instalar a tarefa `pm25-forecast` no servidor.
 4. **Atraso dos alertas no celular.** Os alertas funcionam no emulador e no Galaxy S23 Ultra pelo túnel, inclusive com um alerta real de PM2,5 Ruim. Falta acompanhar a checagem periódica por alguns dias e medir o atraso com a economia de bateria da Samsung.
 5. **Release do app.** Assinar o APK e testar a versão de release, que exige HTTPS.
 
@@ -122,15 +122,15 @@ Riscos já conhecidos:
 - **Previsões recalculadas retroativamente.** Em 19/10/2026 foram recalculadas 5 horas-alvo do `ridge v0` que ficaram sem previsão porque o servidor ficou sem receber dados: 17/10 18:00 UTC (15:00 em Brasília) e 18/10 de 18:00 a 21:00 UTC (15:00 a 18:00 em Brasília). Na segunda, o nó guardou as leituras de 17:09 a 21:50 UTC durante uma queda do túnel e as enviou em bloco às 21:51 UTC (291 leituras, nenhuma perdida). O recálculo (`forecast_job.py --replay-from ... --replay-to ...`) usa o mesmo modelo e só as leituras anteriores à hora-alvo, mas não foi gravado antes do fato: está na versão `v0-retro`, separada das 28 previsões em tempo real (`v0`), e deve ser tratado como previsão retroativa, não prospectiva, no texto do TCC. Desde 20/10/2026 os scripts agendados do repositório (`run-forecast.cmd` e `crontab.example`) rodam com `--backfill-hours 24` e cobrem sozinhos quedas de até 24 horas, também na versão `-retro`; uma lacuna mais antiga ainda pede o `--replay-from` manual.
 - **Token de leitura embutido no APK.** Ele pode ser extraído, mas só dá acesso de leitura e pode ser trocado no `.env`.
 - **Umidade alta.** Acima de 75%, o PMS5003 tende a superestimar o PM2,5. O app avisa quantas horas da janela passaram desse limite.
-- **Sensor do `no-01` sem partículas em episódios.** 10 episódios de pelo menos 20 minutos entre 12/10 e 26/10 (5,3% das leituras), com PM1, PM2,5 e PM10 em 0,0 e o sensor respondendo. 26 horas viraram suspeitas e saem da análise; a causa não está decidida (defeito do sensor ou ar muito limpo). Conferir contra o CSV da CETESB com `compare_cetesb --include-suspect` e relatar as duas análises, com e sem essas horas.
+- **Sensor do `no-01` sem partículas em episódios.** 10 episódios de pelo menos 20 minutos entre 12/10 e 26/10 (5,3% das leituras), com PM1, PM2,5 e PM10 em 0,0 e o sensor respondendo. No banco congelado (09/10 a 08/11), 70 das 744 horas são suspeitas e saem da análise; a causa não está decidida (defeito do sensor ou ar muito limpo). Contra a CETESB Osasco, incluir essas horas melhora o ajuste (r de 0,45 contra 0,43), o que sugere que parte delas pode ser ar limpo; as duas análises, com e sem essas horas, estão em `resultados/` e devem ser relatadas.
 
 ## 8. Próximos passos sugeridos
 
-1. Instalar um segundo nó e deixar os dois lado a lado de 3 a 7 dias para medir a concordância.
-2. Registrar o local do nó com `set_location` e manter o túnel e o app apontados para a URL pública.
-3. Em 27 ou 28/10/2026, com a coleta encerrada, rodar `train_forecast.py` sobre o banco congelado, escolher o modelo e treiná-lo com `fit_forecast.py` numa versão nova, que o job horário passa a gravar ao lado do `ridge v0`.
+1. Levar o `no-02` para junto do `no-01` e deixar os dois lado a lado por pelo menos uma a duas semanas para medir a concordância, registrando a data da mudança (o `set_location` não guarda histórico) e congelando depois só o período de sobreposição.
+2. Manter o túnel e o app apontados para a URL pública e registrar o local do `no-02` com `set_location` quando ele for instalado.
+3. Escolher o modelo (decidir antes se haverá busca de hiperparâmetros) e treiná-lo com `fit_forecast.py` numa versão nova, que o job horário passa a gravar ao lado do `ridge v0`.
 4. Acompanhar os alertas no celular por alguns dias, com a bateria do app sem restrições.
-5. Rodar `period_metrics.py` e `compare_cetesb.py` para o capítulo de resultados.
+5. Obter as coordenadas oficiais da estação Osasco, confirmar com a CETESB a convenção de hora do QUALAR e fechar o texto de resultados com os números congelados.
 
 ## 9. Como reproduzir o estado atual
 
