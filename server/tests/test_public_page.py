@@ -83,8 +83,8 @@ def test_mostra_o_estado_do_no_e_esconde_o_valor_de_quem_parou_de_enviar(client,
 
 
 def node_card(page: str) -> str:
-    """O cartão do primeiro nó: a legenda das faixas, mais abaixo, sempre traz o nome de todas."""
-    start = page.index('<section class="node">')
+    """O cartão do primeiro nó, enviando ou parado: a legenda das faixas, mais abaixo, sempre traz o nome de todas."""
+    start = page.index('<section class="node')
     return page[start:page.index("</section>", start)]
 
 
@@ -268,6 +268,36 @@ def test_pagina_fica_em_cache_por_um_minuto(client):
     assert second == first
 
 
+
+def test_nos_enviando_vem_antes_dos_parados(client):
+    insert(client, [reading(NOW - timedelta(hours=2), 0, 15.0, device="aa-parado")], device="aa-parado")
+    insert(client, [reading(NOW, 0, 15.0)])
+
+    page = client.get("/public").text
+
+    assert page.index("no-01") < page.index("aa-parado")
+
+
+def test_no_parado_sem_horas_com_media_fica_numa_linha(client):
+    insert(client, [reading(NOW - timedelta(minutes=40), 0, 41.7)])
+
+    card = node_card(client.get("/public").text)
+
+    assert "Sem dados recentes" in card
+    assert "Agora" not in card
+    assert "Últimas 24 horas" not in card
+
+
+def test_titulo_do_no_e_o_lugar_e_o_sensor_fica_no_estado(client):
+    insert(client, [reading(NOW, 0, 15.0)])
+    set_location(client, "Veloso, Osasco (apoio externo da janela)")
+
+    card = node_card(client.get("/public").text)
+
+    assert "<h2>Veloso, Osasco</h2>" in card
+    assert "(sensor no-01)</span>" in card
+
+
 # ---------------------------------------------------------------- gráfico
 
 def series(values: list[float | None]) -> "pd.Series":
@@ -307,3 +337,10 @@ def test_grafico_sem_nenhuma_hora_com_media_fica_vazio():
     from app.public_page import hourly_chart_svg
 
     assert hourly_chart_svg(series([None, None, None])) == ""
+
+
+
+def test_horas_sem_media_ganham_marca_no_eixo():
+    chart = svg([10.0, None, 12.0, None, None])
+
+    assert len([r for r in chart.iter(f"{NS}rect") if r.get("class") == "gap"]) == 3
