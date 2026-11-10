@@ -324,7 +324,10 @@ h2{font-size:2.3rem}
 
 
 def render(conn, now: datetime) -> str:
-    """O HTML completo da página no instante `now` (UTC). Os nós que estão enviando vêm antes dos parados."""
+    """O HTML completo da página no instante `now` (UTC). Os nós que estão enviando vêm antes dos parados.
+
+    A página se recarrega sozinha a cada CACHE_SECONDS, com meta refresh, sem script: recarregar mais cedo traria a
+    mesma página do cache, e os nós enviam uma leitura por minuto."""
     status = analytics.device_status(conn, now)
     if not status.empty:
         status = status.assign(_order=status["status"].map(STATE_ORDER)).sort_values(["_order", "device_id"])
@@ -336,6 +339,7 @@ def render(conn, now: datetime) -> str:
     updated = now.astimezone(LOCAL_TZ)
     return f"""<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="{CACHE_SECONDS}">
 <title>Qualidade do ar · PM2,5</title>
 <meta name="description" content="PM2,5 medido por sensores de baixo custo: a última leitura, a média de 24 horas e o gráfico.">
 <style>{PAGE_CSS}</style></head>
@@ -352,7 +356,7 @@ referência.</p>
 {_legend()}
 <p>Sensores de baixo custo erram mais que os equipamentos oficiais, principalmente com o ar úmido. Estes dados não
 substituem os da rede de monitoramento da CETESB.</p></section>
-<footer><p>Recarregue a página para ver dados novos.</p></footer>
+<footer><p>A página se atualiza sozinha a cada minuto.</p></footer>
 </main></body></html>
 """
 
