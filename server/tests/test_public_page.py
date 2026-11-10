@@ -125,22 +125,39 @@ def test_media_de_24_horas_usa_so_as_horas_validas(client):
     page = node_card(client.get("/public").text)
 
     assert "30,0" in page            # (40 + 30 + 20) / 3; a hora com 10 leituras fica de fora
-    assert "3 de 24 horas" in page
+    assert coverage(page)["Com média"] == "3 de 24 h"
     assert "Moderada" in page        # a faixa da média
     assert "Boa" in page             # e a da última leitura, 12,0
 
 
+def coverage(card: str) -> dict[str, str]:
+    """A linha de cobertura das últimas 24 horas de um cartão: rótulo -> valor."""
+    import re
 
-def test_horas_suspeitas_dizem_por_que_ficaram_fora_da_media(client):
+    start = card.index('<dl class="coverage">')
+    block = card[start:card.index("</dl>", start)]
+    return dict(re.findall(r"<dt>(.*?)</dt><dd>(.*?)</dd>", block))
+
+
+def test_cobertura_separa_horas_suspeitas_das_que_tiveram_poucas_leituras(client):
     rows = (hour_of_readings(4, 20.0) + hour_of_readings(3, 0.2, first_seq=100)
             + hour_of_readings(2, 0.3, first_seq=200) + [reading(NOW, 300, 15.0)])
     insert(client, rows)
 
     page = node_card(client.get("/public").text)
 
-    assert "Só 1 de 24 horas entraram na conta" in page
-    assert "Em 2 horas, o sensor quase não viu partículas" in page
-    assert "Nas outras 21, faltaram leituras" in page
+    assert coverage(page) == {"Com média": "1 de 24 h", "Suspeitas": "2 h", "Faltaram leituras": "21 h"}
+    assert "não dá para saber se o ar estava muito limpo ou se o sensor falhou" in page
+
+
+def test_cobertura_completa_nao_lista_horas_de_fora(client):
+    rows = [r for h in range(24, 0, -1) for r in hour_of_readings(h, 20.0, first_seq=h * 100)]
+    insert(client, rows + [reading(NOW, 0, 15.0)])
+
+    page = node_card(client.get("/public").text)
+
+    assert coverage(page) == {"Com média": "24 de 24 h"}
+    assert "Suspeitas" not in page
 
 
 def test_no_enviando_sem_nenhuma_hora_com_media_diz_o_motivo_em_vez_de_ficar_em_branco(client):
@@ -150,8 +167,9 @@ def test_no_enviando_sem_nenhuma_hora_com_media_diz_o_motivo_em_vez_de_ficar_em_
     page = node_card(client.get("/public").text)
 
     assert "Últimas 24 horas" in page
+    assert '<div class="panel">' in page
     assert "Nenhuma das últimas 24 horas ficou com média" in page
-    assert "Em todas, o sensor quase não viu partículas" in page
+    assert coverage(page) == {"Com média": "0 de 24 h", "Suspeitas": "24 h"}
 
 
 def test_veredito_avisa_que_a_faixa_vale_para_24_horas_e_a_leitura_zerada_nao(client):

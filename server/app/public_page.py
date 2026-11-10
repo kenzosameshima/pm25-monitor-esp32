@@ -144,40 +144,31 @@ def _last_hours(conn, device: str, now: datetime) -> tuple[pd.Series, int]:
     return hourly["pm25"].reindex(slots).astype(float), suspect
 
 
-def _missing_note(suspect: int, few: int) -> str:
-    """Por que as horas sem média ficaram de fora: `suspect` horas em que o sensor quase não viu partículas e `few`
-    em que faltaram leituras. Separa as duas causas, para a hora suspeita não parecer falta de leitura."""
-    if suspect == WINDOW_HOURS:
-        note = " Em todas, o sensor quase não viu partículas, e por isso elas ficaram sem média."
-    elif suspect == 1:
-        note = " Em 1 hora, o sensor quase não viu partículas, e por isso ela ficou sem média."
-    elif suspect:
-        note = f" Em {suspect} horas, o sensor quase não viu partículas, e por isso elas ficaram sem média."
-    else:
-        note = ""
-    if few:
-        note += (" Nas outras, faltaram leituras." if not suspect else
-                 " Na outra, faltaram leituras." if few == 1 else f" Nas outras {few}, faltaram leituras.")
-    return note
+def _coverage(valid: int, suspect: int, few: int) -> str:
+    """De quantas horas a média saiu e por que as outras ficaram de fora, numa linha como a das outras medidas. Separa
+    as horas suspeitas das que tiveram poucas leituras, e diz o que é a suspeita, para ela não parecer ar limpo."""
+    items = [("Com média", f"{valid} de {WINDOW_HOURS} h"), ("Suspeitas", f"{suspect} h"), ("Faltaram leituras", f"{few} h")]
+    row = "".join(f"<div><dt>{label}</dt><dd>{value}</dd></div>"
+                  for i, (label, value) in enumerate(items) if i == 0 or value != "0 h")
+    why = ('<p class="hint">Na hora suspeita, o sensor quase não viu partículas: não dá para saber se o ar estava muito '
+           'limpo ou se o sensor falhou, e ela fica fora da média.</p>' if suspect else "")
+    return f'<dl class="coverage">{row}</dl>{why}'
 
 
 def _day_block(hours: pd.Series, forecast: str, suspect: int = 0, hide_empty: bool = False) -> str:
-    """As últimas 24 horas: a média, de quantas horas ela saiu e por que as outras ficaram de fora, o gráfico e a
-    previsão. Sem hora com média, o bloco diz o motivo, para a coluna não parecer conteúdo que não carregou; com
-    `hide_empty` (um nó parado, sem previsão), fica vazio, porque não há o que mostrar."""
+    """As últimas 24 horas: a média, a linha de cobertura, o gráfico e a previsão. Sem hora com média, um quadro diz
+    isso e o motivo, para a coluna não parecer conteúdo que não carregou; com `hide_empty` (um nó parado, sem
+    previsão), o bloco fica vazio, porque não há o que mostrar."""
     valid = hours.dropna()
     if valid.empty and not forecast and hide_empty:
         return ""
-    few = WINDOW_HOURS - len(valid) - suspect
-    if valid.empty and not suspect:
-        summary = f'<p>Nenhuma das últimas {WINDOW_HOURS} horas teve leituras suficientes para uma média.</p>'
-    elif valid.empty:
-        summary = f'<p>Nenhuma das últimas {WINDOW_HOURS} horas ficou com média.{_missing_note(suspect, few)}</p>'
+    coverage = _coverage(len(valid), suspect, WINDOW_HOURS - len(valid) - suspect)
+    if valid.empty:
+        summary = (f'<div class="panel"><p>Nenhuma das últimas {WINDOW_HOURS} horas ficou com média.</p>'
+                   f'{coverage}</div>')
     else:
         mean = valid.mean()
-        coverage = ("" if len(valid) == WINDOW_HOURS else
-                    f' Só {len(valid)} de {WINDOW_HOURS} horas entraram na conta.{_missing_note(suspect, few)}')
-        summary = f'<p>Média de <strong>{_number(mean)} µg/m³</strong>, {_band(mean)}.{coverage}</p>'
+        summary = f'<p>Média de <strong>{_number(mean)} µg/m³</strong>, {_band(mean)}.</p>{coverage}'
     chart = hourly_chart_svg(hours)
     if chart:
         chart = (f'<figure>{chart}<figcaption>PM2,5 médio de cada hora, em µg/m³, no horário de Brasília. Onde a linha '
@@ -314,7 +305,10 @@ p{margin:.4rem 0}
 .marker{position:absolute;top:-.3rem;width:4px;height:1.15rem;margin-left:-2px;background:var(--ink);border-radius:2px;
 box-shadow:0 0 0 2px var(--haze)}
 .ticks span{position:absolute;top:.9rem;transform:translateX(-50%);font-size:.75rem;color:var(--muted)}
-.others{display:flex;flex-wrap:wrap;gap:.4rem 2rem;margin:0}
+.others,.coverage{display:flex;flex-wrap:wrap;gap:.4rem 2rem;margin:0}
+.coverage{margin:.6rem 0 .5rem}
+.panel{border:1px solid var(--rule);border-radius:6px;padding:.85rem 1rem .3rem}
+.panel>p{margin-top:0}
 dt{font-size:.8rem;color:var(--muted)}
 dd{margin:0;font-weight:600;font-variant-numeric:tabular-nums}
 .note{font-size:.9rem;margin:.8rem 0 0;padding-left:.6rem;border-left:3px solid #e6c445}
