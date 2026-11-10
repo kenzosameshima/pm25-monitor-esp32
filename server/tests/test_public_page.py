@@ -98,6 +98,17 @@ def test_leitura_zerada_aparece_sem_faixa(client):
     assert "zerada" in page
 
 
+def test_pm25_abaixo_de_meio_micrograma_fica_sem_faixa_mesmo_com_pm10(client):
+    insert(client, [reading(NOW - timedelta(minutes=1), 0, 0.3, pm1=0.0, pm10=0.1)])
+
+    page = node_card(client.get("/public").text)
+
+    assert "0,3" in page
+    assert "Boa" not in page
+    assert "sem faixa" in page
+    assert "zerada" not in page          # leitura zerada é só a que tem tudo em zero (GLOSSARY.md)
+
+
 @pytest.mark.parametrize("humidity, warns", [(81.0, True), (60.0, False)])
 def test_mostra_pm10_temperatura_e_umidade_e_avisa_da_umidade_alta(client, humidity, warns):
     insert(client, [reading(NOW - timedelta(minutes=1), 0, 20.0, pm10=48.2, temperature=23.4, humidity=humidity)])

@@ -189,12 +189,19 @@ def _scale(pm25) -> str:
 
 
 def _now_block(node: pd.Series) -> str:
-    """A última leitura: o veredito da faixa em destaque, a escala e as outras medidas. Leitura zerada fica sem faixa."""
+    """A última leitura: o veredito da faixa em destaque, a escala e as outras medidas. A leitura com o PM2,5 abaixo de
+    analytics.SUSPECT_LOW_PM25 fica sem faixa, zerada ou não: é a que o ADR 0004 conta como "sem partículas"."""
     reading = f'<span class="num">{_number(node["pm25"])}</span> µg/m³ de PM2,5 na última leitura, a média de 1 minuto.'
     if analytics.is_zero_reading(node["pm1"], node["pm25"], node["pm10"]):
-        # Tudo em zero não diz se o ar está limpo ou se o sensor parou de ver partículas: sem faixa.
-        verdict = (f'<div class="verdict neutral"><p class="reading">{reading}</p><p class="reading">Leitura zerada: '
-                   'sem faixa, porque o sensor pode ter deixado de ver partículas.</p></div>')
+        no_band = "Leitura zerada"
+    elif pd.notna(node["pm25"]) and node["pm25"] < analytics.SUSPECT_LOW_PM25:
+        no_band = f'PM2,5 abaixo de {_number(analytics.SUSPECT_LOW_PM25)} µg/m³'
+    else:
+        no_band = ""
+    if no_band:
+        # Quase sem partículas, a leitura não diz se o ar está muito limpo ou se o sensor deixou de vê-las: sem faixa.
+        verdict = (f'<div class="verdict neutral"><p class="reading">{reading}</p><p class="reading">{no_band}: sem faixa, '
+                   'porque não dá para saber se o ar está muito limpo ou se o sensor deixou de ver partículas.</p></div>')
     else:
         band = analytics.air_quality(node["pm25"])
         # As faixas da CETESB valem para a média de 24 horas: a ressalva fica junto do veredito, não só em "Como ler".
