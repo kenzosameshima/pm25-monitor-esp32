@@ -131,6 +131,46 @@ def test_media_de_24_horas_usa_so_as_horas_validas(client):
 
 
 
+def test_horas_suspeitas_dizem_por_que_ficaram_fora_da_media(client):
+    rows = (hour_of_readings(4, 20.0) + hour_of_readings(3, 0.2, first_seq=100)
+            + hour_of_readings(2, 0.3, first_seq=200) + [reading(NOW, 300, 15.0)])
+    insert(client, rows)
+
+    page = node_card(client.get("/public").text)
+
+    assert "Só 1 de 24 horas entraram na conta" in page
+    assert "Em 2 horas, o sensor quase não viu partículas" in page
+    assert "Nas outras 21, faltaram leituras" in page
+
+
+def test_no_enviando_sem_nenhuma_hora_com_media_diz_o_motivo_em_vez_de_ficar_em_branco(client):
+    rows = [r for h in range(24, 0, -1) for r in hour_of_readings(h, 0.0, first_seq=h * 100)]
+    insert(client, rows + [reading(NOW, 0, 0.0, pm1=0.0, pm10=0.0)])
+
+    page = node_card(client.get("/public").text)
+
+    assert "Últimas 24 horas" in page
+    assert "Nenhuma das últimas 24 horas ficou com média" in page
+    assert "Em todas, o sensor quase não viu partículas" in page
+
+
+def test_veredito_avisa_que_a_faixa_vale_para_24_horas_e_a_leitura_zerada_nao(client):
+    insert(client, [reading(NOW, 0, 12.0)])
+    insert(client, [reading(NOW, 0, 0.0, device="no-02", pm1=0.0, pm10=0.0)], device="no-02")
+
+    page = client.get("/public").text
+    first, second = page.split('<section class="node')[1:3]
+
+    assert "a faixa serve só de referência" in first
+    assert "a faixa serve só de referência" not in second
+
+
+def test_legenda_do_grafico_explica_a_marca_cinza(client):
+    insert(client, hour_of_readings(3, 18.0) + [reading(NOW, 100, 15.0)])
+
+    assert "marca cinza" in client.get("/public").text
+
+
 def test_cartao_traz_o_grafico_das_ultimas_24_horas(client):
     insert(client, hour_of_readings(4, 18.0) + hour_of_readings(3, 22.0, first_seq=100) + [reading(NOW, 200, 15.0)])
 

@@ -132,33 +132,56 @@ def _ago(minutes) -> str:
 WINDOW_HOURS = 24
 
 
-def _last_hours(conn, device: str, now: datetime) -> pd.Series:
+def _last_hours(conn, device: str, now: datetime) -> tuple[pd.Series, int]:
     """PM2,5 médio de cada uma das últimas WINDOW_HOURS horas completas (NaN na hora sem média), da mais antiga à
-    mais recente. A hora em andamento fica de fora: ela ainda não tem as leituras mínimas."""
+    mais recente, e quantas delas ficaram sem média por serem suspeitas. A hora em andamento fica de fora: ela ainda
+    não tem as leituras mínimas."""
     end = pd.Timestamp(now).floor("h")
     start = end - pd.Timedelta(hours=WINDOW_HOURS)
     slots = pd.date_range(start, end, freq="h", inclusive="left")
-    hourly = analytics.hourly_means(conn, start.to_pydatetime(), end.to_pydatetime(), [device])
-    return hourly.set_index("hora")["pm25"].reindex(slots).astype(float)
+    hourly = analytics.hourly_means(conn, start.to_pydatetime(), end.to_pydatetime(), [device]).set_index("hora")
+    suspect = int(hourly["suspeita"].reindex(slots, fill_value=False).astype(bool).sum())
+    return hourly["pm25"].reindex(slots).astype(float), suspect
 
 
-def _day_block(hours: pd.Series, forecast: str) -> str:
-    """As últimas 24 horas: a média, de quantas horas ela saiu, o gráfico e a previsão. Vazio sem hora com média e sem
-    previsão (num nó parado há mais de um dia, não há o que mostrar)."""
+def _missing_note(suspect: int, few: int) -> str:
+    """Por que as horas sem média ficaram de fora: `suspect` horas em que o sensor quase não viu partículas e `few`
+    em que faltaram leituras. Separa as duas causas, para a hora suspeita não parecer falta de leitura."""
+    if suspect == WINDOW_HOURS:
+        note = " Em todas, o sensor quase não viu partículas, e por isso elas ficaram sem média."
+    elif suspect == 1:
+        note = " Em 1 hora, o sensor quase não viu partículas, e por isso ela ficou sem média."
+    elif suspect:
+        note = f" Em {suspect} horas, o sensor quase não viu partículas, e por isso elas ficaram sem média."
+    else:
+        note = ""
+    if few:
+        note += (" Nas outras, faltaram leituras." if not suspect else
+                 " Na outra, faltaram leituras." if few == 1 else f" Nas outras {few}, faltaram leituras.")
+    return note
+
+
+def _day_block(hours: pd.Series, forecast: str, suspect: int = 0, hide_empty: bool = False) -> str:
+    """As últimas 24 horas: a média, de quantas horas ela saiu e por que as outras ficaram de fora, o gráfico e a
+    previsão. Sem hora com média, o bloco diz o motivo, para a coluna não parecer conteúdo que não carregou; com
+    `hide_empty` (um nó parado, sem previsão), fica vazio, porque não há o que mostrar."""
     valid = hours.dropna()
-    if valid.empty and not forecast:
+    if valid.empty and not forecast and hide_empty:
         return ""
-    if valid.empty:
-        summary = (f'<p>Nenhuma das últimas {WINDOW_HOURS} horas teve leituras suficientes para uma média.</p>')
+    few = WINDOW_HOURS - len(valid) - suspect
+    if valid.empty and not suspect:
+        summary = f'<p>Nenhuma das últimas {WINDOW_HOURS} horas teve leituras suficientes para uma média.</p>'
+    elif valid.empty:
+        summary = f'<p>Nenhuma das últimas {WINDOW_HOURS} horas ficou com média.{_missing_note(suspect, few)}</p>'
     else:
         mean = valid.mean()
         coverage = ("" if len(valid) == WINDOW_HOURS else
-                    f' Só {len(valid)} de {WINDOW_HOURS} horas tiveram leituras suficientes para entrar na conta.')
+                    f' Só {len(valid)} de {WINDOW_HOURS} horas entraram na conta.{_missing_note(suspect, few)}')
         summary = f'<p>Média de <strong>{_number(mean)} µg/m³</strong>, {_band(mean)}.{coverage}</p>'
     chart = hourly_chart_svg(hours)
     if chart:
         chart = (f'<figure>{chart}<figcaption>PM2,5 médio de cada hora, em µg/m³, no horário de Brasília. Onde a linha '
-                 'some, a hora não teve leituras suficientes.</figcaption></figure>')
+                 'some, a marca cinza no eixo indica uma hora sem média.</figcaption></figure>')
     return f'<div class="day"><h3>Últimas {WINDOW_HOURS} horas</h3>{summary}{chart}{forecast}</div>'
 
 
@@ -183,8 +206,11 @@ def _now_block(node: pd.Series) -> str:
                    'sem faixa, porque o sensor pode ter deixado de ver partículas.</p></div>')
     else:
         band = analytics.air_quality(node["pm25"])
+        # As faixas da CETESB valem para a média de 24 horas: a ressalva fica junto do veredito, não só em "Como ler".
         verdict = (f'<div class="verdict {BAND_CLASS.get(band, "neutral")}"><p class="word">{escape(band or "—")}</p>'
-                   f'<p class="reading">{reading}</p></div>{_scale(node["pm25"])}')
+                   f'<p class="reading">{reading}</p></div>{_scale(node["pm25"])}'
+                   '<p class="hint">A CETESB define as faixas para a média de 24 horas; na leitura de 1 minuto, a faixa '
+                   'serve só de referência.</p>')
     others = (f'<dl class="others"><div><dt>PM10</dt><dd>{_number(node["pm10"])} µg/m³</dd></div>'
               f'<div><dt>Temperatura</dt><dd>{_number(node["temperature"])} °C</dd></div>'
               f'<div><dt>Umidade</dt><dd>{_number(node["humidity"], 0)}%</dd></div></dl>')
@@ -222,7 +248,7 @@ def _forecast_block(conn, device: str, now: datetime) -> str:
             '<span class="muted">É experimental: um modelo estatístico ainda em avaliação.</span></p>')
 
 
-def _node_card(node: pd.Series, hours: pd.Series, forecast: str = "") -> str:
+def _node_card(node: pd.Series, hours: pd.Series, forecast: str = "", suspect: int = 0) -> str:
     """Um nó: o lugar como título, o estado, e os blocos "Agora" e "Últimas 24 horas", empilhados no celular e lado a
     lado na tela larga. Sem envio recente, o último valor não diz como o ar está agora: o nó fica sem o bloco "Agora",
     como no painel."""
@@ -233,7 +259,7 @@ def _node_card(node: pd.Series, hours: pd.Series, forecast: str = "") -> str:
     offline = node["status"] == "sem_dados"
     now = "" if offline else _now_block(node)
     return (f'<section class="node{" off" if offline else ""}"><h2>{title}</h2>{state}'
-            f'<div class="cols">{now}{_day_block(hours, forecast)}</div></section>')
+            f'<div class="cols">{now}{_day_block(hours, forecast, suspect, hide_empty=offline)}</div></section>')
 
 
 STATE_ORDER = {"em_operacao": 0, "atrasado": 1, "sem_dados": 2}
@@ -280,6 +306,7 @@ p{margin:.4rem 0}
 .verdict.neutral{background:none;border:1px solid var(--rule);color:var(--ink)}
 .word{font-size:3.4rem;margin:0;letter-spacing:-.01em}
 .reading{margin:.3rem 0 0}
+.hint{font-size:.85rem;color:var(--muted);margin:-.2rem 0 1rem}
 .num{font-size:1.6rem;font-variant-numeric:tabular-nums}
 .scale{position:relative;margin:.9rem 0 2.1rem}
 .track{display:flex;height:.55rem;border-radius:3px;overflow:hidden}
@@ -331,9 +358,11 @@ def render(conn, now: datetime) -> str:
     status = analytics.device_status(conn, now)
     if not status.empty:
         status = status.assign(_order=status["status"].map(STATE_ORDER)).sort_values(["_order", "device_id"])
-    cards = "".join(_node_card(node, _last_hours(conn, node["device_id"], now),
-                               _forecast_block(conn, node["device_id"], now))
-                    for _, node in status.iterrows())
+    cards = []
+    for _, node in status.iterrows():
+        hours, suspect = _last_hours(conn, node["device_id"], now)
+        cards.append(_node_card(node, hours, _forecast_block(conn, node["device_id"], now), suspect))
+    cards = "".join(cards)
     if not cards:
         cards = '<p class="empty">Nenhum nó enviou leituras ainda.</p>'
     updated = now.astimezone(LOCAL_TZ)
