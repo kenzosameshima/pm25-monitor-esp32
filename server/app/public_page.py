@@ -159,7 +159,7 @@ def _day_block(hours: pd.Series, forecast: str) -> str:
     if chart:
         chart = (f'<figure>{chart}<figcaption>PM2,5 médio de cada hora, em µg/m³, no horário de Brasília. Onde a linha '
                  'some, a hora não teve leituras suficientes.</figcaption></figure>')
-    return f'<h3>Últimas {WINDOW_HOURS} horas</h3>{summary}{chart}{forecast}'
+    return f'<div class="day"><h3>Últimas {WINDOW_HOURS} horas</h3>{summary}{chart}{forecast}</div>'
 
 
 def _scale(pm25) -> str:
@@ -191,7 +191,7 @@ def _now_block(node: pd.Series) -> str:
     if pd.notna(node["humidity"]) and node["humidity"] > analytics.HIGH_HUMIDITY:
         others += (f'<p class="note">Umidade acima de {analytics.HIGH_HUMIDITY:.0f}%: com o ar úmido, sensores como este '
                    'tendem a medir PM2,5 a mais.</p>')
-    return f'<h3>Agora</h3>{verdict}{others}'
+    return f'<div class="now"><h3>Agora</h3>{verdict}{others}</div>'
 
 
 def public_location(location) -> str | None:
@@ -223,16 +223,17 @@ def _forecast_block(conn, device: str, now: datetime) -> str:
 
 
 def _node_card(node: pd.Series, hours: pd.Series, forecast: str = "") -> str:
-    """Um nó: o lugar como título, o estado, e os blocos "Agora" e "Últimas 24 horas". Sem envio recente, o último
-    valor não diz como o ar está agora: o nó fica sem o bloco "Agora", como no painel."""
+    """Um nó: o lugar como título, o estado, e os blocos "Agora" e "Últimas 24 horas", empilhados no celular e lado a
+    lado na tela larga. Sem envio recente, o último valor não diz como o ar está agora: o nó fica sem o bloco "Agora",
+    como no painel."""
     place = public_location(node["location"])
     title = escape(place or node["device_id"])
     sensor = f' <span class="nowrap">(sensor {escape(node["device_id"])})</span>' if place else ""
     state = f'<p class="state">{STATE_LABELS[node["status"]]}, último envio {_ago(node["minutes_since"])}{sensor}.</p>'
     offline = node["status"] == "sem_dados"
     now = "" if offline else _now_block(node)
-    return (f'<section class="node{" off" if offline else ""}"><h2>{title}</h2>{state}{now}'
-            f'{_day_block(hours, forecast)}</section>')
+    return (f'<section class="node{" off" if offline else ""}"><h2>{title}</h2>{state}'
+            f'<div class="cols">{now}{_day_block(hours, forecast)}</div></section>')
 
 
 STATE_ORDER = {"em_operacao": 0, "atrasado": 1, "sem_dados": 2}
@@ -309,6 +310,16 @@ figcaption{font-size:.85rem;margin-top:.4rem}
 .legend li{margin:.3rem 0}
 .legend .chip{min-width:6.5rem;margin-right:.5rem}
 footer{font-size:.85rem;margin-top:1.75rem}
+@media (min-width:60rem){
+main{max-width:70rem;padding:2.5rem 2rem 4rem}
+h2{font-size:2.3rem}
+.node{margin-top:2.25rem;padding-top:1.75rem}
+.cols{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:0 3.5rem;align-items:start}
+.cols>.day:only-child{grid-column:1/-1;max-width:36rem}
+.about{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:0 3.5rem;align-items:start}
+.about>*{grid-column:1}
+.about .legend{grid-column:2;grid-row:2/span 3;margin:.4rem 0 0}
+}
 """
 
 
