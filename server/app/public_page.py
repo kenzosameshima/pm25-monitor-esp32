@@ -132,33 +132,48 @@ def _ago(minutes) -> str:
 WINDOW_HOURS = 24
 
 
-def _last_hours(conn, device: str, now: datetime) -> pd.Series:
+def _last_hours(conn, device: str, now: datetime) -> tuple[pd.Series, int]:
     """PM2,5 médio de cada uma das últimas WINDOW_HOURS horas completas (NaN na hora sem média), da mais antiga à
-    mais recente. A hora em andamento fica de fora: ela ainda não tem as leituras mínimas."""
+    mais recente, e quantas delas ficaram sem média por serem suspeitas. A hora em andamento fica de fora: ela ainda
+    não tem as leituras mínimas."""
     end = pd.Timestamp(now).floor("h")
     start = end - pd.Timedelta(hours=WINDOW_HOURS)
     slots = pd.date_range(start, end, freq="h", inclusive="left")
-    hourly = analytics.hourly_means(conn, start.to_pydatetime(), end.to_pydatetime(), [device])
-    return hourly.set_index("hora")["pm25"].reindex(slots).astype(float)
+    hourly = analytics.hourly_means(conn, start.to_pydatetime(), end.to_pydatetime(), [device]).set_index("hora")
+    suspect = int(hourly["suspeita"].reindex(slots, fill_value=False).astype(bool).sum())
+    return hourly["pm25"].reindex(slots).astype(float), suspect
 
 
-def _day_block(hours: pd.Series, forecast: str) -> str:
-    """As últimas 24 horas: a média, de quantas horas ela saiu, o gráfico e a previsão. Vazio sem hora com média e sem
-    previsão (num nó parado há mais de um dia, não há o que mostrar)."""
+def _coverage(valid: int, suspect: int, few: int) -> str:
+    """De quantas horas a média saiu e por que as outras ficaram de fora, numa linha como a das outras medidas. Separa
+    as horas suspeitas das que tiveram poucas leituras, e diz o que é a suspeita, para ela não parecer ar limpo."""
+    items = [("Horas válidas", f"{valid} de {WINDOW_HOURS} h"), ("Suspeitas", f"{suspect} h"), ("Faltaram leituras", f"{few} h")]
+    row = "".join(f"<div><dt>{label}</dt><dd>{value}</dd></div>"
+                  for i, (label, value) in enumerate(items) if i == 0 or value != "0 h")
+    why = ('<p class="hint">Na hora suspeita, o sensor quase não viu partículas: não dá para saber se o ar estava muito '
+           'limpo ou se o sensor falhou, e ela fica fora da média.</p>' if suspect else "")
+    return f'<dl class="coverage">{row}</dl>{why}'
+
+
+def _day_block(hours: pd.Series, forecast: str, suspect: int = 0, hide_empty: bool = False) -> str:
+    """As últimas 24 horas: a média, a linha de cobertura, o gráfico e a previsão. Sem hora com média, um quadro diz
+    isso e o motivo, para a coluna não parecer conteúdo que não carregou; com `hide_empty` (um nó parado, sem
+    previsão), o bloco fica vazio, porque não há o que mostrar."""
     valid = hours.dropna()
-    if valid.empty and not forecast:
+    if valid.empty and not forecast and hide_empty:
         return ""
+    coverage = _coverage(len(valid), suspect, WINDOW_HOURS - len(valid) - suspect)
     if valid.empty:
-        summary = (f'<p>Nenhuma das últimas {WINDOW_HOURS} horas teve leituras suficientes para uma média.</p>')
+        summary = f'<div class="panel"><p>Nenhuma hora válida nas últimas {WINDOW_HOURS} horas.</p>{coverage}</div>'
     else:
         mean = valid.mean()
-        coverage = ("" if len(valid) == WINDOW_HOURS else
-                    f' Só {len(valid)} de {WINDOW_HOURS} horas tiveram leituras suficientes para entrar na conta.')
-        summary = f'<p>Média de <strong>{_number(mean)} µg/m³</strong>, {_band(mean)}.{coverage}</p>'
+        # Com cobertura parcial, o resumo diz de quantas horas a média saiu: sem isso, parece a do período inteiro.
+        of = "de" if len(valid) == WINDOW_HOURS else f"das {len(valid)} horas válidas:"
+        summary = f'<p>Média {of} <strong>{_number(mean)} µg/m³</strong>, {_band(mean)}.</p>{coverage}'
     chart = hourly_chart_svg(hours)
     if chart:
         chart = (f'<figure>{chart}<figcaption>PM2,5 médio de cada hora, em µg/m³, no horário de Brasília. Onde a linha '
-                 'some, a hora não teve leituras suficientes.</figcaption></figure>')
+                 'some, a marca cinza no eixo indica uma hora sem média.</figcaption></figure>')
     return f'<div class="day"><h3>Últimas {WINDOW_HOURS} horas</h3>{summary}{chart}{forecast}</div>'
 
 
@@ -175,23 +190,37 @@ def _scale(pm25) -> str:
 
 
 def _now_block(node: pd.Series) -> str:
-    """A última leitura: o veredito da faixa em destaque, a escala e as outras medidas. Leitura zerada fica sem faixa."""
-    reading = f'<span class="num">{_number(node["pm25"])}</span> µg/m³ de PM2,5 na última leitura, a média de 1 minuto.'
+    """A última leitura: o veredito da faixa em destaque, a escala e as outras medidas. A leitura com o PM2,5 abaixo de
+    analytics.SUSPECT_LOW_PM25 fica sem faixa, zerada ou não: é a que o ADR 0004 conta como "sem partículas"."""
+    reading = (f'<p class="reading"><span class="num">{_number(node["pm25"])}</span> µg/m³</p>'
+               '<p class="what">PM2,5 · média de 1 minuto</p>')
     if analytics.is_zero_reading(node["pm1"], node["pm25"], node["pm10"]):
-        # Tudo em zero não diz se o ar está limpo ou se o sensor parou de ver partículas: sem faixa.
-        verdict = (f'<div class="verdict neutral"><p class="reading">{reading}</p><p class="reading">Leitura zerada: '
-                   'sem faixa, porque o sensor pode ter deixado de ver partículas.</p></div>')
+        no_band = "Leitura zerada"
+    elif pd.notna(node["pm25"]) and node["pm25"] < analytics.SUSPECT_LOW_PM25:
+        no_band = f'PM2,5 abaixo de {_number(analytics.SUSPECT_LOW_PM25)} µg/m³'
+    else:
+        no_band = ""
+    if no_band:
+        # Quase sem partículas, a leitura não diz se o ar está muito limpo ou se o sensor deixou de vê-las: sem faixa.
+        verdict = (f'<div class="verdict neutral"><p class="word">Sem faixa</p>{reading}'
+                   f'<p class="reading">{no_band}: não dá para saber se o ar está muito limpo ou se o sensor deixou de ver '
+                   'partículas.</p></div>')
     else:
         band = analytics.air_quality(node["pm25"])
+        # As faixas da CETESB valem para a média de 24 horas: a ressalva fica junto do veredito, não só em "Como ler".
         verdict = (f'<div class="verdict {BAND_CLASS.get(band, "neutral")}"><p class="word">{escape(band or "—")}</p>'
-                   f'<p class="reading">{reading}</p></div>{_scale(node["pm25"])}')
+                   f'{reading}</div>{_scale(node["pm25"])}'
+                   '<p class="hint">A CETESB define as faixas para a média de 24 horas; na leitura de 1 minuto, a faixa '
+                   'serve só de referência.</p>')
     others = (f'<dl class="others"><div><dt>PM10</dt><dd>{_number(node["pm10"])} µg/m³</dd></div>'
               f'<div><dt>Temperatura</dt><dd>{_number(node["temperature"])} °C</dd></div>'
               f'<div><dt>Umidade</dt><dd>{_number(node["humidity"], 0)}%</dd></div></dl>')
     if pd.notna(node["humidity"]) and node["humidity"] > analytics.HIGH_HUMIDITY:
         others += (f'<p class="note">Umidade acima de {analytics.HIGH_HUMIDITY:.0f}%: com o ar úmido, sensores como este '
                    'tendem a medir PM2,5 a mais.</p>')
-    return f'<div class="now"><h3>Agora</h3>{verdict}{others}</div>'
+    # Atrasado, o nó não diz como o ar está agora: o título diz de quando é a leitura.
+    heading = f'Última leitura, {_ago(node["minutes_since"])}' if node["status"] == "atrasado" else "Agora"
+    return f'<div class="now"><h3>{heading}</h3>{verdict}{others}</div>'
 
 
 def public_location(location) -> str | None:
@@ -222,7 +251,7 @@ def _forecast_block(conn, device: str, now: datetime) -> str:
             '<span class="muted">É experimental: um modelo estatístico ainda em avaliação.</span></p>')
 
 
-def _node_card(node: pd.Series, hours: pd.Series, forecast: str = "") -> str:
+def _node_card(node: pd.Series, hours: pd.Series, forecast: str = "", suspect: int = 0) -> str:
     """Um nó: o lugar como título, o estado, e os blocos "Agora" e "Últimas 24 horas", empilhados no celular e lado a
     lado na tela larga. Sem envio recente, o último valor não diz como o ar está agora: o nó fica sem o bloco "Agora",
     como no painel."""
@@ -233,7 +262,7 @@ def _node_card(node: pd.Series, hours: pd.Series, forecast: str = "") -> str:
     offline = node["status"] == "sem_dados"
     now = "" if offline else _now_block(node)
     return (f'<section class="node{" off" if offline else ""}"><h2>{title}</h2>{state}'
-            f'<div class="cols">{now}{_day_block(hours, forecast)}</div></section>')
+            f'<div class="cols">{now}{_day_block(hours, forecast, suspect, hide_empty=offline)}</div></section>')
 
 
 STATE_ORDER = {"em_operacao": 0, "atrasado": 1, "sem_dados": 2}
@@ -280,6 +309,8 @@ p{margin:.4rem 0}
 .verdict.neutral{background:none;border:1px solid var(--rule);color:var(--ink)}
 .word{font-size:3.4rem;margin:0;letter-spacing:-.01em}
 .reading{margin:.3rem 0 0}
+.what{margin:0;font-size:.9rem}
+.hint{font-size:.85rem;color:var(--muted);margin:-.2rem 0 1rem}
 .num{font-size:1.6rem;font-variant-numeric:tabular-nums}
 .scale{position:relative;margin:.9rem 0 2.1rem}
 .track{display:flex;height:.55rem;border-radius:3px;overflow:hidden}
@@ -287,7 +318,10 @@ p{margin:.4rem 0}
 .marker{position:absolute;top:-.3rem;width:4px;height:1.15rem;margin-left:-2px;background:var(--ink);border-radius:2px;
 box-shadow:0 0 0 2px var(--haze)}
 .ticks span{position:absolute;top:.9rem;transform:translateX(-50%);font-size:.75rem;color:var(--muted)}
-.others{display:flex;flex-wrap:wrap;gap:.4rem 2rem;margin:0}
+.others,.coverage{display:flex;flex-wrap:wrap;gap:.4rem 2rem;margin:0}
+.coverage{margin:.6rem 0 .5rem}
+.panel{border:1px solid var(--rule);border-radius:6px;padding:.85rem 1rem .3rem}
+.panel>p{margin-top:0}
 dt{font-size:.8rem;color:var(--muted)}
 dd{margin:0;font-weight:600;font-variant-numeric:tabular-nums}
 .note{font-size:.9rem;margin:.8rem 0 0;padding-left:.6rem;border-left:3px solid #e6c445}
@@ -331,9 +365,11 @@ def render(conn, now: datetime) -> str:
     status = analytics.device_status(conn, now)
     if not status.empty:
         status = status.assign(_order=status["status"].map(STATE_ORDER)).sort_values(["_order", "device_id"])
-    cards = "".join(_node_card(node, _last_hours(conn, node["device_id"], now),
-                               _forecast_block(conn, node["device_id"], now))
-                    for _, node in status.iterrows())
+    cards = []
+    for _, node in status.iterrows():
+        hours, suspect = _last_hours(conn, node["device_id"], now)
+        cards.append(_node_card(node, hours, _forecast_block(conn, node["device_id"], now), suspect))
+    cards = "".join(cards)
     if not cards:
         cards = '<p class="empty">Nenhum nó enviou leituras ainda.</p>'
     updated = now.astimezone(LOCAL_TZ)
@@ -346,7 +382,7 @@ def render(conn, now: datetime) -> str:
 <body><main>
 <header><h1>Qualidade do ar</h1>
 <p class="lead">PM2,5 medido por sensores de baixo custo de um projeto de TCC.
-Atualizado às {updated:%H:%M}, horário de Brasília.</p></header>
+Página atualizada às {updated:%H:%M}, horário de Brasília.</p></header>
 {cards}
 <section class="about"><h2>Como ler</h2>
 <p>PM2,5 é o material particulado fino: partículas de até 2,5 micrômetros, que chegam ao fundo dos pulmões. A medida é
