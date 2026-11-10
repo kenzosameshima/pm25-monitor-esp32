@@ -62,7 +62,8 @@ def test_abre_sem_token_e_mostra_o_pm25_da_ultima_leitura_com_a_faixa(client):
 
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/html")
-    assert "32,4" in r.text
+    assert '<span class="num">32,4</span> µg/m³' in r.text
+    assert "PM2,5 · média de 1 minuto" in r.text
     assert "Moderada" in node_card(r.text)
 
 
@@ -332,7 +333,7 @@ def test_rodape_diz_a_hora_da_atualizacao_e_que_nao_substitui_a_cetesb(client):
     page = client.get("/public").text
     after = datetime.now(timezone.utc)
 
-    assert any(f"Atualizado às {t.astimezone(LOCAL_TZ):%H:%M}" in page for t in (before, after))
+    assert any(f"Página atualizada às {t.astimezone(LOCAL_TZ):%H:%M}" in page for t in (before, after))
     assert "horário de Brasília" in page
     assert "CETESB" in page
 

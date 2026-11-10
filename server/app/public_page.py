@@ -192,7 +192,8 @@ def _scale(pm25) -> str:
 def _now_block(node: pd.Series) -> str:
     """A última leitura: o veredito da faixa em destaque, a escala e as outras medidas. A leitura com o PM2,5 abaixo de
     analytics.SUSPECT_LOW_PM25 fica sem faixa, zerada ou não: é a que o ADR 0004 conta como "sem partículas"."""
-    reading = f'<span class="num">{_number(node["pm25"])}</span> µg/m³ de PM2,5 na última leitura, a média de 1 minuto.'
+    reading = (f'<p class="reading"><span class="num">{_number(node["pm25"])}</span> µg/m³</p>'
+               '<p class="what">PM2,5 · média de 1 minuto</p>')
     if analytics.is_zero_reading(node["pm1"], node["pm25"], node["pm10"]):
         no_band = "Leitura zerada"
     elif pd.notna(node["pm25"]) and node["pm25"] < analytics.SUSPECT_LOW_PM25:
@@ -201,14 +202,14 @@ def _now_block(node: pd.Series) -> str:
         no_band = ""
     if no_band:
         # Quase sem partículas, a leitura não diz se o ar está muito limpo ou se o sensor deixou de vê-las: sem faixa.
-        verdict = (f'<div class="verdict neutral"><p class="word">Sem faixa</p><p class="reading">{reading}</p>'
+        verdict = (f'<div class="verdict neutral"><p class="word">Sem faixa</p>{reading}'
                    f'<p class="reading">{no_band}: não dá para saber se o ar está muito limpo ou se o sensor deixou de ver '
                    'partículas.</p></div>')
     else:
         band = analytics.air_quality(node["pm25"])
         # As faixas da CETESB valem para a média de 24 horas: a ressalva fica junto do veredito, não só em "Como ler".
         verdict = (f'<div class="verdict {BAND_CLASS.get(band, "neutral")}"><p class="word">{escape(band or "—")}</p>'
-                   f'<p class="reading">{reading}</p></div>{_scale(node["pm25"])}'
+                   f'{reading}</div>{_scale(node["pm25"])}'
                    '<p class="hint">A CETESB define as faixas para a média de 24 horas; na leitura de 1 minuto, a faixa '
                    'serve só de referência.</p>')
     others = (f'<dl class="others"><div><dt>PM10</dt><dd>{_number(node["pm10"])} µg/m³</dd></div>'
@@ -308,6 +309,7 @@ p{margin:.4rem 0}
 .verdict.neutral{background:none;border:1px solid var(--rule);color:var(--ink)}
 .word{font-size:3.4rem;margin:0;letter-spacing:-.01em}
 .reading{margin:.3rem 0 0}
+.what{margin:0;font-size:.9rem}
 .hint{font-size:.85rem;color:var(--muted);margin:-.2rem 0 1rem}
 .num{font-size:1.6rem;font-variant-numeric:tabular-nums}
 .scale{position:relative;margin:.9rem 0 2.1rem}
@@ -380,7 +382,7 @@ def render(conn, now: datetime) -> str:
 <body><main>
 <header><h1>Qualidade do ar</h1>
 <p class="lead">PM2,5 medido por sensores de baixo custo de um projeto de TCC.
-Atualizado às {updated:%H:%M}, horário de Brasília.</p></header>
+Página atualizada às {updated:%H:%M}, horário de Brasília.</p></header>
 {cards}
 <section class="about"><h2>Como ler</h2>
 <p>PM2,5 é o material particulado fino: partículas de até 2,5 micrômetros, que chegam ao fundo dos pulmões. A medida é
