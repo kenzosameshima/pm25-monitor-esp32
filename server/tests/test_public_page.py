@@ -257,6 +257,14 @@ def test_rodape_diz_a_hora_da_atualizacao_e_que_nao_substitui_a_cetesb(client):
 
 
 
+def test_pagina_se_recarrega_sozinha_a_cada_minuto_sem_script(client):
+    page = client.get("/public").text
+
+    assert '<meta http-equiv="refresh" content="60">' in page
+    assert "<script" not in page
+    assert "atualiza sozinha a cada minuto" in page
+
+
 def test_pagina_fica_em_cache_por_um_minuto(client):
     insert(client, [reading(NOW - timedelta(minutes=1), 0, 15.0)])
     first = client.get("/public").text
