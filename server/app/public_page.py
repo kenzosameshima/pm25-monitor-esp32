@@ -147,7 +147,7 @@ def _last_hours(conn, device: str, now: datetime) -> tuple[pd.Series, int]:
 def _coverage(valid: int, suspect: int, few: int) -> str:
     """De quantas horas a média saiu e por que as outras ficaram de fora, numa linha como a das outras medidas. Separa
     as horas suspeitas das que tiveram poucas leituras, e diz o que é a suspeita, para ela não parecer ar limpo."""
-    items = [("Com média", f"{valid} de {WINDOW_HOURS} h"), ("Suspeitas", f"{suspect} h"), ("Faltaram leituras", f"{few} h")]
+    items = [("Horas válidas", f"{valid} de {WINDOW_HOURS} h"), ("Suspeitas", f"{suspect} h"), ("Faltaram leituras", f"{few} h")]
     row = "".join(f"<div><dt>{label}</dt><dd>{value}</dd></div>"
                   for i, (label, value) in enumerate(items) if i == 0 or value != "0 h")
     why = ('<p class="hint">Na hora suspeita, o sensor quase não viu partículas: não dá para saber se o ar estava muito '
@@ -164,11 +164,12 @@ def _day_block(hours: pd.Series, forecast: str, suspect: int = 0, hide_empty: bo
         return ""
     coverage = _coverage(len(valid), suspect, WINDOW_HOURS - len(valid) - suspect)
     if valid.empty:
-        summary = (f'<div class="panel"><p>Nenhuma das últimas {WINDOW_HOURS} horas ficou com média.</p>'
-                   f'{coverage}</div>')
+        summary = f'<div class="panel"><p>Nenhuma hora válida nas últimas {WINDOW_HOURS} horas.</p>{coverage}</div>'
     else:
         mean = valid.mean()
-        summary = f'<p>Média de <strong>{_number(mean)} µg/m³</strong>, {_band(mean)}.</p>{coverage}'
+        # Com cobertura parcial, o resumo diz de quantas horas a média saiu: sem isso, parece a do período inteiro.
+        of = "de" if len(valid) == WINDOW_HOURS else f"das {len(valid)} horas válidas:"
+        summary = f'<p>Média {of} <strong>{_number(mean)} µg/m³</strong>, {_band(mean)}.</p>{coverage}'
     chart = hourly_chart_svg(hours)
     if chart:
         chart = (f'<figure>{chart}<figcaption>PM2,5 médio de cada hora, em µg/m³, no horário de Brasília. Onde a linha '
@@ -200,8 +201,9 @@ def _now_block(node: pd.Series) -> str:
         no_band = ""
     if no_band:
         # Quase sem partículas, a leitura não diz se o ar está muito limpo ou se o sensor deixou de vê-las: sem faixa.
-        verdict = (f'<div class="verdict neutral"><p class="reading">{reading}</p><p class="reading">{no_band}: sem faixa, '
-                   'porque não dá para saber se o ar está muito limpo ou se o sensor deixou de ver partículas.</p></div>')
+        verdict = (f'<div class="verdict neutral"><p class="word">Sem faixa</p><p class="reading">{reading}</p>'
+                   f'<p class="reading">{no_band}: não dá para saber se o ar está muito limpo ou se o sensor deixou de ver '
+                   'partículas.</p></div>')
     else:
         band = analytics.air_quality(node["pm25"])
         # As faixas da CETESB valem para a média de 24 horas: a ressalva fica junto do veredito, não só em "Como ler".
@@ -215,7 +217,9 @@ def _now_block(node: pd.Series) -> str:
     if pd.notna(node["humidity"]) and node["humidity"] > analytics.HIGH_HUMIDITY:
         others += (f'<p class="note">Umidade acima de {analytics.HIGH_HUMIDITY:.0f}%: com o ar úmido, sensores como este '
                    'tendem a medir PM2,5 a mais.</p>')
-    return f'<div class="now"><h3>Agora</h3>{verdict}{others}</div>'
+    # Atrasado, o nó não diz como o ar está agora: o título diz de quando é a leitura.
+    heading = f'Última leitura, {_ago(node["minutes_since"])}' if node["status"] == "atrasado" else "Agora"
+    return f'<div class="now"><h3>{heading}</h3>{verdict}{others}</div>'
 
 
 def public_location(location) -> str | None:

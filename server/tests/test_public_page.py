@@ -82,6 +82,16 @@ def test_mostra_o_estado_do_no_e_esconde_o_valor_de_quem_parou_de_enviar(client,
     assert ("Moderada" in page) is shows_value
 
 
+@pytest.mark.parametrize("minutes_ago, heading", [(1, "<h3>Agora</h3>"), (7, "<h3>Última leitura, há 7 min</h3>")])
+def test_no_atrasado_nao_chama_a_ultima_leitura_de_agora(client, minutes_ago, heading):
+    insert(client, [reading(NOW - timedelta(minutes=minutes_ago), 0, 12.0)])
+
+    page = node_card(client.get("/public").text)
+
+    assert heading in page
+    assert ("<h3>Agora</h3>" in page) is (minutes_ago == 1)
+
+
 def node_card(page: str) -> str:
     """O cartão do primeiro nó, enviando ou parado: a legenda das faixas, mais abaixo, sempre traz o nome de todas."""
     start = page.index('<section class="node')
@@ -96,6 +106,7 @@ def test_leitura_zerada_aparece_sem_faixa(client):
     assert "0,0" in page
     assert "Boa" not in page
     assert "zerada" in page
+    assert '<p class="word">Sem faixa</p>' in page
 
 
 def test_pm25_abaixo_de_meio_micrograma_fica_sem_faixa_mesmo_com_pm10(client):
@@ -105,7 +116,7 @@ def test_pm25_abaixo_de_meio_micrograma_fica_sem_faixa_mesmo_com_pm10(client):
 
     assert "0,3" in page
     assert "Boa" not in page
-    assert "sem faixa" in page
+    assert "<p class=\"word\">Sem faixa</p>" in page
     assert "zerada" not in page          # leitura zerada é só a que tem tudo em zero (GLOSSARY.md)
 
 
@@ -135,8 +146,8 @@ def test_media_de_24_horas_usa_so_as_horas_validas(client):
 
     page = node_card(client.get("/public").text)
 
-    assert "30,0" in page            # (40 + 30 + 20) / 3; a hora com 10 leituras fica de fora
-    assert coverage(page)["Com média"] == "3 de 24 h"
+    assert "Média das 3 horas válidas: <strong>30,0 µg/m³</strong>" in page  # a hora com 10 leituras fica de fora
+    assert coverage(page)["Horas válidas"] == "3 de 24 h"
     assert "Moderada" in page        # a faixa da média
     assert "Boa" in page             # e a da última leitura, 12,0
 
@@ -157,7 +168,7 @@ def test_cobertura_separa_horas_suspeitas_das_que_tiveram_poucas_leituras(client
 
     page = node_card(client.get("/public").text)
 
-    assert coverage(page) == {"Com média": "1 de 24 h", "Suspeitas": "2 h", "Faltaram leituras": "21 h"}
+    assert coverage(page) == {"Horas válidas": "1 de 24 h", "Suspeitas": "2 h", "Faltaram leituras": "21 h"}
     assert "não dá para saber se o ar estava muito limpo ou se o sensor falhou" in page
 
 
@@ -167,7 +178,8 @@ def test_cobertura_completa_nao_lista_horas_de_fora(client):
 
     page = node_card(client.get("/public").text)
 
-    assert coverage(page) == {"Com média": "24 de 24 h"}
+    assert "Média de <strong>20,0 µg/m³</strong>" in page
+    assert coverage(page) == {"Horas válidas": "24 de 24 h"}
     assert "Suspeitas" not in page
 
 
@@ -179,8 +191,8 @@ def test_no_enviando_sem_nenhuma_hora_com_media_diz_o_motivo_em_vez_de_ficar_em_
 
     assert "Últimas 24 horas" in page
     assert '<div class="panel">' in page
-    assert "Nenhuma das últimas 24 horas ficou com média" in page
-    assert coverage(page) == {"Com média": "0 de 24 h", "Suspeitas": "24 h"}
+    assert "Nenhuma hora válida nas últimas 24 horas" in page
+    assert coverage(page) == {"Horas válidas": "0 de 24 h", "Suspeitas": "24 h"}
 
 
 def test_veredito_avisa_que_a_faixa_vale_para_24_horas_e_a_leitura_zerada_nao(client):
