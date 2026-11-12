@@ -1,6 +1,6 @@
 # Sistema de monitoramento de PM2,5: planejamento e estado atual
 
-Situação em 09/11/2026, com o banco congelado para o período de 09/10 a 08/11/2026 e as métricas do período, a comparação com a CETESB e a primeira avaliação de modelos calculadas sobre ele. O job horário de previsão e os alertas do app estão integrados à `main` e as correções da revisão de segurança foram aplicadas (resta o risco da implantação no Windows, ver seção 7). O [README](../README.md) é a referência de uso e de detalhes de cada parte; este documento reúne o plano, as decisões e o que está pronto, verificado ou pendente.
+Situação em 09/11/2026, com o banco congelado para o período de 09/10 a 08/11/2026 e as métricas do período, a comparação com a CETESB e a primeira avaliação de modelos calculadas sobre ele. O job horário de previsão e os alertas do app estão integrados à `main` e as correções da revisão de segurança foram aplicadas (resta o risco da implantação no Windows, ver seção 7). O [README](../README.md) é a referência de uso e de detalhes de cada parte; este documento reúne o plano, as decisões e o que está pronto, verificado ou pendente. Em 11/11/2026, o `no-02` foi instalado ao lado do `no-01` para medir a concordância entre os dois (seção 8).
 
 ## 1. Objetivo e escopo
 
@@ -93,7 +93,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | Avaliação de modelos (`train_forecast.py`) | parcial | Persistência, Ridge, gradient boosting e MLP (scikit-learn), validação progressiva, teste final, relatório reproduzível | Testes com dados sintéticos; rodada com os dados reais em 09/11/2026 sobre o banco congelado (só `no-01` e, como sensibilidade, os dois nós), com 5 sementes para a MLP | **Decidir a busca de hiperparâmetros e escolher o modelo do TCC**; nenhum modelo superou a persistência de forma clara nesta amostra (Ridge +0,082 de skill, MLP +0,025 ± 0,021, gradient boosting −0,055) |
 | Job horário de previsão (`fit_forecast.py`, `forecast_job.py`) | parcial | Treino e gravação do modelo versionado, job a cada hora (HH:05) na tarefa `pm25-forecast` e no crontab, `ridge v0` provisório | Testes com dados sintéticos; uma execução pelo `run-forecast.cmd` no banco local, vista na série `ridge v0` do previsto × observado | **Treinar o modelo do TCC e instalar a tarefa no servidor** |
 | Métricas do período e comparação CETESB | pronto | `period_metrics.py` (com congelamento do banco) e `compare_cetesb.py` | Testes; rodados em 09/11/2026 sobre o banco congelado e o CSV do QUALAR da estação Osasco (viés de +8,3 µg/m³, r de 0,43 em 641 horas pareadas) | Distância exata até a estação (hoje estimada em ~4,4 km, com a estação na Av. dos Autonomistas) e confirmação da convenção de hora do QUALAR |
-| Implantação | parcial | Scripts do Windows (tarefas agendadas), serviços systemd e crontab para Linux, passo a passo do túnel | Scripts escritos; em uso desde 09/10/2026, com o nó enviando pelo túnel (Tailscale Funnel) e o app lendo pela URL pública | Testar os subcaminhos de `/v1/devices` de outra rede; segundo nó |
+| Implantação | parcial | Scripts do Windows (tarefas agendadas), serviços systemd e crontab para Linux, passo a passo do túnel | Scripts escritos; em uso desde 09/10/2026, com o nó enviando pelo túnel (Tailscale Funnel) e o app lendo pela URL pública; o `no-02` envia ao lado do `no-01` desde 11/11/2026 | Testar os subcaminhos de `/v1/devices` de outra rede |
 | App Android (`android/`) | pronto para demonstração | Tela inicial, detalhe com 24 h ou 7 dias e saúde da coleta, previsão previsto × observado, cache offline, permissão de rede local, alertas em segundo plano (nó sem dados, PM2,5 Ruim, servidor sem resposta) | testes de unidade e lint sem problemas; fluxo completo no emulador (API 37) contra a API local, inclusive offline e os alertas; no Galaxy S23 Ultra (Android 16) pelo túnel, com os dados da produção e um alerta real de PM2,5 Ruim | Medir o atraso dos alertas no celular ao longo do tempo; build de release assinado |
 
 ## 6. Testes e verificação
@@ -104,7 +104,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | Firmware | Testes no computador (parser, média, JSON) e compilação nas quatro combinações | — |
 | App Android | Testes de unidade: contrato JSON com respostas geradas pela própria API, erros, rede local, faixas, idade, hora estimada do servidor, resumo, previsão, cache em arquivo, estado das três telas, regras dos alertas e textos das notificações | Emulador: permissão de rede local, as três telas, troca de janela, banco de 3 dias com lacuna e reinício, modelo de demonstração em `forecasts`, queda da API e reabertura sem servidor; alertas de nó sem dados e de volta, ar Ruim, servidor sem resposta e de volta, sem avisos repetidos. Celular (Galaxy S23 Ultra, Android 16, pelo túnel): atualização por cima da versão anterior, dados da produção, permissão pelo cartão e alerta real de PM2,5 Ruim |
 
-**Nunca verificado:** o modelo do TCC em produção; a concordância entre dois nós (o `no-01`, em Osasco, e o `no-02`, na zona sul da capital, medem ar diferente; o `no-02` será levado para junto do `no-01`). O nó `no-01` opera em Osasco desde 09/10/2026 e envia pelo túnel. Os resultados do emulador usaram dados sintéticos e um modelo de demonstração (`demo v1`), que não é o modelo do TCC; no celular, os dados e o alerta foram os reais da produção.
+**Nunca verificado:** o modelo do TCC em produção; a concordância entre dois nós (o `no-02` mediu na zona sul da capital até 11/11/2026 e foi instalado ao lado do `no-01`, no mesmo apoio em Osasco, às 14:18 desse dia em Brasília, 17:18 UTC; a sobreposição está em curso e ainda não foi analisada). O nó `no-01` opera em Osasco desde 09/10/2026 e envia pelo túnel. Os resultados do emulador usaram dados sintéticos e um modelo de demonstração (`demo v1`), que não é o modelo do TCC; no celular, os dados e o alerta foram os reais da produção.
 
 ## 7. Pendências e riscos
 
@@ -127,8 +127,8 @@ Riscos já conhecidos:
 
 ## 8. Próximos passos sugeridos
 
-1. Levar o `no-02` para junto do `no-01` e deixar os dois lado a lado por pelo menos uma a duas semanas para medir a concordância, registrando a data da mudança (o `set_location` não guarda histórico) e congelando depois só o período de sobreposição.
-2. Manter o túnel e o app apontados para a URL pública e registrar o local do `no-02` com `set_location` quando ele for instalado.
+1. Deixar o `no-01` e o `no-02` lado a lado até pelo menos 25/11/2026, congelar só o período de sobreposição e medir a concordância entre os dois. O `no-02` está junto do `no-01` desde 11/11/2026, 14:18 em Brasília (17:18 UTC), com o local já cadastrado (o `set_location` não guarda histórico, por isso a data fica registrada aqui). O script dessa comparação ainda não existe.
+2. Manter o túnel e o app apontados para a URL pública.
 3. Escolher o modelo (decidir antes se haverá busca de hiperparâmetros) e treiná-lo com `fit_forecast.py` numa versão nova, que o job horário passa a gravar ao lado do `ridge v0`.
 4. Acompanhar os alertas no celular por alguns dias, com a bateria do app sem restrições.
 5. Obter as coordenadas oficiais da estação Osasco, confirmar com a CETESB a convenção de hora do QUALAR e fechar o texto de resultados com os números congelados.

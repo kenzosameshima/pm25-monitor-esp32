@@ -10,7 +10,7 @@ Rascunho em português para virar a seção de limitações. Os números vêm do
 
 **Efeito na conclusão.** Os resultados são preliminares. Não se generaliza para outros locais, estações do ano ou episódios de poluição que o mês não cobriu. Com os nós em locais diferentes, não há como medir a concordância entre dois sensores iguais no mesmo ar.
 
-**Mitigação.** O período e a limitação constam no texto. A análise principal usa só o `no-01` (`period_metrics --devices no-01`, `compare_cetesb --devices no-01`, `train_forecast --devices no-01`). A rodada do `train_forecast` com os dois nós fica como análise de sensibilidade. A concordância entre sensores exige um período com os dois lado a lado: o `no-02` será levado para junto do `no-01`, e a análise será separada e restrita ao período de sobreposição, com a data da mudança registrada.
+**Mitigação.** O período e a limitação constam no texto. A análise principal usa só o `no-01` (`period_metrics --devices no-01`, `compare_cetesb --devices no-01`, `train_forecast --devices no-01`). A rodada do `train_forecast` com os dois nós fica como análise de sensibilidade. A concordância entre sensores exige um período com os dois lado a lado: o `no-02` foi instalado ao lado do `no-01` em 11/11/2026, às 14:18 em Brasília, depois do período congelado, e a análise será separada e restrita ao período de sobreposição.
 
 ## 2. Horas suspeitas do `no-01`
 
@@ -82,7 +82,7 @@ Rascunho em português para virar a seção de limitações. Os números vêm do
 
 ## Lacunas a preencher (não rodado ainda)
 
-- Concordância entre dois nós: depende de levar o `no-02` para junto do `no-01` e de um período de sobreposição estável; os nós estão hoje em locais diferentes.
+- Concordância entre dois nós: os dois estão lado a lado desde 11/11/2026, 14:18 em Brasília; falta um período de sobreposição estável, de uma a duas semanas, e a análise.
 - Escolha do modelo do TCC e treino de uma versão nova para o job horário; decisão sobre a busca de hiperparâmetros.
 - Causa das horas suspeitas (a conferência hora a hora contra a CETESB sugere falha intermitente do sensor, sem prova) e dos reinícios do `no-01`.
 - Validação prospectiva dos modelos finais, que depende de treinar e instalar as versões novas.
