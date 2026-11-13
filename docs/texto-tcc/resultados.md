@@ -36,7 +36,7 @@ Tabela 21 do TCC. `no-01`, 09/10 a 08/11/2026 (`resultados/periodo.json`, bloco 
 
 O `no-02`, na mesma janela, teve completude de 18,6%, 37 reinícios, 76 horas válidas e 59 horas suspeitas (`docs/limitacoes-do-tcc.md`, item 1); ele entrou em 21/10/2026 e media em outro local, por isso fica fora da análise principal.
 
-Gráfico 1 (completude diária): `resultados/completude_diaria.csv`. [PENDENTE: figura.]
+Gráfico 1 (completude diária): `resultados/figuras/completude_diaria.png`, gerado pelo `result_figures` a partir de `resultados/completude_diaria.csv`.
 
 Mesmos indicadores no banco de 35 dias: [PENDENTE: tabela refeita com o `period_metrics` sobre o banco da rodada final].
 
@@ -80,9 +80,24 @@ Médias de 24 h acima de cada referência, nos 26 dias válidos (`resultados/per
 | CONAMA 506/2024 PI-1 (60) | 0 | 5 |
 | OMS 2021 meta intermediária 1 (75) | 0 | 4 |
 
-Gráfico 2 (perfil por hora do dia e por dia da semana): `resultados/perfil_hora.csv` e `resultados/perfil_dia_semana.csv`. [PENDENTE: figura.]
+Gráfico 2 (perfil por hora do dia e por dia da semana): `resultados/figuras/perfil_pm25.png`, gerado pelo `result_figures` a partir de `resultados/perfil_hora.csv` e `resultados/perfil_dia_semana.csv`.
 
-Mesmas estatísticas com as horas suspeitas incluídas (`period_metrics --include-suspect`): [PENDENTE: a saída dessa opção não está entre os resultados documentados; rodar sobre o banco congelado e registrar].
+### 1.5 Estatísticas de PM2,5 com as horas suspeitas incluídas (sensibilidade)
+
+`period_metrics --include-suspect` sobre o mesmo banco congelado, rodado em 13/11/2026 (`resultados/com_horas_suspeitas/periodo.json`). As 70 horas suspeitas entram com a média que tiveram; a saúde da coleta não muda. Valores em µg/m³.
+
+| Estatística | Sem as horas suspeitas | Com as horas suspeitas |
+|---|---|---|
+| Horas com média | 651 | 721 |
+| Média | 21,5 | 19,4 |
+| Mediana | 19,7 | 16,5 |
+| Desvio-padrão (amostral) | 15,2 | 15,7 |
+| Percentil 5 | 3,3 | 0,3 |
+| Percentil 95 | 44,9 | 44,4 |
+| Máximo horário | 116,1 | 116,1 |
+| Dias com média de 24 h válida | 26 | 30 |
+
+Com as horas suspeitas, os dias com média de 24 h acima de cada referência não mudam (20, 10, 1, 1, 0, 0 e 0, na ordem da tabela da seção 1.4), agora sobre 30 dias válidos; as horas acima de cada valor também são as mesmas, sobre 721.
 
 ## 2. Comparação com a CETESB
 
@@ -118,7 +133,7 @@ Nas horas suspeitas, a mediana da estação foi de 7,0 µg/m³, contra 12,0 nas 
 
 Com o rótulo de hora tratado como início da hora (`--hour-label start`), o r cai de 0,43 para 0,39 e o RMSE sobe de 16,0 para 16,4 (`docs/limitacoes-do-tcc.md`, item 8).
 
-Gráfico de dispersão nó × CETESB: `resultados/comparacao_cetesb_pares.csv`. [PENDENTE: figura.]
+Gráfico de dispersão nó × CETESB: `resultados/figuras/dispersao_cetesb.png`, gerado pelo `result_figures` a partir de `resultados/comparacao_cetesb_pares.csv` (análise principal, sem as horas suspeitas).
 
 Pendências desta seção:
 
@@ -182,16 +197,14 @@ Fonte da linha do `ridge v0`: `docs/limitacoes-do-tcc.md`, item 3. O `v0` é pro
 
 Previsões recalculadas depois do fato, só com as leituras anteriores à hora-alvo. Não são validação prospectiva e não entram no conjunto da seção 3.3.
 
-| Versão | Horas | Skill score | Intervalo |
-|---|---|---|---|
-| `ridge v0-retro` | 171 | +0,034 | −0,060 a +0,069 (inclui zero) |
-| `ridge v1-retro` e versões novas | [PENDENTE] | [PENDENTE] | [PENDENTE] |
+| Versão | Horas | RMSE do modelo | RMSE da persistência | Skill score | Intervalo |
+|---|---|---|---|---|---|
+| `ridge v0-retro` | 171 | 6,82 | 7,07 | +0,034 | −0,060 a +0,069 (inclui zero) |
+| `ridge v1-retro` e versões novas | [PENDENTE] | [PENDENTE] | [PENDENTE] | [PENDENTE] | [PENDENTE] |
 
-Fonte: `docs/limitacoes-do-tcc.md`, item 3. As primeiras 5 horas-alvo recalculadas foram as de 17/10 às 18:00 UTC e de 18/10 das 18:00 às 21:00 UTC, depois de uma queda do túnel (`docs/planejamento-e-estado.md`, seção 7).
+Fonte: horas, skill score e intervalo em `docs/limitacoes-do-tcc.md`, item 3. Os dois RMSE foram calculados em 13/11/2026 sobre a tabela `forecasts` do banco congelado, com `analytics.forecast_scores`, nas 171 horas do `no-01` que têm observação, persistência e previsão retroativa (de 13/10 a 07/11/2026); a mesma conta reproduz as 171 horas e o skill score de +0,034 já documentados, e as 304 horas e −0,049 do `ridge v0`. As primeiras 5 horas-alvo recalculadas foram as de 17/10 às 18:00 UTC e de 18/10 das 18:00 às 21:00 UTC, depois de uma queda do túnel (`docs/planejamento-e-estado.md`, seção 7).
 
-[PENDENTE: RMSE do `ridge v0-retro` e da persistência nas mesmas 171 horas, que não constam nos documentos.]
-
-Gráfico de previsto × observado do teste final: `resultados/no-01/previsao_teste.csv` (preliminar). [PENDENTE: figura com o teste final da rodada final.]
+Gráfico de previsto × observado do teste final: `resultados/figuras/previsto_observado.png` (avaliação preliminar), gerado pelo `result_figures` a partir de `resultados/no-01/previsao_teste.csv`, com o observado, a persistência e o Ridge. [PENDENTE: a mesma figura com o teste final da rodada final.]
 
 ## 4. Concordância entre os nós
 
