@@ -5,8 +5,9 @@ em --out-dir:
 
 - concordancia_nos.json: horas pareadas; por nó, quantas horas do período ficaram em cada estado (válida, sem
   leituras, poucas leituras, suspeita), quantas entraram e quantas ficaram sem par porque o outro nó não tinha
-  média; e a concordância (viés, MAE, RMSE, correlação de Pearson e reta de regressão de A em função de B), no
-  total e separando as horas com umidade relativa acima de --humidity-limit (>) e até esse limite (<=);
+  média; e a concordância (viés, MAE, RMSE, correlação de Pearson, R², reta de regressão de A em função de B e
+  Bland-Altman), no total e separando as horas com umidade relativa acima de --humidity-limit (>) e até esse
+  limite (<=); e, para reproduzir, o arquivo lido com SHA-256 e as versões de Python, numpy e pandas;
 - concordancia_nos_pares.csv: uma linha por hora pareada, base do gráfico de dispersão.
 
 Definições:
@@ -24,6 +25,9 @@ Definições:
 - Congelamento: com --freeze o banco é copiado para --out-dir como no period_metrics (mesma função, nome com os
   dias do período), o hash vai para o relatório e a comparação sai da cópia. A rodada final pode também apontar
   --db para uma cópia já congelada.
+- Bland-Altman: viés (a média das diferenças A - B), desvio-padrão amostral das diferenças e limites de
+  concordância de 95% (viés ± 1,96 desvio), com pelo menos duas horas pareadas. Os limites supõem diferenças
+  aproximadamente normais e sem tendência com o nível de PM2,5; o CSV das horas pareadas serve para conferir.
 - Umidade de uma hora pareada: a média da umidade dos dois nós (a de um só, se o outro não tem). Horas sem
   umidade nos dois entram no total, mas em nenhuma das faixas (contadas em "sem_umidade").
 
@@ -36,17 +40,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from app import analytics, db
 from app.config import get_settings
 from app.forecasting import MIN_SAMPLES
-from scripts.compare_cetesb import HUMIDITY_LIMIT, MIN_PAIRS, agreement, by_humidity
+from scripts.compare_cetesb import HUMIDITY_LIMIT, MIN_PAIRS, agreement
 from scripts.period_metrics import BRT, freeze_database
+from scripts.train_forecast import database_info
 
 MOVE_UTC = datetime(2026, 11, 11, 17, 18, tzinfo=timezone.utc)  # o no-02 passou a dividir o suporte com o no-01
 DEFAULT_DEVICES = ("no-01", "no-02")
@@ -56,6 +63,7 @@ PAIR_COLUMNS = ["hora_utc", "pm25_a", "pm25_b", "umidade_a", "umidade_b", "umida
 STATES = (analytics.VALID_HOUR, *analytics.EXCLUSION_CAUSES)
 # `agreement` foi escrita para nó × CETESB; aqui os dois lados são nós.
 _LABELS = {"media_no": "media_a", "media_cetesb": "media_b"}
+LOA_Z = 1.96  # limites de concordância de 95% de Bland-Altman: viés ± 1,96 desvio-padrão das diferenças
 
 
 # ---------------------------------------------------------------- período
@@ -137,16 +145,36 @@ def _relabel(stats):
     return stats
 
 
+def bland_altman(a: pd.Series, b: pd.Series) -> dict | None:
+    """Viés, desvio-padrão amostral das diferenças A - B e limites de concordância de 95%; None com menos de 2 pares."""
+    diff = a - b
+    if len(diff) < 2:
+        return None
+    bias, sd = float(diff.mean()), float(diff.std(ddof=1))
+    return {"vies": round(bias, 2), "dp_diferencas": round(sd, 3),
+            "limite_inferior": round(bias - LOA_Z * sd, 2), "limite_superior": round(bias + LOA_Z * sd, 2)}
+
+
+def _agreement(a: pd.Series, b: pd.Series) -> dict:
+    """`agreement` do compare_cetesb mais o Bland-Altman, quando há pares para ele."""
+    out = agreement(a, b)
+    limits = bland_altman(a, b)
+    if limits:
+        out["bland_altman"] = limits
+    return out
+
+
 def concordance(pairs: pd.DataFrame, humidity_limit: float, include_suspect: bool = False) -> dict:
-    """`by_humidity` do compare_cetesb com A no lugar do nó e B no lugar da estação.
+    """A conta de `by_humidity` do compare_cetesb, com A no lugar do nó e B no lugar da estação, mais o Bland-Altman.
 
     Com `include_suspect`, separa também as horas suspeitas em qualquer dos dois nós (`suspeitas`) das demais."""
-    as_cetesb = pairs.rename(columns={"pm25_a": "pm25_no", "pm25_b": "pm25_cetesb"})
-    out = by_humidity(as_cetesb, humidity_limit)
+    groups = {"total": pd.Series(True, index=pairs.index), "umidade_alta": pairs["umidade"] > humidity_limit,
+              "umidade_baixa": pairs["umidade"] <= humidity_limit}
     if include_suspect:
         flag = pairs["suspeita_a"] | pairs["suspeita_b"]
-        out["suspeitas"] = agreement(pairs.loc[flag, "pm25_a"], pairs.loc[flag, "pm25_b"])
-        out["demais"] = agreement(pairs.loc[~flag, "pm25_a"], pairs.loc[~flag, "pm25_b"])
+        groups |= {"suspeitas": flag, "demais": ~flag}
+    out: dict = {name: _agreement(pairs.loc[mask, "pm25_a"], pairs.loc[mask, "pm25_b"]) for name, mask in groups.items()}
+    out["sem_umidade"] = int(pairs["umidade"].isna().sum())
     return _relabel(out)
 
 
@@ -174,6 +202,9 @@ def run(db_path: str, out_dir: Path, devices: tuple[str, str], start: datetime, 
         report["congelamento"] = info
         db_path = str(frozen)  # a comparação sai da cópia, então o hash identifica os dados usados
     report["banco"] = Path(db_path).name
+    lido = database_info(db_path)  # sem --freeze o hash só identifica os dados se o banco for uma cópia parada
+    report["banco_lido"] = {"arquivo": lido["file"], "sha256": lido["sha256"], "tamanho_bytes": lido["size_bytes"]}
+    report["ambiente"] = {"python": platform.python_version(), "numpy": np.__version__, "pandas": pd.__version__}
     conn = db.connect(db_path, readonly=True)
     try:
         table_a = hour_table(conn, a, hours, min_samples, include_suspect)

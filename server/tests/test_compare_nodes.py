@@ -183,3 +183,32 @@ def test_freeze_compara_sobre_copia_integra_com_hash_e_nao_altera_a_origem(tmp_p
     # a rodada final pode apontar --db para a cópia congelada e chega ao mesmo resultado
     rc, again, _ = run_main(tmp_path, "--db", str(frozen), "--start", "2026-11-11T15:00", "--end", "2026-11-25")
     assert rc == 0 and again["concordancia"] == report["concordancia"] and sha256(frozen) == report["congelamento"]["sha256"]
+
+
+def test_bland_altman_traz_vies_e_limites_de_concordancia_de_95(tmp_path):
+    # Diferenças A - B de 1, 3, 1 e 3: média 2; desvio amostral raiz(4/3) = 1,1547; limites 2 ± 1,96 × 1,1547.
+    no_01 = [(11.0, 60.0, OK), (13.0, 60.0, OK), (11.0, 60.0, OK), (13.0, 60.0, OK)]
+    no_02 = [(10.0, 60.0, OK)] * 4
+    path = make_db(tmp_path, no_01=no_01, no_02=no_02)
+    _, report, _ = run_main(tmp_path, "--db", path, "--start", "2026-11-11T15:00", "--end", "2026-11-11T19:00")
+    ba = report["concordancia"]["total"]["bland_altman"]
+    assert ba == {"vies": 2.0, "dp_diferencas": 1.155, "limite_inferior": -0.26, "limite_superior": 4.26}
+    assert report["concordancia"]["umidade_baixa"]["bland_altman"] == ba           # as quatro horas têm 60%
+    assert "bland_altman" not in report["concordancia"]["umidade_alta"]            # nenhuma hora: nada a calcular
+
+
+def test_bland_altman_precisa_de_duas_horas(tmp_path):
+    path = make_db(tmp_path, no_01=[(12.0, 60.0, OK)], no_02=[(10.0, 60.0, OK)])
+    _, report, _ = run_main(tmp_path, "--db", path, "--start", "2026-11-11T15:00", "--end", "2026-11-11T16:00")
+    total = report["concordancia"]["total"]
+    assert total["n"] == 1 and "bland_altman" not in total                          # desvio de uma diferença só não existe
+
+
+def test_relatorio_identifica_o_banco_lido_e_as_versoes(tmp_path):
+    path = make_db(tmp_path, no_01=NO_01, no_02=NO_02)
+    _, report, _ = run_main(tmp_path, "--db", path, *WINDOW)
+    source = tmp_path / "pm25.db"
+    assert report["banco_lido"] == {"arquivo": "pm25.db", "sha256": sha256(source),
+                                    "tamanho_bytes": source.stat().st_size}
+    assert set(report["ambiente"]) == {"python", "numpy", "pandas"}
+    assert report["ambiente"]["pandas"] == pd.__version__

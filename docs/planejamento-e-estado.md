@@ -1,6 +1,6 @@
 # Sistema de monitoramento de PM2,5: planejamento e estado atual
 
-Situação em 09/11/2026, com o banco congelado para o período de 09/10 a 08/11/2026 e as métricas do período, a comparação com a CETESB e a primeira avaliação de modelos calculadas sobre ele. O job horário de previsão e os alertas do app estão integrados à `main` e as correções da revisão de segurança foram aplicadas (resta o risco da implantação no Windows, ver seção 7). O [README](../README.md) é a referência de uso e de detalhes de cada parte; este documento reúne o plano, as decisões e o que está pronto, verificado ou pendente. Em 11/11/2026, o `no-02` foi instalado ao lado do `no-01` para medir a concordância entre os dois (seção 8).
+Situação em 09/11/2026, com o banco congelado para o período de 09/10 a 08/11/2026 e as métricas do período, a comparação com a CETESB e a primeira avaliação de modelos calculadas sobre ele. O job horário de previsão e os alertas do app estão integrados à `main` e as correções da revisão de segurança foram aplicadas (resta o risco da implantação no Windows, ver seção 7). O [README](../README.md) é a referência de uso e de detalhes de cada parte; este documento reúne o plano, as decisões e o que está pronto, verificado ou pendente. Em 11/11/2026, o `no-02` foi instalado ao lado do `no-01` para medir a concordância entre os dois (seções 8 e 10).
 
 ## 1. Objetivo e escopo
 
@@ -28,7 +28,8 @@ Um único tema ambiental basta para a atividade; o recorte é a poluição do ar
                                        │   ├─▶ dashboard Streamlit (só local) ◀───┼──── navegador no servidor
                                        │   └─▶ scripts de análise (offline)       │
                                        │        train_forecast, period_metrics,   │
-                                       │        compare_cetesb, fit_forecast      │
+                                       │        compare_cetesb, compare_nodes,    │
+                                       │        fit_forecast                      │
                                        └──────────────────────────────────────────┘
 ```
 
@@ -93,6 +94,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | Avaliação de modelos (`train_forecast.py`) | parcial | Persistência, Ridge, gradient boosting e MLP (scikit-learn), validação progressiva, teste final, relatório reproduzível | Testes com dados sintéticos; rodada com os dados reais em 09/11/2026 sobre o banco congelado (só `no-01` e, como sensibilidade, os dois nós), com 5 sementes para a MLP | **Decidir a busca de hiperparâmetros e escolher o modelo do TCC**; nenhum modelo superou a persistência de forma clara nesta amostra (Ridge +0,082 de skill, MLP +0,025 ± 0,021, gradient boosting −0,055) |
 | Job horário de previsão (`fit_forecast.py`, `forecast_job.py`) | parcial | Treino e gravação do modelo versionado, job a cada hora (HH:05) na tarefa `pm25-forecast` e no crontab, `ridge v0` provisório | Testes com dados sintéticos; uma execução pelo `run-forecast.cmd` no banco local, vista na série `ridge v0` do previsto × observado | **Treinar o modelo do TCC e instalar a tarefa no servidor** |
 | Métricas do período e comparação CETESB | pronto | `period_metrics.py` (com congelamento do banco) e `compare_cetesb.py` | Testes; rodados em 09/11/2026 sobre o banco congelado e o CSV do QUALAR da estação Osasco (viés de +8,3 µg/m³, r de 0,43 em 641 horas pareadas) | Distância exata até a estação (hoje estimada em ~4,4 km, com a estação na Av. dos Autonomistas) e confirmação da convenção de hora do QUALAR |
+| Concordância entre os nós (`compare_nodes.py`) | parcial | Pareamento das médias horárias de dois nós nas horas válidas dos dois, com viés, MAE, RMSE, r, R², reta de regressão e Bland-Altman, no total e por faixa de umidade; `--include-suspect` e `--freeze`; relatório com o SHA-256 do banco lido e as versões | Testes com séries sintéticas de resposta conhecida; uma execução numa cópia do banco vivo em 13/11/2026, só para validar o script (o resultado não vale como análise) | Rodar sobre o período de sobreposição congelado, depois de 25/11/2026 (seção 10) |
 | Implantação | parcial | Scripts do Windows (tarefas agendadas), serviços systemd e crontab para Linux, passo a passo do túnel | Scripts escritos; em uso desde 09/10/2026, com o nó enviando pelo túnel (Tailscale Funnel) e o app lendo pela URL pública; o `no-02` envia ao lado do `no-01` desde 11/11/2026 | Testar os subcaminhos de `/v1/devices` de outra rede |
 | App Android (`android/`) | pronto para demonstração | Tela inicial, detalhe com 24 h ou 7 dias e saúde da coleta, previsão previsto × observado, cache offline, permissão de rede local, alertas em segundo plano (nó sem dados, PM2,5 Ruim, servidor sem resposta) | testes de unidade e lint sem problemas; fluxo completo no emulador (API 37) contra a API local, inclusive offline e os alertas; no Galaxy S23 Ultra (Android 16) pelo túnel, com os dados da produção e um alerta real de PM2,5 Ruim | Medir o atraso dos alertas no celular ao longo do tempo; build de release assinado |
 
@@ -104,7 +106,7 @@ Legenda: **pronto** (implementado, com testes ou verificação descrita), **parc
 | Firmware | Testes no computador (parser, média, JSON) e compilação nas quatro combinações | — |
 | App Android | Testes de unidade: contrato JSON com respostas geradas pela própria API, erros, rede local, faixas, idade, hora estimada do servidor, resumo, previsão, cache em arquivo, estado das três telas, regras dos alertas e textos das notificações | Emulador: permissão de rede local, as três telas, troca de janela, banco de 3 dias com lacuna e reinício, modelo de demonstração em `forecasts`, queda da API e reabertura sem servidor; alertas de nó sem dados e de volta, ar Ruim, servidor sem resposta e de volta, sem avisos repetidos. Celular (Galaxy S23 Ultra, Android 16, pelo túnel): atualização por cima da versão anterior, dados da produção, permissão pelo cartão e alerta real de PM2,5 Ruim |
 
-**Nunca verificado:** o modelo do TCC em produção; a concordância entre dois nós (o `no-02` mediu na zona sul da capital até 11/11/2026 e foi instalado ao lado do `no-01`, no mesmo apoio em Osasco, às 14:18 desse dia em Brasília, 17:18 UTC; a sobreposição está em curso e ainda não foi analisada). O nó `no-01` opera em Osasco desde 09/10/2026 e envia pelo túnel. Os resultados do emulador usaram dados sintéticos e um modelo de demonstração (`demo v1`), que não é o modelo do TCC; no celular, os dados e o alerta foram os reais da produção.
+**Nunca verificado:** o modelo do TCC em produção; a concordância entre dois nós (o `no-02` mediu na zona sul da capital até 11/11/2026 e foi instalado ao lado do `no-01`, no mesmo apoio em Osasco, às 14:18 desse dia em Brasília, 17:18 UTC; a sobreposição está em curso e ainda não foi analisada; o script está pronto, ver seção 10). O nó `no-01` opera em Osasco desde 09/10/2026 e envia pelo túnel. Os resultados do emulador usaram dados sintéticos e um modelo de demonstração (`demo v1`), que não é o modelo do TCC; no celular, os dados e o alerta foram os reais da produção.
 
 ## 7. Pendências e riscos
 
@@ -127,7 +129,7 @@ Riscos já conhecidos:
 
 ## 8. Próximos passos sugeridos
 
-1. Deixar o `no-01` e o `no-02` lado a lado até pelo menos 25/11/2026, congelar só o período de sobreposição e medir a concordância entre os dois. O `no-02` está junto do `no-01` desde 11/11/2026, 14:18 em Brasília (17:18 UTC), com o local já cadastrado (o `set_location` não guarda histórico, por isso a data fica registrada aqui). O script dessa comparação ainda não existe.
+1. Deixar o `no-01` e o `no-02` lado a lado até pelo menos 25/11/2026, congelar só o período de sobreposição e medir a concordância entre os dois. O `no-02` está junto do `no-01` desde 11/11/2026, 14:18 em Brasília (17:18 UTC), com o local já cadastrado (o `set_location` não guarda histórico, por isso a data fica registrada aqui). O script é o `compare_nodes.py` (seção 10).
 2. Manter o túnel e o app apontados para a URL pública.
 3. Escolher o modelo (decidir antes se haverá busca de hiperparâmetros) e treiná-lo com `fit_forecast.py` numa versão nova, que o job horário passa a gravar ao lado do `ridge v0`.
 4. Acompanhar os alertas no celular por alguns dias, com a bateria do app sem restrições.
@@ -151,3 +153,21 @@ $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 ```
 
 No emulador, o app fala com a API do computador por `http://10.0.2.2:8000/`, configurado em `android/local.properties` junto com o token de leitura.
+
+## 10. Concordância entre os nós
+
+O `no-02` mede ao lado do `no-01`, no mesmo apoio em Osasco, desde 11/11/2026, 14:18 em Brasília (17:18 UTC). A análise é separada das demais e restrita ao período de sobreposição, como diz o protocolo de avaliação.
+
+**O que o script faz.** `server/scripts/compare_nodes.py` pareia as médias horárias dos dois nós nas horas válidas dos dois, com `analytics.hourly_means` e a mesma regra de horas suspeitas do projeto. Só contam as horas cheias dentro do período, então a hora que a mudança cortou ao meio fica de fora. O relatório (`concordancia_nos.json`) traz as horas pareadas, o estado das horas de cada nó, a média de cada nó, viés, MAE, RMSE, r de Pearson, R², a reta de regressão e o Bland-Altman (viés e limites de concordância de 95%), no total e separando as horas com umidade acima de 75% e até 75%; a correlação e a regressão só saem com pelo menos 24 horas pareadas no grupo. O CSV (`concordancia_nos_pares.csv`) tem uma linha por hora pareada. Com `--include-suspect`, a conta é repetida com as horas suspeitas, marcadas e separadas das demais, como no `compare_cetesb`. O relatório registra o arquivo lido com SHA-256 e as versões de Python, numpy e pandas. O uso está no README, em "Concordância entre os nós".
+
+**Estado.** Os testes usam séries sintéticas de resposta conhecida. Em 13/11/2026 o script rodou uma vez numa cópia do banco vivo, só para validar que funciona de ponta a ponta. **Esse resultado não vale como análise**: a sobreposição está em curso desde 11/11/2026, 14:18 em Brasília, a cópia tinha menos de dois dias dela e o período não foi congelado. Nenhum número dessa execução foi registrado.
+
+**Rodada que vale.** Depois de pelo menos 25/11/2026, congelar o período de sobreposição e rodar com e sem as horas suspeitas:
+
+```
+cd server
+python -m scripts.compare_nodes --end <último dia> --out-dir ../resultados/concordancia --freeze
+python -m scripts.compare_nodes --end <último dia> --out-dir ../resultados/concordancia/com_horas_suspeitas --include-suspect     --db ../resultados/concordancia/pm25-congelado-2026-11-11_<último dia>.db
+```
+
+Resultados: [PENDENTE: horas pareadas, viés, MAE, RMSE, r, R², reta de regressão e limites de Bland-Altman do período de sobreposição congelado, com e sem as horas suspeitas e por faixa de umidade].
