@@ -13,7 +13,7 @@ nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──
 ```
 firmware/     código do ESP32 (PlatformIO); host_tests/ testa a parte sem hardware no computador
 server/app/   API (main.py), rotas de leitura (read_api.py), página pública (public_page.py), contrato de dados (models.py), acesso ao banco (db.py), regras de análise (analytics.py), dados e modelos de previsão (forecasting.py), esquema (schema.sql)
-server/scripts/  backup.py, simulate_sensor.py, set_location.py, check_https.py, train_forecast.py, fit_forecast.py, forecast_job.py, period_metrics.py, compare_cetesb.py, compare_nodes.py
+server/scripts/  backup.py, simulate_sensor.py, set_location.py, check_https.py, train_forecast.py, fit_forecast.py, forecast_job.py, period_metrics.py, compare_cetesb.py, compare_nodes.py, check_protocol_clean.py, result_figures.py
 server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
@@ -58,6 +58,8 @@ Cada leitura é a média de um minuto de relógio. O nó envia `POST /v1/measure
   "schema_version": "1",
   "device_id": "no-01",
   "firmware": "build Oct 26 2026 12:00:00",
+  "reset_reason": "poweron",
+  "reset_boot_id": 3,
   "readings": [
     {"boot_id": 3, "seq": 0, "ts": "2026-09-22T12:00:00Z", "uptime_s": 120, "samples": 58,
      "pm1": 8.2, "pm25": 12.5, "pm10": 15.0, "pm25_cf1": 13.0,
@@ -69,6 +71,13 @@ Cada leitura é a média de um minuto de relógio. O nó envia `POST /v1/measure
 O campo `ts` marca o início da janela de um minuto, sempre em UTC. `pm25` é o valor "atmospheric environment" do PMS5003, usado nas análises; `pm25_cf1` é o valor "standard particle", guardado porque as correções publicadas para sensores Plantower costumam partir dele. `samples` conta quantos quadros do sensor entraram na média, e `rssi` e `uptime_s` explicam lacunas depois. Temperatura, umidade, pressão e RSSI podem vir como `null`. A pressão (`pressure`, em hPa) só vem do BME280 e é apenas guardada em `measurements.pressure`: nenhuma análise, rota de leitura, painel ou o app a usa por enquanto. Bancos anteriores ganham a coluna sozinhos quando a API sobe, e leituras antigas ficam com `null`; a faixa plausível é 300 a 1100 hPa (fora dela a leitura é marcada `pressao_fora_faixa`). Um lote aceita até 500 leituras.
 
 O campo `firmware` é opcional e só diagnóstico: identifica a compilação gravada no nó. Por padrão o firmware envia `build <data> <hora>` da compilação; para usar um nome seu (por exemplo o hash do commit), defina `FW_VERSION` em `config.h`. O servidor guarda a versão de cada lote em `ingest_batches.firmware` e o painel mostra a última informada em cada nó. Um valor que não é texto, ou que é vazio, é ignorado; caracteres de controle são removidos e o texto é cortado em 64 caracteres, sem nunca recusar o lote, porque o nó descarta o que a API recusa com 4xx. Nó com firmware anterior a esse campo simplesmente não aparece com versão. Ao subir uma versão nova da API, reinicie a API antes do painel: é ela que acrescenta a coluna ao banco.
+
+Os campos `reset_reason` e `reset_boot_id` também são opcionais e só diagnósticos, sem mudar o `schema_version`. Ao iniciar, o firmware lê o motivo do reinício (`esp_reset_reason()`, igual nos cores 2.0.17 e 3.3.12) e o envia em todo lote, com o `boot_id` da inicialização em curso: o lote pode trazer leituras de inicializações anteriores, guardadas no buffer, e o motivo é só da atual. Os nomes são os do ESP-IDF em minúsculas: `poweron` (energia ligada), `sw` (reinício pedido pelo firmware, como o de 15 minutos sem Wi-Fi), `task_wdt` (o watchdog de 90 s), `int_wdt`, `wdt`, `panic`, `brownout` (queda de tensão), `ext`, `deepsleep`, `sdio`, `unknown` e, só no core 3.x, `usb`, `jtag`, `efuse`, `pwr_glitch` e `cpu_lockup`; um código que o firmware não conhece vai como `code_<n>`. O servidor guarda os dois em `ingest_batches.reset_reason` e `ingest_batches.reset_boot_id`, e o painel mostra o último motivo de cada nó abaixo da versão do firmware ("Último reinício: watchdog de tarefa (inicialização 41)"). Como em `firmware`, um valor que não é texto ou é vazio é ignorado, o texto é limpo e cortado em 32 caracteres, e um `reset_boot_id` inválido é ignorado sem descartar o motivo; o lote nunca é recusado por causa deles. Nó com firmware anterior aos campos não aparece com motivo. A página pública e as rotas de leitura não os mostram. As duas colunas são acrescentadas ao banco quando a API sobe com esta versão, como a de `firmware`. Para contar os reinícios por motivo:
+
+```sql
+SELECT device_id, reset_reason, COUNT(DISTINCT reset_boot_id) AS inicializacoes
+FROM ingest_batches WHERE reset_reason IS NOT NULL GROUP BY device_id, reset_reason;
+```
 
 | Resposta | Significado | O que o nó faz |
 |---|---|---|
@@ -209,7 +218,7 @@ pio device monitor
 
 Na Arduino IDE, crie uma pasta `pm25_node` com um arquivo `pm25_node.ino` vazio, copie para ela `main.cpp`, `pms5003.h`, `reading.h` e o seu `config.h`, instale a biblioteca "Adafruit BME280 Library" e compile para a placa "ESP32 Dev Module".
 
-Depois de ligado, o nó descarta os primeiros 30 segundos do PMS5003 (tempo de estabilização da ventoinha), espera o relógio sincronizar por NTP e passa a fechar uma leitura a cada minuto de relógio. Com HTTPS o envio só começa depois do NTP (sem hora válida o certificado não é aceito), e uma falha de conexão ou de handshake TLS vale como falha de rede: o lote continua no buffer e é reenviado com espera crescente. Cada tentativa HTTPS espera no máximo 15 s pela conexão, 20 s pelo handshake e 8 s pela resposta, abaixo do watchdog de 90 s. O monitor serial mostra uma linha por minuto, por exemplo `[leitura] seq=41 pm2.5=13.2 quadros=58 T=23.9 UR=62.4 rssi=-64 pendentes=0`. O que a API não confirmar vai para um buffer em LittleFS com capacidade para cinco dias, que sobrevive a reinícios e quedas de energia. Se o Wi-Fi ficar 15 minutos fora, o ESP32 reinicia sozinho, e um watchdog de 90 segundos cobre travamentos.
+Depois de ligado, o nó descarta os primeiros 30 segundos do PMS5003 (tempo de estabilização da ventoinha), espera o relógio sincronizar por NTP e passa a fechar uma leitura a cada minuto de relógio. Com HTTPS o envio só começa depois do NTP (sem hora válida o certificado não é aceito), e uma falha de conexão ou de handshake TLS vale como falha de rede: o lote continua no buffer e é reenviado com espera crescente. Cada tentativa HTTPS espera no máximo 15 s pela conexão, 20 s pelo handshake e 8 s pela resposta, abaixo do watchdog de 90 s. Ao iniciar, ele mostra o motivo do reinício (`[boot] no-01 firmware=... boot_id=41 motivo=task_wdt pendentes=0`). O monitor serial mostra uma linha por minuto, por exemplo `[leitura] seq=41 pm2.5=13.2 quadros=58 T=23.9 UR=62.4 rssi=-64 pendentes=0`. O que a API não confirmar vai para um buffer em LittleFS com capacidade para cinco dias, que sobrevive a reinícios e quedas de energia. Se o Wi-Fi ficar 15 minutos fora, o ESP32 reinicia sozinho, e um watchdog de 90 segundos cobre travamentos.
 
 O firmware foi compilado sem avisos (`-Wall`) nos cores Arduino do ESP32 2.0.17 e 3.3.12 (inclusive com HTTPS e a CA raiz embutida). Para o core 3.x no PlatformIO, a plataforma testada foi `https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312-1/platform-espressif32.zip`; no Windows, rode o `pio` do PowerShell, não do Git Bash (o instalador do core 3.x recusa o MSYS). Uso de memória, em bytes (RAM estática / flash), antes e depois do HTTPS:
 
@@ -448,11 +457,30 @@ Por padrão compara `no-01` (A) com `no-02` (B), do momento da mudança até ago
 Uma hora entra no par quando é **hora válida** nos dois nós, pela mesma regra de 45 leituras e sem as horas suspeitas do resto da análise. Gera `concordancia_nos.json` e `concordancia_nos_pares.csv` (colunas `hora_utc`, `pm25_a`, `pm25_b`, `umidade_a`, `umidade_b`, `umidade`, `suspeita_a` e `suspeita_b`; uma linha por hora pareada, base do gráfico de dispersão). O JSON traz:
 
 - `horas`: as horas pareadas e, por nó, quantas horas do período ficaram em cada estado (`válida`, `sem leituras`, `poucas leituras`, `suspeita`, que somam as horas do período), quantas foram `usadas` e quantas destas ficaram `usadas_sem_par` porque o outro nó não tinha média naquela hora;
-- `concordancia`: a mesma conta da comparação com a CETESB (`agreement` e `by_humidity` do `compare_cetesb`), com B no lugar da estação: viés (média de A − B, positivo quando A lê mais alto), MAE, RMSE, correlação de Pearson e reta de regressão de A em função de B, no total e separando as horas com umidade acima de 75% e até 75%. A umidade da hora pareada é a média da umidade dos dois nós (a de um só, se o outro não tem); horas sem umidade nos dois entram no total e são contadas em `sem_umidade`. Com menos de 24 horas pareadas, a correlação e a regressão não são calculadas e o JSON traz um `aviso`.
+- `concordancia`: a mesma conta da comparação com a CETESB (`agreement` e `by_humidity` do `compare_cetesb`), com B no lugar da estação: viés (média de A − B, positivo quando A lê mais alto), MAE, RMSE, correlação de Pearson, R² e reta de regressão de A em função de B, no total e separando as horas com umidade acima de 75% e até 75%. A umidade da hora pareada é a média da umidade dos dois nós (a de um só, se o outro não tem); horas sem umidade nos dois entram no total e são contadas em `sem_umidade`. Com menos de 24 horas pareadas, a correlação e a regressão não são calculadas e o JSON traz um `aviso`. Cada grupo com pelo menos duas horas pareadas traz também `bland_altman`: o viés, o desvio-padrão amostral das diferenças A − B (`dp_diferencas`) e os limites de concordância de 95% (`limite_inferior` e `limite_superior`, viés ± 1,96 desvio). Os limites supõem diferenças aproximadamente normais e sem tendência com o nível de PM2,5; confira no CSV das horas pareadas antes de citá-los;
+- `banco_lido` e `ambiente`: o nome, o tamanho e o SHA-256 do arquivo lido e as versões de Python, numpy e pandas, como no relatório do `train_forecast`. O hash só identifica os dados quando o arquivo é uma cópia parada (o banco congelado ou o de `--freeze`): no banco em uso, parte dos dados pode estar no arquivo `-wal`.
 
 `--include-suspect` é a análise de sensibilidade: as horas suspeitas também entram no par, marcadas nas colunas `suspeita_a` e `suspeita_b`, e o relatório separa as horas suspeitas em qualquer um dos nós (`suspeitas`) das `demais`. Como os dois sensores estão lado a lado, uma hora suspeita em um só deles é sinal de que aquele sensor parou de ver partículas.
 
 Com `--freeze`, o banco é copiado para `--out-dir` como no `period_metrics` (mesma função, nome com os dias do período, SHA-256 no relatório em `congelamento`) e a comparação sai da cópia. A rodada final, depois de 25/11, deve ser feita assim ou com `--db` apontando para a cópia congelada da sobreposição.
+
+## Figuras dos resultados
+
+`server/scripts/result_figures.py` gera as figuras do capítulo de resultados a partir dos CSVs que os outros scripts gravam; ele não abre o banco. Precisa do matplotlib, que fica fora do ambiente do servidor: instale `requirements-figures.txt` num ambiente virtual à parte.
+
+```
+cd server
+python -m scripts.result_figures --results ../resultados --out-dir ../resultados/figuras --device no-01
+```
+
+| Figura | Origem | Conteúdo |
+|---|---|---|
+| `completude_diaria.png` | `completude_diaria.csv` (`period_metrics`) | Completude da coleta por dia |
+| `perfil_pm25.png` | `perfil_hora.csv` e `perfil_dia_semana.csv` (`period_metrics`) | Média de PM2,5 por hora do dia e por dia da semana |
+| `dispersao_cetesb.png` | `comparacao_cetesb_pares.csv` (`compare_cetesb`) | Nó × CETESB hora a hora, com a reta de regressão e a linha 1:1 |
+| `previsto_observado.png` | `<nó>/previsao_teste.csv` (`train_forecast`) | Observado, persistência e Ridge no teste final, com a linha interrompida nas horas sem previsão |
+
+Uma figura cujo CSV não existe é pulada com um aviso. As figuras valem para os dados da pasta lida: para a rodada final, aponte `--results` para `../resultados/rodada-final`. O teste do script (`tests/test_result_figures.py`) é pulado onde não há matplotlib, como no ambiente do servidor.
 
 ## Padrão de commits
 

@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, field_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, field_validator, model_validator
 
 MAX_BATCH = 500
 MIN_VALID_TS = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -38,6 +38,15 @@ class Reading(BaseModel):
 
 
 MAX_FIRMWARE_LEN = 64
+MAX_RESET_REASON_LEN = 32
+MAX_BOOT_ID = 2**31 - 1
+
+
+def _tidy_text(v, limit: int) -> str | None:
+    """Texto só de diagnóstico: sem caracteres de controle, cortado em `limit`; o que não é texto útil vira None."""
+    if not isinstance(v, str):
+        return None
+    return "".join(c for c in v if c.isprintable()).strip()[:limit].strip() or None
 
 
 class Batch(BaseModel):
@@ -48,14 +57,33 @@ class Batch(BaseModel):
     # Identifica a compilação gravada no nó. Só diagnóstico: o nó descarta o lote recusado com 4xx, então
     # um valor estranho é limpo ou ignorado, nunca motivo para recusar as leituras.
     firmware: str | None = None
+    # Motivo do reinício que começou a inicialização em curso do nó (`reset_boot_id`), como o firmware o nomeia
+    # (esp_reset_reason). Só diagnóstico, como `firmware`: valor estranho é limpo ou ignorado, nunca recusado.
+    reset_reason: str | None = None
+    reset_boot_id: int | None = None
     readings: list[Reading] = Field(min_length=1, max_length=MAX_BATCH)
 
     @field_validator("firmware", mode="before")
     @classmethod
     def _tidy_firmware(cls, v):
-        if not isinstance(v, str):
-            return None
-        return "".join(c for c in v if c.isprintable()).strip()[:MAX_FIRMWARE_LEN].strip() or None
+        return _tidy_text(v, MAX_FIRMWARE_LEN)
+
+    @field_validator("reset_reason", mode="before")
+    @classmethod
+    def _tidy_reset_reason(cls, v):
+        return _tidy_text(v, MAX_RESET_REASON_LEN)
+
+    @field_validator("reset_boot_id", mode="before")
+    @classmethod
+    def _tidy_reset_boot_id(cls, v):
+        # bool é int em Python; True não é uma inicialização.
+        return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= MAX_BOOT_ID else None
+
+    @model_validator(mode="after")
+    def _boot_id_only_with_reason(self):
+        if self.reset_reason is None:
+            self.reset_boot_id = None  # a inicialização só diz algo junto do motivo
+        return self
 
 
 class IngestResult(BaseModel):

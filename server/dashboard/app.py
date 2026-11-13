@@ -567,6 +567,9 @@ def status_tab() -> None:
                     st.caption(flagged_note(dev["quality"]))
             if isinstance(dev["firmware"], str):
                 st.caption(f"Firmware: {dev['firmware']}")
+            reset = analytics.reset_label(dev.get("reset_reason"), dev.get("reset_boot_id"))
+            if reset:
+                st.caption(f"Último reinício: {reset}")
 
     # O gráfico vem antes da tabela: a primeira tela responde "qual é a leitura, está atualizada e como evolui".
     recent = load_measurements(now - timedelta(hours=6), now + timedelta(minutes=1), tuple(status["device_id"]))

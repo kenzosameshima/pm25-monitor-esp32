@@ -100,9 +100,10 @@ int main() {
     memset(rs, 0, sizeof rs);
     rs[0] = {3, 0, 1790078400u, 120, 8.2f, 12.46f, 15.0f, 13.0f, 23.4f, 61.0f, 931.27f, -63, 58};
     rs[1] = {3, 1, 1790078460u, 180, 8.0f, 12.0f, 14.9f, 12.8f, NAN, NAN, NAN, RSSI_NONE, 57};
-    std::string json = buildPayload("no-01", "build Oct 26 2026 12:00:00", rs, 2);
-    assert(json.find("\"device_id\":\"no-01\",\"firmware\":\"build Oct 26 2026 12:00:00\",\"readings\":[") !=
-           std::string::npos);
+    BootInfo boot = {3, "poweron"};
+    std::string json = buildPayload("no-01", "build Oct 26 2026 12:00:00", &boot, rs, 2);
+    assert(json.find("\"device_id\":\"no-01\",\"firmware\":\"build Oct 26 2026 12:00:00\","
+                     "\"reset_reason\":\"poweron\",\"reset_boot_id\":3,\"readings\":[") != std::string::npos);
     assert(json.find("\"ts\":\"2026-09-22T12:00:00Z\"") != std::string::npos);
     assert(json.find("\"pm25\":12.5") != std::string::npos);
     assert(json.find("\"temperature\":null") != std::string::npos);
@@ -114,13 +115,39 @@ int main() {
     fputs(json.c_str(), f);
     fclose(f);
     // versão sem escape: caracteres fora da lista viram '_', o limite é 64 e sem versão o campo some
-    std::string odd = buildPayload("no-01", "a\"b\\c\n", rs, 1);
+    std::string odd = buildPayload("no-01", "a\"b\\c\n", nullptr, rs, 1);
     assert(odd.find("\"firmware\":\"a_b_c_\"") != std::string::npos);
-    std::string longer = buildPayload("no-01", std::string(100, 'x').c_str(), rs, 1);
+    std::string longer = buildPayload("no-01", std::string(100, 'x').c_str(), nullptr, rs, 1);
     assert(longer.find("\"firmware\":\"" + std::string(64, 'x') + "\"") != std::string::npos);
     assert(longer.find(std::string(65, 'x')) == std::string::npos);
-    assert(buildPayload("no-01", nullptr, rs, 1).find("firmware") == std::string::npos);
-    assert(buildPayload("no-01", "", rs, 1).find("firmware") == std::string::npos);
+    assert(buildPayload("no-01", nullptr, nullptr, rs, 1).find("firmware") == std::string::npos);
+    assert(buildPayload("no-01", "", nullptr, rs, 1).find("firmware") == std::string::npos);
+    // motivo do reinício: campo opcional, sempre junto da inicialização a que se refere
+    std::string plain = buildPayload("no-01", nullptr, nullptr, rs, 1);
+    assert(plain.find("reset_") == std::string::npos);
+    assert(plain.find("{\"schema_version\":\"1\",\"device_id\":\"no-01\",\"readings\":[") == 0);
+    BootInfo none = {7, ""};
+    assert(buildPayload("no-01", nullptr, &none, rs, 1).find("reset_") == std::string::npos);
+    BootInfo wdt = {41, "task_wdt"};
+    assert(buildPayload("no-01", nullptr, &wdt, rs, 1)
+               .find("\"device_id\":\"no-01\",\"reset_reason\":\"task_wdt\",\"reset_boot_id\":41,\"readings\":[") !=
+           std::string::npos);
+    BootInfo odd_reason = {1, "a\"b"};  // nunca precisa de escape, como a versão
+    assert(buildPayload("no-01", nullptr, &odd_reason, rs, 1).find("\"reset_reason\":\"a_b\"") != std::string::npos);
+  }
+  // nome do motivo do reinício: os códigos de esp_reset_reason(), iguais nos cores 2.0.17 e 3.3.12 até SDIO
+  {
+    assert(resetReasonName(0) == "unknown");
+    assert(resetReasonName(1) == "poweron");
+    assert(resetReasonName(3) == "sw");           // ESP.restart(): o reinício após 15 min sem Wi-Fi
+    assert(resetReasonName(4) == "panic");
+    assert(resetReasonName(5) == "int_wdt");
+    assert(resetReasonName(6) == "task_wdt");     // o watchdog de 90 s do firmware
+    assert(resetReasonName(7) == "wdt");
+    assert(resetReasonName(9) == "brownout");
+    assert(resetReasonName(15) == "cpu_lockup");  // só existe no core 3.x
+    assert(resetReasonName(16) == "code_16");     // código que o firmware não conhece: vai o número
+    assert(resetReasonName(-1) == "code_-1");
   }
   puts("firmware: todos os testes passaram");
   return 0;

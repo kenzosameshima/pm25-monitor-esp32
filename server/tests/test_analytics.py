@@ -561,3 +561,29 @@ def test_leitura_com_todas_as_particulas_em_zero_e_zerada(pm1, pm25, pm10):
 ])
 def test_leitura_com_alguma_particula_ou_sem_pm25_nao_e_zerada(pm1, pm25, pm10):
     assert not analytics.is_zero_reading(pm1, pm25, pm10)
+
+
+def test_estado_traz_o_ultimo_motivo_do_reinicio(conn):
+    db.insert_batch(conn, "no-01", [reading("no-01", -2)], NOW, reset_reason="poweron", reset_boot_id=40)
+    db.insert_batch(conn, "no-01", [reading("no-01", -1)], NOW + timedelta(minutes=1), reset_reason="task_wdt",
+                    reset_boot_id=41)
+    db.insert_batch(conn, "no-02", [reading("no-02", -1)], NOW)
+    status = analytics.device_status(conn, NOW).set_index("device_id")
+    assert status.loc["no-01", "reset_reason"] == "task_wdt" and status.loc["no-01", "reset_boot_id"] == 41
+    assert pd.isna(status.loc["no-02", "reset_reason"]) and pd.isna(status.loc["no-02", "reset_boot_id"])
+
+
+@pytest.mark.parametrize("reason, boot_id, text", [
+    ("task_wdt", 41, "watchdog de tarefa (inicialização 41)"),
+    ("sw", 7, "reinício pedido pelo firmware (inicialização 7)"),
+    ("poweron", None, "energia ligada"),
+    ("brownout", 3.0, "queda de tensão (inicialização 3)"),          # o pandas devolve a inicialização como float
+    ("code_16", 2, "code_16 (inicialização 2)"),                     # motivo que o servidor não conhece: como veio
+])
+def test_texto_do_motivo_do_reinicio(reason, boot_id, text):
+    assert analytics.reset_label(reason, boot_id) == text
+
+
+@pytest.mark.parametrize("reason", [None, float("nan"), ""])
+def test_sem_motivo_do_reinicio_nao_ha_texto(reason):
+    assert analytics.reset_label(reason, 41) is None
