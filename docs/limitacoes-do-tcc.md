@@ -60,7 +60,7 @@ Rascunho em português para virar a seção de limitações. Os números vêm do
 
 **Efeito na conclusão.** Cada reinício custa poucos minutos de dados, então o efeito na completude é pequeno (97,2% no período; 999 dos 1.250 minutos de lacuna foram por reinício e 251 pela borda inicial, antes da primeira leitura). A causa, porém, é desconhecida e pode se repetir.
 
-**Mitigação.** **Causa não investigada.** O firmware não informa o motivo do reinício; investigar exigiria registrar a causa do reset no firmware e acompanhar por mais tempo.
+**Mitigação.** **Causa não investigada.** No período, o firmware não informava o motivo do reinício. Desde 13/11/2026 o código do firmware lê o motivo ao iniciar e o envia em cada lote (`reset_reason` e `reset_boot_id`), e o servidor o guarda; falta regravar os nós com essa versão e acompanhar por mais tempo.
 
 ## 7. Servidor único e segurança da implantação
 

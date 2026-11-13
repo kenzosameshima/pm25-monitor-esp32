@@ -74,7 +74,7 @@ O `no-01` reiniciou 32 vezes em 31 dias, cerca de uma vez por dia (`period_metri
 
 Cada reinício custa poucos minutos de dados, e o efeito na completude é pequeno: 97,2% no período, com 999 dos 1.250 minutos de lacuna devidos a reinícios e 251 à borda inicial, antes da primeira leitura (`period_metrics`). A causa, porém, é desconhecida e pode se repetir.
 
-A causa não foi investigada. No período analisado, o firmware não informava o motivo do reinício; identificá-la exige registrar a causa do reset no firmware e acompanhar o nó por mais tempo (ver 5).
+A causa não foi investigada. No período analisado, o firmware não informava o motivo do reinício. Depois dele, o firmware passou a ler o motivo ao iniciar (`esp_reset_reason`) e a enviá-lo em cada lote, e o servidor a guardá-lo; identificar a causa ainda exige regravar os nós com essa versão e acompanhá-los por mais tempo (ver 5).
 
 ## 4. Limitações do sistema sem efeito nos resultados
 

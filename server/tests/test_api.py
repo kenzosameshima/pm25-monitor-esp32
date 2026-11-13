@@ -384,3 +384,49 @@ def test_bloqueio_expira_e_o_contador_recomeca():
     assert t.retry_after("1.1.1.1") == 0
     t.register_failure("1.1.1.1")                 # contagem recomeçou: uma falha não bloqueia
     assert t.retry_after("1.1.1.1") == 0
+
+
+# ---------------- motivo do reinício: campo opcional que nunca pode custar leituras ----------------
+
+def post_with_reset(client, reason, boot_id=41):
+    body = {"schema_version": "1", "device_id": "no-01", "readings": [reading(0)], "reset_reason": reason,
+            "reset_boot_id": boot_id}
+    return client.post(URL, json=body, headers={"Authorization": f"Bearer {TOKEN_1}"})
+
+
+def stored_resets(client):
+    with sqlite3.connect(client.db_path) as conn:
+        return conn.execute("SELECT reset_reason, reset_boot_id FROM ingest_batches ORDER BY id").fetchall()
+
+
+def test_lote_guarda_o_motivo_do_reinicio(client):
+    assert post_with_reset(client, "task_wdt").status_code == 201
+    assert stored_resets(client) == [("task_wdt", 41)]
+
+
+def test_lote_sem_motivo_do_reinicio_continua_valido(client):
+    assert post(client, [reading(0)]).status_code == 201
+    assert stored_resets(client) == [(None, None)]
+
+
+def test_payload_do_firmware_traz_o_motivo_do_reinicio(client):
+    import json
+    from pathlib import Path
+
+    payload = json.loads((Path(__file__).parent / "fixtures" / "payload_firmware.json").read_text())
+    assert client.post(URL, json=payload, headers={"Authorization": f"Bearer {TOKEN_1}"}).status_code == 201
+    assert stored_resets(client) == [("poweron", 3)]
+
+
+@pytest.mark.parametrize("reason, boot_id, kept", [
+    (123, 41, (None, None)), ("", 41, (None, None)), (["x"], 41, (None, None)),   # sem motivo útil: nada é guardado
+    ("x" * 500, 41, ("x" * 32, 41)),                                              # comprido demais: cortado
+    ("task\x00_wdt\n", 41, ("task_wdt", 41)),                                     # caracteres de controle: removidos
+    ("sw", "x", ("sw", None)), ("sw", -1, ("sw", None)), ("sw", True, ("sw", None)),   # inicialização inválida:
+    ("sw", 2**40, ("sw", None)), ("sw", 1.5, ("sw", None)), ("sw", None, ("sw", None)),  # o motivo fica, sem ela
+])
+def test_motivo_do_reinicio_invalido_nao_derruba_o_lote(client, reason, boot_id, kept):
+    """O nó descarta lote recusado com 4xx; um campo só de diagnóstico não pode causar isso."""
+    assert post_with_reset(client, reason, boot_id).status_code == 201
+    assert count(client, "SELECT COUNT(*) FROM measurements") == 1
+    assert stored_resets(client) == [kept]

@@ -37,7 +37,28 @@ SUSPECT_MEAN_BELOW = 1.0    # ...ou se a média do PM2,5 da hora fica abaixo dis
 
 HOURLY_COLUMNS = ["device_id", "hora", "n", *VARIABLES, "suspeita"]
 STATUS_COLUMNS = ["device_id", "location", "first_ts", "last_received", "status", "minutes_since",
-                  "ts_sensor", *VARIABLES, "rssi", "quality", "firmware"]
+                  "ts_sensor", *VARIABLES, "rssi", "quality", "firmware", "reset_reason", "reset_boot_id"]
+
+# Motivo do reinício, como o firmware o nomeia (esp_reset_reason), e o texto mostrado no painel. O firmware
+# reinicia de propósito depois de 15 min sem Wi-Fi ("sw"), e o watchdog de 90 s dele é o de tarefa ("task_wdt").
+RESET_LABELS = {
+    "poweron": "energia ligada",
+    "ext": "pino de reset",
+    "sw": "reinício pedido pelo firmware",
+    "panic": "erro fatal do firmware",
+    "int_wdt": "watchdog de interrupção",
+    "task_wdt": "watchdog de tarefa",
+    "wdt": "outro watchdog",
+    "deepsleep": "saída do sono profundo",
+    "brownout": "queda de tensão",
+    "sdio": "reset por SDIO",
+    "usb": "reset por USB",
+    "jtag": "reset por JTAG",
+    "efuse": "erro de eFuse",
+    "pwr_glitch": "falha na alimentação",
+    "cpu_lockup": "travamento da CPU",
+    "unknown": "motivo desconhecido",
+}
 HEALTH_COLUMNS = ["device_id", "completude", "maior_lacuna_min", "mensagens_perdidas", "reinicios",
                   "duplicatas_descartadas", "leituras_marcadas"]
 METRIC_COLUMNS = ["previsor", "horas", "mae", "rmse", "skill"]
@@ -264,6 +285,18 @@ def _status(last_received, now: datetime) -> tuple[str, float]:
     return "sem_dados", minutes
 
 
+def reset_label(reason, boot_id=None) -> str | None:
+    """Texto do motivo do último reinício para o painel, com a inicialização quando o nó a informou.
+
+    Um motivo fora de RESET_LABELS aparece como veio; sem motivo (nó com firmware anterior ao campo), None."""
+    if not isinstance(reason, str) or not reason:
+        return None
+    text = RESET_LABELS.get(reason, reason)
+    if boot_id is None or pd.isna(boot_id):
+        return text
+    return f"{text} (inicialização {int(boot_id)})"
+
+
 def device_status(conn: sqlite3.Connection, now: datetime) -> pd.DataFrame:
     """Uma linha por nó em produção: local, estado da coleta, minutos desde o último envio e a leitura mais recente.
 
@@ -278,6 +311,9 @@ def device_status(conn: sqlite3.Connection, now: datetime) -> pd.DataFrame:
     latest = _frame(db.latest_measurements(conn), ["ts_sensor"])
     out = overview.merge(latest, on="device_id", how="left")
     out["firmware"] = out["device_id"].map(db.latest_firmware(conn))
+    resets = db.latest_reset(conn)
+    out["reset_reason"] = out["device_id"].map({d: reason for d, (reason, _) in resets.items()})
+    out["reset_boot_id"] = out["device_id"].map({d: boot for d, (_, boot) in resets.items()})
     states = [_status(last, now) for last in out["last_received"]]
     out["status"] = [s for s, _ in states]
     out["minutes_since"] = [m for _, m in states]

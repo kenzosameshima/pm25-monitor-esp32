@@ -82,3 +82,57 @@ def test_no_cadastrado_sem_leituras_nao_tem_leituras(conn):
     with conn:
         conn.execute("INSERT INTO devices (device_id, first_seen) VALUES ('no-03', ?)", (db.iso(T0),))
     assert not db.has_readings(conn, "no-03")
+
+
+# ---------------- motivo do reinício: informado pelo nó no lote, junto da inicialização a que se refere ----------------
+
+def stored_resets(conn):
+    return [tuple(r) for r in conn.execute("SELECT reset_reason, reset_boot_id FROM ingest_batches ORDER BY id")]
+
+
+def test_lote_guarda_o_motivo_do_reinicio_e_a_inicializacao(conn):
+    db.insert_batch(conn, "no-01", [reading("no-01", 0)], T0, reset_reason="task_wdt", reset_boot_id=41)
+    db.insert_batch(conn, "no-01", [reading("no-01", 1)], T0 + timedelta(minutes=1))
+    assert stored_resets(conn) == [("task_wdt", 41), (None, None)]
+
+
+def test_banco_antigo_ganha_as_colunas_do_motivo_do_reinicio(tmp_path):
+    path = str(tmp_path / "antigo.db")
+    old = db.connect(path)
+    with old:   # ingest_batches como é no banco em produção em 13/11/2026: com `firmware`, sem o motivo do reinício
+        old.execute("CREATE TABLE ingest_batches (id INTEGER PRIMARY KEY, received_at TEXT NOT NULL,"
+                    " device_id TEXT NOT NULL, n_readings INTEGER NOT NULL, n_inserted INTEGER NOT NULL,"
+                    " n_duplicates INTEGER NOT NULL, remote_addr TEXT, firmware TEXT)")
+        old.execute("INSERT INTO ingest_batches (received_at, device_id, n_readings, n_inserted, n_duplicates,"
+                    " firmware) VALUES ('2026-10-01T12:00:00Z', 'no-01', 1, 1, 0, 'v1')")
+    db.init_db(old)
+    db.init_db(old)   # a API migra a cada partida: rodar de novo não pode falhar nem mudar nada
+    db.insert_batch(old, "no-01", [reading("no-01", 0)], T0, firmware="v2", reset_reason="sw", reset_boot_id=7)
+    assert stored_resets(old) == [(None, None), ("sw", 7)]                    # o lote antigo fica como estava
+    assert [r[0] for r in old.execute("SELECT firmware FROM ingest_batches ORDER BY id")] == ["v1", "v2"]
+    old.close()
+
+
+def test_ultimo_motivo_do_reinicio_vem_do_lote_mais_recente_que_o_informou(conn):
+    db.insert_batch(conn, "no-01", [reading("no-01", 0)], T0, reset_reason="poweron", reset_boot_id=40)
+    db.insert_batch(conn, "no-01", [reading("no-01", 1)], T0 + timedelta(minutes=1), reset_reason="task_wdt",
+                    reset_boot_id=41)
+    db.insert_batch(conn, "no-01", [reading("no-01", 2)], T0 + timedelta(minutes=2))   # firmware antigo, sem o campo
+    db.insert_batch(conn, "no-02", [reading("no-02", 0)], T0)
+    db.insert_batch(conn, "no-03", [reading("no-03", 0)], T0, reset_reason="brownout")  # sem a inicialização
+    assert db.latest_reset(conn) == {"no-01": ("task_wdt", 41), "no-03": ("brownout", None)}
+
+
+def test_banco_sem_as_colunas_do_reinicio_nao_quebra_quem_so_le(tmp_path):
+    path = str(tmp_path / "antigo.db")
+    old = db.connect(path)
+    with old:
+        old.execute("CREATE TABLE devices (device_id TEXT PRIMARY KEY, first_seen TEXT NOT NULL, location TEXT,"
+                    " notes TEXT)")
+        old.execute("CREATE TABLE ingest_batches (id INTEGER PRIMARY KEY, received_at TEXT NOT NULL,"
+                    " device_id TEXT NOT NULL, n_readings INTEGER NOT NULL, n_inserted INTEGER NOT NULL,"
+                    " n_duplicates INTEGER NOT NULL, remote_addr TEXT, firmware TEXT)")
+    old.close()
+    reader = db.connect(path, readonly=True)
+    assert db.latest_reset(reader) == {}
+    reader.close()

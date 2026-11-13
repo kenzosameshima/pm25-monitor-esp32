@@ -72,6 +72,10 @@ def snapshot(source_path: str, dest: Path, *, single_file: bool = False) -> int:
     return rows
 
 
+# Colunas do motivo do reinício em ingest_batches, acrescentadas pela migração a um banco anterior a elas.
+RESET_COLUMNS = {"reset_reason": "TEXT", "reset_boot_id": "INTEGER"}
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     """Acrescenta ao banco já existente as colunas que o esquema ganhou depois (CREATE IF NOT EXISTS não as cria)."""
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(measurements)")}
@@ -80,9 +84,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     batch_columns = {r["name"] for r in conn.execute("PRAGMA table_info(ingest_batches)")}
     if "firmware" not in batch_columns:
         conn.execute("ALTER TABLE ingest_batches ADD COLUMN firmware TEXT")
+    for column, kind in RESET_COLUMNS.items():
+        if column not in batch_columns:
+            conn.execute(f"ALTER TABLE ingest_batches ADD COLUMN {column} {kind}")
     # Aqui e não no schema.sql: num banco antigo a coluna só existe depois do ALTER acima.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_batches_firmware ON ingest_batches (device_id, received_at)"
                  " WHERE firmware IS NOT NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_batches_reset ON ingest_batches (device_id, received_at)"
+                 " WHERE reset_reason IS NOT NULL")
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -110,12 +119,15 @@ def insert_batch(
     received_at: datetime,
     remote_addr: str | None = None,
     firmware: str | None = None,
+    reset_reason: str | None = None,
+    reset_boot_id: int | None = None,
 ) -> tuple[int, int]:
     """Grava um lote de leituras numa única transação. Retorna (inseridas, duplicadas).
 
     Leituras repetidas (mesmo device_id, boot_id e seq) são ignoradas, o que torna os
     reenvios do nó seguros: ele pode mandar o mesmo lote várias vezes sem duplicar dados.
-    `firmware` é a versão informada pelo nó neste lote, se informou.
+    `firmware` é a versão informada pelo nó neste lote, se informou; `reset_reason` e `reset_boot_id`, o motivo
+    do reinício e a inicialização a que ele se refere, também só se o nó informou.
     """
     received = iso(received_at)
     with conn:
@@ -130,8 +142,9 @@ def insert_batch(
         duplicates = len(rows) - inserted
         conn.execute(
             "INSERT INTO ingest_batches (received_at, device_id, n_readings, n_inserted, n_duplicates, remote_addr,"
-            " firmware) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (received, device_id, len(rows), inserted, duplicates, remote_addr, firmware),
+            " firmware, reset_reason, reset_boot_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (received, device_id, len(rows), inserted, duplicates, remote_addr, firmware, reset_reason,
+             reset_boot_id),
         )
     return inserted, duplicates
 
@@ -260,6 +273,22 @@ def latest_firmware(conn: sqlite3.Connection) -> dict[str, str]:
         " AND b.firmware IS NOT NULL ORDER BY b.received_at DESC LIMIT 1) AS firmware FROM devices d"
     ).fetchall()
     return {r["device_id"]: r["firmware"] for r in rows if r["firmware"] is not None}
+
+
+def latest_reset(conn: sqlite3.Connection) -> dict[str, tuple[str, int | None]]:
+    """Motivo do último reinício de cada nó e a inicialização a que se refere: os do lote mais recente que os informou.
+
+    Nó que nunca informou fica de fora. Um banco que a API ainda não migrou não tem as colunas; os leitores não
+    migram, então ele responde vazio."""
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(ingest_batches)")}
+    if not set(RESET_COLUMNS) <= columns:
+        return {}
+    rows = conn.execute(
+        "SELECT b.device_id, b.reset_reason, b.reset_boot_id FROM ingest_batches b WHERE b.id = ("
+        "SELECT x.id FROM ingest_batches x WHERE x.device_id = b.device_id AND x.reset_reason IS NOT NULL"
+        " ORDER BY x.received_at DESC, x.id DESC LIMIT 1)"
+    ).fetchall()
+    return {r["device_id"]: (r["reset_reason"], r["reset_boot_id"]) for r in rows}
 
 
 def set_location(conn: sqlite3.Connection, device_id: str, location: str | None) -> bool:

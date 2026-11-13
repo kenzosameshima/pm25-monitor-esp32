@@ -14,6 +14,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <esp_timer.h>
 #include <time.h>
@@ -83,6 +84,7 @@ HardwareSerial& pmsSerial = Serial2;
 PmsParser parser;
 MinuteAccumulator acc;
 uint32_t bootId = 0;
+std::string resetReason;  // motivo do reinício que começou esta inicialização, lido uma vez no setup()
 uint32_t seqCounter = 0;
 int64_t currentMinute = -1;
 uint32_t pendingSize = 0;    // bytes no arquivo de pendências
@@ -255,7 +257,8 @@ static void confirmPending(size_t n) {
 // ---------------- Envio ----------------
 static int postReadings(const Reading* rs, size_t n) {
   if (WiFi.status() != WL_CONNECTED || !clockReadyForSend()) return -1;
-  std::string body = buildPayload(DEVICE_ID, FW_VERSION, rs, n);
+  BootInfo boot = {bootId, resetReason.c_str()};
+  std::string body = buildPayload(DEVICE_ID, FW_VERSION, &boot, rs, n);
   static WiFiClient plainClient;
   static WiFiClientSecure secureClient;
   HTTPClient http;
@@ -442,6 +445,7 @@ static void handleWifi() {
 void setup() {
   Serial.begin(115200);
   delay(200);
+  resetReason = resetReasonName((int)esp_reset_reason());  // antes de qualquer coisa que possa reiniciar o nó
   setupWatchdog();
 
   Preferences prefs;
@@ -468,8 +472,8 @@ void setup() {
   beginWifi();
   configTime(0, 0, NTP_SERVER_1, NTP_SERVER_2);  // relógio em UTC; o SNTP ressincroniza periodicamente
 
-  Serial.printf("[boot] %s firmware=%s boot_id=%lu pendentes=%lu\n", DEVICE_ID, FW_VERSION, (unsigned long)bootId,
-                (unsigned long)pendingRecords());
+  Serial.printf("[boot] %s firmware=%s boot_id=%lu motivo=%s pendentes=%lu\n", DEVICE_ID, FW_VERSION,
+                (unsigned long)bootId, resetReason.c_str(), (unsigned long)pendingRecords());
 }
 
 void loop() {

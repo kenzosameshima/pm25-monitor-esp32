@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS ingest_batches (
     n_inserted    INTEGER NOT NULL,
     n_duplicates  INTEGER NOT NULL,
     remote_addr   TEXT,
-    firmware      TEXT                  -- versão informada pelo nó neste lote (campo opcional do contrato)
+    firmware      TEXT,                 -- versão informada pelo nó neste lote (campo opcional do contrato)
+    reset_reason  TEXT,                 -- motivo do reinício informado neste lote (campo opcional do contrato)
+    reset_boot_id INTEGER               -- inicialização a que o motivo se refere (a em curso quando o lote saiu)
 );
 
 -- Requisições rejeitadas, guardadas para auditoria.

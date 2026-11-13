@@ -1447,3 +1447,21 @@ def test_cartao_do_no_em_tela_larga_tem_blocos_mais_juntos(app_env):
     # O Streamlit tira 16 px da altura do título para compensar o espaço que ele mesmo põe embaixo; sem esse espaço, a
     # compensação encurtaria a caixa do título e o texto cairia sobre a linha do estado.
     assert re.search(r"\[data-testid='stMarkdownContainer'\]\s*\{[^}]*margin-bottom:\s*0[;} ]", rules)
+
+
+def test_mostra_o_motivo_do_ultimo_reinicio_junto_da_versao_do_firmware(app_env):
+    populate(app_env, hours=3, devices=(("no-01", 1), ("no-02", 1)))
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    conn = db.connect(str(app_env))
+    db.insert_batch(conn, "no-01", [{"device_id": "no-01", "boot_id": 41, "seq": 0, "ts_sensor": db.iso(now),
+                                     "ts_received": db.iso(now), "uptime_s": 60, "schema_version": "1",
+                                     "quality": "ok", **synthetic(now, {})}], now, firmware="build Nov 13 2026",
+                    reset_reason="task_wdt", reset_boot_id=41)
+    conn.close()
+    at = AppTest.from_file(DASHBOARD, default_timeout=60).run()
+    assert not at.exception, at.exception
+    captions = [c.value for c in at.caption]
+    assert "Último reinício: watchdog de tarefa (inicialização 41)" in captions
+    assert captions.index("Último reinício: watchdog de tarefa (inicialização 41)") == \
+        captions.index("Firmware: build Nov 13 2026") + 1
+    assert sum("Último reinício" in c for c in captions) == 1          # o no-02 não informa: nada é mostrado

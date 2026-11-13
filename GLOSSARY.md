@@ -34,6 +34,10 @@ _Avoid_: pacote, batch
 O texto que identifica a compilação gravada num nó, informado por ele em cada lote. Nó com um firmware anterior ao campo não tem versão.
 _Avoid_: build, release
 
+**Motivo do reinício**:
+A causa que o próprio nó informa para o reinício que começou a inicialização em curso (energia ligada, watchdog, reinício pedido pelo firmware, queda de tensão). Vai em cada lote, junto do número da inicialização. Nó com um firmware anterior ao campo não tem motivo.
+_Avoid_: causa do reset, reset reason, motivo do boot
+
 **Leitura marcada**:
 Leitura que o servidor considerou implausível. Fica guardada, mas não entra nas médias horárias por padrão.
 _Avoid_: leitura suspeita, leitura ruim, flagged
