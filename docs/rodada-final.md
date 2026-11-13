@@ -129,15 +129,15 @@ A concordância entre os nós é outra análise, com outro banco congelado (o do
 | Item | Valor |
 |---|---|
 | Data da rodada | [PENDENTE] |
-| Commit atual (`check_protocol_clean`) | [PENDENTE] |
-| Último commit do protocolo | [PENDENTE] |
-| Último commit da grade | [PENDENTE] |
-| Período (`$INICIO` a `$FIM`, dias) | [PENDENTE] |
-| Banco congelado (caminho) | [PENDENTE] |
-| SHA-256 do banco congelado | [PENDENTE] |
-| Cópia no segundo disco (caminho, hash conferido) | [PENDENTE] |
+| Commit atual (`check_protocol_clean`) | `6fa3a825cd3134e16bf1ae9cd6cf14aab66aa078` (código 0, em 13/11/2026) |
+| Último commit do protocolo | `e894f59b2881eb65418416a7afd16bc63c4bbbb7`, de 2026-11-09T03:46:56-03:00 |
+| Último commit da grade | `b6173c53311d62ac9990533d023854a3579ea7d0`, de 2026-11-09T03:40:27-03:00 |
+| Período (`$INICIO` a `$FIM`, dias) | 2026-10-09 a 2026-11-12, 35 dias |
+| Banco congelado (caminho) | `resultados\rodada-final\pm25-congelado-2026-10-09_2026-11-12.db` (63.528 leituras, extraído em 2026-11-13T19:16:23Z) |
+| SHA-256 do banco congelado | `bcf550d21d60d7135c8e1cad6d43304c73204fa4e5b34cb52587622474616dc9` (igual ao `congelamento.sha256` do `periodo.json`) |
+| Cópia no segundo disco (caminho, hash conferido) | `E:\pm25-backups\congelados\pm25-congelado-2026-10-09_2026-11-12.db`, hash conferido em 13/11/2026 |
 | Arquivo da CETESB (nome, horas no arquivo, horas vazias) | [PENDENTE] |
 | Versões (Python, numpy, pandas, scikit-learn) | [PENDENTE] |
 | Dobras de validação e horas de teste (`no-01`) | [PENDENTE] |
-| Falhas técnicas e repetições | [PENDENTE] |
+| Falhas técnicas e repetições | Em 13/11/2026 (19:17 UTC) o `train_forecast` do `no-01` rodou uma vez sobre o banco de 09/10 a 12/11/2026 (SHA-256 `bcf550d2…6dc9`) e gravou o relatório com 1 dobra de validação, e não 2: entre a primeira hora completa (10/10/2026, 07:00 UTC) e o fim da última (13/11/2026, 18:00 UTC) há 34 dias e 11 horas, e a segunda dobra exige 35 dias. Não foi falha técnica; os números do teste final foram vistos. A configuração com os dois nós não foi rodada. Saídas guardadas em `resultados\rodada-final\no-01\`. Decisão de 13/11/2026: novo congelamento, com o motivo registrado no protocolo antes de rodar de novo. [PENDENTE: commit do protocolo, banco novo e resultado.] |
 | Versões novas instaladas (modelo, versão, instante) | [PENDENTE] |
