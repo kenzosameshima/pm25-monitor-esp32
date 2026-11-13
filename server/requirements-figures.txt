@@ -1,0 +1,3 @@
+# Figuras do capítulo de resultados (scripts/result_figures.py). Fora do ambiente do servidor.
+pandas>=2.0
+matplotlib>=3.8

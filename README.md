@@ -13,7 +13,7 @@ nó ESP32 ──HTTPS POST (JSON) via Wi-Fi e túnel──▶ API FastAPI ──
 ```
 firmware/     código do ESP32 (PlatformIO); host_tests/ testa a parte sem hardware no computador
 server/app/   API (main.py), rotas de leitura (read_api.py), página pública (public_page.py), contrato de dados (models.py), acesso ao banco (db.py), regras de análise (analytics.py), dados e modelos de previsão (forecasting.py), esquema (schema.sql)
-server/scripts/  backup.py, simulate_sensor.py, set_location.py, check_https.py, train_forecast.py, fit_forecast.py, forecast_job.py, period_metrics.py, compare_cetesb.py, compare_nodes.py
+server/scripts/  backup.py, simulate_sensor.py, set_location.py, check_https.py, train_forecast.py, fit_forecast.py, forecast_job.py, period_metrics.py, compare_cetesb.py, compare_nodes.py, check_protocol_clean.py, result_figures.py
 server/tests/    testes da API, incluindo o JSON gerado pelo próprio firmware
 server/dashboard/  dashboard em Streamlit (status, séries, previsto × observado)
 server/deploy/   serviços systemd (API e dashboard) e exemplo de crontab
@@ -463,6 +463,24 @@ Uma hora entra no par quando é **hora válida** nos dois nós, pela mesma regra
 `--include-suspect` é a análise de sensibilidade: as horas suspeitas também entram no par, marcadas nas colunas `suspeita_a` e `suspeita_b`, e o relatório separa as horas suspeitas em qualquer um dos nós (`suspeitas`) das `demais`. Como os dois sensores estão lado a lado, uma hora suspeita em um só deles é sinal de que aquele sensor parou de ver partículas.
 
 Com `--freeze`, o banco é copiado para `--out-dir` como no `period_metrics` (mesma função, nome com os dias do período, SHA-256 no relatório em `congelamento`) e a comparação sai da cópia. A rodada final, depois de 25/11, deve ser feita assim ou com `--db` apontando para a cópia congelada da sobreposição.
+
+## Figuras dos resultados
+
+`server/scripts/result_figures.py` gera as figuras do capítulo de resultados a partir dos CSVs que os outros scripts gravam; ele não abre o banco. Precisa do matplotlib, que fica fora do ambiente do servidor: instale `requirements-figures.txt` num ambiente virtual à parte.
+
+```
+cd server
+python -m scripts.result_figures --results ../resultados --out-dir ../resultados/figuras --device no-01
+```
+
+| Figura | Origem | Conteúdo |
+|---|---|---|
+| `completude_diaria.png` | `completude_diaria.csv` (`period_metrics`) | Completude da coleta por dia |
+| `perfil_pm25.png` | `perfil_hora.csv` e `perfil_dia_semana.csv` (`period_metrics`) | Média de PM2,5 por hora do dia e por dia da semana |
+| `dispersao_cetesb.png` | `comparacao_cetesb_pares.csv` (`compare_cetesb`) | Nó × CETESB hora a hora, com a reta de regressão e a linha 1:1 |
+| `previsto_observado.png` | `<nó>/previsao_teste.csv` (`train_forecast`) | Observado, persistência e Ridge no teste final, com a linha interrompida nas horas sem previsão |
+
+Uma figura cujo CSV não existe é pulada com um aviso. As figuras valem para os dados da pasta lida: para a rodada final, aponte `--results` para `../resultados/rodada-final`. O teste do script (`tests/test_result_figures.py`) é pulado onde não há matplotlib, como no ambiente do servidor.
 
 ## Padrão de commits
 

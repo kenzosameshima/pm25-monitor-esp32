@@ -118,6 +118,8 @@ Só depois dos passos 3 e 4. O protocolo manda treinar versões novas dos três 
 | Limitações que os números novos mudam (dobras, horas de teste) | os relatórios acima | `docs/texto-tcc/limitacoes.md`, seções 3.1 e 5; `docs/limitacoes-do-tcc.md` |
 | Estado do projeto | — | `docs/planejamento-e-estado.md`, seções 5, 7 e 8 |
 
+As figuras da rodada final saem com `python -m scripts.result_figures --results ..\resultados\rodada-final`, num ambiente com `requirements-figures.txt` (fora do ambiente do servidor).
+
 No relato, siga o protocolo: todos os previsores nas duas trilhas, inclusive os que não superam a persistência; a MLP pela média e pelo desvio das 5 sementes; uma diferença só é ganho se for maior que o desvio entre sementes e mantiver o sinal em todas as dobras; se o teste final contrariar a validação, os dois resultados são relatados. A pasta `resultados/` não é versionada: os números entram nos documentos, e o banco congelado fica guardado em dois discos.
 
 A concordância entre os nós é outra análise, com outro banco congelado (o do período de sobreposição); o passo a passo dela está em `planejamento-e-estado.md`, seção 10.
