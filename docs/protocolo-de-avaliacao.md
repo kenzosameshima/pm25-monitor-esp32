@@ -6,6 +6,8 @@ Registrado em 09/11/2026, antes da rodada final com os dados reais. Define o que
 
 Em 09/11/2026 rodou-se uma avaliação preliminar sobre o banco congelado de 09/10 a 08/11 (31 dias, uma dobra de validação), com hiperparâmetros fixos e sem ajuste. Ela informou este protocolo, e os resultados constam em `docs/limitacoes-do-tcc.md`. A busca de hiperparâmetros (`--tune`) **ainda não foi rodada com dados reais**.
 
+Em 13/11/2026 a rodada final foi executada uma vez para o `no-01` sobre o banco congelado de 09/10 a 12/11/2026 (35 dias de calendário, SHA-256 `bcf550d21d60d7135c8e1cad6d43304c73204fa4e5b34cb52587622474616dc9`) e resultou em uma dobra de validação, e não nas duas que este protocolo exige. O motivo é a regra de contagem do `train_forecast`: as dobras são contadas entre a primeira e a última hora completa, e a primeira hora completa do `no-01` é a de 10/10/2026, 07:00 UTC, o que deixou 34 dias e 11 horas. Os resultados dessa execução, inclusive os do teste final, foram vistos e ficam guardados como registro; a configuração com os dois nós não foi rodada. A rodada final será refeita uma vez, sobre um banco congelado de 09/10 a 14/11/2026, sem nenhuma mudança na grade, nas métricas, nos comandos ou na regra de relato. O critério de dados passa a ser pelo menos 35 dias entre a primeira e a última hora completa do nó.
+
 ## Pergunta e posição
 
 A pergunta é se a média horária de PM2,5 da hora seguinte pode ser prevista, com sensores de baixo custo, melhor que a persistência (repetir o último valor). O trabalho **compara os previsores e não elege um "modelo do TCC"**. Uma conclusão como "nenhum modelo superou a persistência de forma clara" é um resultado válido.
