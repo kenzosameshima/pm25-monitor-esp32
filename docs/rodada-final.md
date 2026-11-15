@@ -1,6 +1,6 @@
 # Roteiro da rodada final de avaliação
 
-Passo a passo para executar a rodada final definida em [`protocolo-de-avaliacao.md`](protocolo-de-avaliacao.md), quando o banco de pelo menos 35 dias puder ser congelado. Este roteiro não muda o protocolo: ele só fixa a ordem, os caminhos e onde registrar cada resultado. **Nada aqui foi executado.** Os campos de registro, no fim, estão marcados com [PENDENTE].
+Passo a passo para executar a rodada final definida em [`protocolo-de-avaliacao.md`](protocolo-de-avaliacao.md), quando o banco de pelo menos 35 dias puder ser congelado. Este roteiro não muda o protocolo: ele só fixa a ordem, os caminhos e onde registrar cada resultado. Os passos 1 a 3, a parte do passo 4 que não depende da CETESB e o passo 5 foram executados em 15/11/2026; o registro está na seção 7, e o que falta continua marcado com [PENDENTE]. Nessa execução, `$FIM` foi `2026-11-14` e `$OUT` foi `..\resultados\rodada-final-2026-11-14`, e não o `..\resultados\rodada-final` dos comandos abaixo, que guarda a execução descartada de 13/11/2026; os comandos e o protocolo não foram alterados.
 
 Regras que valem do começo ao fim:
 
@@ -128,16 +128,20 @@ A concordância entre os nós é outra análise, com outro banco congelado (o do
 
 | Item | Valor |
 |---|---|
-| Data da rodada | [PENDENTE] |
-| Commit atual (`check_protocol_clean`) | `6fa3a825cd3134e16bf1ae9cd6cf14aab66aa078` (código 0, em 13/11/2026) |
-| Último commit do protocolo | `e894f59b2881eb65418416a7afd16bc63c4bbbb7`, de 2026-11-09T03:46:56-03:00 |
+| Data da rodada | 15/11/2026: `no-01` gravado às 03:18:25 UTC e os dois nós às 03:18:43 UTC (00:18 em Brasília), uma execução por configuração |
+| Pasta de saída | `resultados\rodada-final-2026-11-14\`, e não `resultados\rodada-final\`, que guarda a execução descartada de 13/11/2026 |
+| Commit atual (`check_protocol_clean`) | `4574f9cf2b23c9c2641fbab040b0ea38b15702b8` (código 0, em 15/11/2026) |
+| Último commit do protocolo | `fbe979f718d058e64b4363f42f91600b37d8172f`, de 2026-11-13T16:22:05-03:00 |
 | Último commit da grade | `b6173c53311d62ac9990533d023854a3579ea7d0`, de 2026-11-09T03:40:27-03:00 |
-| Período (`$INICIO` a `$FIM`, dias) | 2026-10-09 a 2026-11-12, 35 dias |
-| Banco congelado (caminho) | `resultados\rodada-final\pm25-congelado-2026-10-09_2026-11-12.db` (63.528 leituras, extraído em 2026-11-13T19:16:23Z) |
-| SHA-256 do banco congelado | `bcf550d21d60d7135c8e1cad6d43304c73204fa4e5b34cb52587622474616dc9` (igual ao `congelamento.sha256` do `periodo.json`) |
-| Cópia no segundo disco (caminho, hash conferido) | `E:\pm25-backups\congelados\pm25-congelado-2026-10-09_2026-11-12.db`, hash conferido em 13/11/2026 |
-| Arquivo da CETESB (nome, horas no arquivo, horas vazias) | [PENDENTE] |
-| Versões (Python, numpy, pandas, scikit-learn) | [PENDENTE] |
-| Dobras de validação e horas de teste (`no-01`) | [PENDENTE] |
-| Falhas técnicas e repetições | Em 13/11/2026 (19:17 UTC) o `train_forecast` do `no-01` rodou uma vez sobre o banco de 09/10 a 12/11/2026 (SHA-256 `bcf550d2…6dc9`) e gravou o relatório com 1 dobra de validação, e não 2: entre a primeira hora completa (10/10/2026, 07:00 UTC) e o fim da última (13/11/2026, 18:00 UTC) há 34 dias e 11 horas, e a segunda dobra exige 35 dias. Não foi falha técnica; os números do teste final foram vistos. A configuração com os dois nós não foi rodada. Saídas guardadas em `resultados\rodada-final\no-01\`. Decisão de 13/11/2026: novo congelamento, com o motivo registrado no protocolo antes de rodar de novo. [PENDENTE: commit do protocolo, banco novo e resultado.] |
-| Versões novas instaladas (modelo, versão, instante) | [PENDENTE] |
+| Período (`$INICIO` a `$FIM`, dias) | 2026-10-09 a 2026-11-14, 37 dias |
+| Banco congelado (caminho) | `resultados\rodada-final-2026-11-14\pm25-congelado-2026-10-09_2026-11-14.db` (67.336 leituras, extraído em 2026-11-15T03:00:32Z) |
+| SHA-256 do banco congelado | `5d0895330af48518807fcb635ac623579b85250787852730ae94048ffc5a2bd5` (igual ao `congelamento.sha256` do `periodo.json` e ao `database.sha256` dos dois `previsao.json`) |
+| Cópia no segundo disco (caminho, hash conferido) | `E:\pm25-backups\congelados\pm25-congelado-2026-10-09_2026-11-14.db`, hash conferido em 15/11/2026 |
+| Arquivo da CETESB (nome, horas no arquivo, horas vazias) | [PENDENTE: aguardando o CSV do QUALAR de 09/10 a 14/11/2026]; o `compare_cetesb` do passo 4 não foi rodado |
+| Versões (Python, numpy, pandas, scikit-learn) | Python 3.10.11, numpy 2.2.6, pandas 2.3.3, scikit-learn 1.7.2 (`environment` dos dois `previsao.json`) |
+| Dobras de validação e horas de teste (`no-01`) | 574 horas completas; 2 dobras, com 240 horas de validação (dobra 1: hora t de 24/10 07:00 a 31/10 07:00 UTC, 91 horas; dobra 2: de 31/10 07:00 a 07/11 07:00 UTC, 149 horas); teste final com 80 horas, na janela de 08/11 02:00 a 15/11 02:00 UTC (as 80 horas vão de 10/11 10:00 a 15/11 02:00 UTC). Dois nós: 635 horas completas, 2 dobras, 255 horas de validação e 114 de teste (80 do `no-01` e 34 do `no-02`) |
+| Métricas por dobra (sinal do ganho) | O `previsao.json` só traz a validação com as dobras juntas. Em 15/11/2026 o RMSE e o skill score de cada dobra e do teste foram recalculados em modo leitura sobre o banco congelado, com as funções do próprio `train_forecast` (`make_splits`, `train_test`, `predict_*`), os mesmos hiperparâmetros das duas trilhas e as sementes 42 a 46, sem rodar o `train_forecast` de novo e sem gravar em `resultados\rodada-final-2026-11-14\`. Juntar as dobras reproduz exatamente (diferença 0,0) o RMSE de validação e de teste dos dois `previsao.json`, em todos os previsores e sementes. Números e conclusão em `docs/texto-tcc/resultados.md`, seção 3.1 |
+| Passo 4, métricas com as horas suspeitas | `period_metrics --include-suspect` rodado em 15/11/2026 sobre o banco congelado, com saída em `com_horas_suspeitas\`; o campo `banco` aponta para o banco congelado |
+| Figuras | Em 15/11/2026, `python -m scripts.result_figures --results ..\resultados\rodada-final-2026-11-14`, num ambiente virtual separado do servidor (Python 3.10.11, matplotlib 3.10.9, pandas 2.3.3, numpy 2.2.6, de `requirements-figures.txt`): `completude_diaria.png`, `perfil_pm25.png` e `previsto_observado.png` em `resultados\rodada-final-2026-11-14\figuras\`. A `dispersao_cetesb.png` não foi gerada, porque falta o `comparacao_cetesb_pares.csv` do passo 4 |
+| Falhas técnicas e repetições | Em 13/11/2026 (19:17 UTC) o `train_forecast` do `no-01` rodou uma vez sobre o banco de 09/10 a 12/11/2026 (SHA-256 `bcf550d2…6dc9`) e gravou o relatório com 1 dobra de validação, e não 2: entre a primeira hora completa (10/10/2026, 07:00 UTC) e o fim da última (13/11/2026, 18:00 UTC) há 34 dias e 11 horas, e a segunda dobra exige 35 dias. Não foi falha técnica; os números do teste final foram vistos. A configuração com os dois nós não foi rodada. Saídas guardadas em `resultados\rodada-final\no-01\`. Decisão de 13/11/2026: novo congelamento, com o motivo registrado no protocolo antes de rodar de novo. O motivo foi commitado no protocolo em `fbe979f`, e a rodada foi refeita uma vez em 15/11/2026 sobre o banco de 09/10 a 14/11/2026, sem falha técnica nem repetição. |
+| Versões novas instaladas (modelo, versão, instante) | Em 15/11/2026, com `fit_forecast --version v2 --devices no-01` sobre o banco congelado, cada um com 574 horas do `no-01`, de 2026-10-10T07:00:00Z a 2026-11-15T01:00:00Z (hora t, UTC), scikit-learn 1.7.2: `ridge-v2.joblib` gravado às 03:20:47 UTC, `gboost-v2.joblib` às 03:20:48 UTC e `mlp-v2.joblib` às 03:20:50 UTC (00:20 em Brasília). As previsões das versões `v2` valem como validação prospectiva a partir desses instantes; a primeira execução do job horário depois da instalação foi a de 04:05:02 UTC, que gravou 121 previsões sem erro: 10 em tempo real para a hora de 04:00 UTC (as três versões `v2`, o `ridge v0` e o `ridge v1`, nos dois nós) e 111 retroativas `v2-retro`, das horas anteriores. As `v2-retro` cobrem as horas-alvo de 14/11 04:00 a 15/11 03:00 UTC; as de horas-alvo até 15/11 02:00 UTC (hora t até 01:00, a última do treino) caem dentro do período de treino dos `v2` e não servem como avaliação |
